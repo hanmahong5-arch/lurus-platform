@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package identity.v1;
+
+option go_package = "github.com/hanmahong5-arch/lurus-platform/proto/gen/go/identity/v1;identityv1";
+
+import "google/protobuf/timestamp.proto";
+
+// IdentityService provides internal service-to-service APIs for the unified
+// account layer. All methods require bearer INTERNAL_API_KEY authentication.
+service IdentityService {
+  // GetAccountByZitadelSub looks up an account by Zitadel OIDC sub claim.
+  rpc GetAccountByZitadelSub(GetAccountByZitadelSubRequest) returns (Account);
+
+  // UpsertAccount creates or updates an account from OIDC login.
+  rpc UpsertAccount(UpsertAccountRequest) returns (Account);
+
+  // GetEntitlements returns product entitlements for an account (Redis-cached).
+  rpc GetEntitlements(GetEntitlementsRequest) returns (GetEntitlementsResponse);
+
+  // GetAccountOverview returns the aggregated read model for an account.
+  rpc GetAccountOverview(GetAccountOverviewRequest) returns (AccountOverview);
+
+  // ReportUsage records LLM usage for VIP accumulation.
+  rpc ReportUsage(ReportUsageRequest) returns (ReportUsageResponse);
+
+  // WalletDebit deducts LB from an account wallet.
+  rpc WalletDebit(WalletOperationRequest) returns (WalletOperationResponse);
+
+  // WalletCredit adds LB to an account wallet.
+  rpc WalletCredit(WalletOperationRequest) returns (WalletOperationResponse);
+}
+
+// Account represents a unified Lurus user identity.
+message Account {
+  int64 id = 1;
+  string lurus_id = 2;
+  string zitadel_sub = 3;
+  string display_name = 4;
+  string avatar_url = 5;
+  string email = 6;
+  bool email_verified = 7;
+  string phone = 8;
+  bool phone_verified = 9;
+  int32 status = 10;  // 1=active, 2=suspended, 3=deleted
+  string locale = 11;
+  string aff_code = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message GetAccountByZitadelSubRequest {
+  string zitadel_sub = 1;
+}
+
+message UpsertAccountRequest {
+  string zitadel_sub = 1;
+  string email = 2;
+  string display_name = 3;
+  string avatar_url = 4;
+  string referrer_aff_code = 5;
+}
+
+message GetEntitlementsRequest {
+  int64 account_id = 1;
+  string product_id = 2;
+}
+
+message GetEntitlementsResponse {
+  map<string, string> entitlements = 1;
+}
+
+message GetAccountOverviewRequest {
+  int64 account_id = 1;
+  string product_id = 2;  // optional
+}
+
+message AccountOverview {
+  AccountSummary account = 1;
+  VIPSummary vip = 2;
+  WalletSummary wallet = 3;
+  SubscriptionSummary subscription = 4;  // null if no active subscription
+  string topup_url = 5;
+}
+
+message AccountSummary {
+  int64 id = 1;
+  string lurus_id = 2;
+  string display_name = 3;
+  string avatar_url = 4;
+}
+
+message VIPSummary {
+  int32 level = 1;
+  string level_name = 2;
+  string level_en = 3;
+  int64 points = 4;
+  google.protobuf.Timestamp level_expires_at = 5;
+}
+
+message WalletSummary {
+  double balance = 1;
+  double frozen = 2;
+  double discount_rate = 3;
+  string discount_tier = 4;
+}
+
+message SubscriptionSummary {
+  string product_id = 1;
+  string plan_code = 2;
+  string status = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  bool auto_renew = 5;
+}
+
+message ReportUsageRequest {
+  int64 account_id = 1;
+  double amount_cny = 2;
+}
+
+message ReportUsageResponse {
+  bool accepted = 1;
+}
+
+message WalletOperationRequest {
+  int64 account_id = 1;
+  double amount = 2;
+  string type = 3;         // transaction type
+  string product_id = 4;
+  string description = 5;
+}
+
+message WalletOperationResponse {
+  bool success = 1;
+  double balance_after = 2;
+}

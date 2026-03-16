@@ -1,0 +1,10 @@
+version: v2
+modules:
+  - path: proto
+    name: buf.build/hanmahong5-arch/lurus-platform
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

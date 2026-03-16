@@ -1,0 +1,41 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+app
+
+# Test
+*.test
+*.out
+coverage.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# Node (apps/ and modules/mail/webmail/)
+node_modules/
+.next/
+.turbo/
+dist/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Temp
+tmp/
+*.log
