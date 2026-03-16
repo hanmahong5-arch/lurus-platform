@@ -1,15 +1,15 @@
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: lurus-identity
-  namespace: lurus-identity
+  name: platform-core
+  namespace: lurus-platform
   labels:
-    app: lurus-identity
-    release: prometheus  # Must match Prometheus operator selector
+    app: platform-core
+    release: prometheus
 spec:
   selector:
     matchLabels:
-      app: lurus-identity
+      app: platform-core
   endpoints:
     - port: http
       path: /metrics

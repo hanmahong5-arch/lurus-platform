@@ -1,11 +1,11 @@
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
-  name: lurus-identity-route
-  namespace: lurus-identity
+  name: platform-core-route
+  namespace: lurus-platform
   labels:
-    app: lurus-identity
-    app.kubernetes.io/part-of: lurus
+    app: platform-core
+    app.kubernetes.io/part-of: lurus-platform
 spec:
   entryPoints:
     - websecure
@@ -13,7 +13,7 @@ spec:
     - match: Host(`identity.lurus.cn`)
       kind: Rule
       services:
-        - name: identity-service
+        - name: platform-core
           port: 18104
   tls:
     secretName: lurus-cn-wildcard-tls

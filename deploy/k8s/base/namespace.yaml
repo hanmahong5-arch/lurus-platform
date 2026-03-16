@@ -1,6 +1,6 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: lurus-identity
+  name: lurus-platform
   labels:
-    app.kubernetes.io/part-of: lurus
+    app.kubernetes.io/part-of: lurus-platform
