@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lurus-notification-config
+  namespace: lurus-system
+data:
+  PORT: "18900"
+  TZ: "Asia/Shanghai"
+  ENV: "production"
+  REDIS_ADDR: "redis.lurus-system.svc:6379"
+  REDIS_DB: "4"
+  NATS_ADDR: "nats://nats.messaging.svc:4222"
+  SMTP_HOST: "stalwart.mail.svc"
+  SMTP_PORT: "587"
+  EMAIL_FROM: "noreply@lurus.cn"
+  SHUTDOWN_TIMEOUT: "30s"

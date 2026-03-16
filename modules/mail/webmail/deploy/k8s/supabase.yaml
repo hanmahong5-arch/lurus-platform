@@ -1,0 +1,349 @@
+# Supabase 核心服务 (Auth + REST + Storage + Kong)
+---
+# GoTrue Auth 认证服务
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webmail-auth
+  namespace: lurus-webmail
+  labels:
+    app: webmail-auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webmail-auth
+  template:
+    metadata:
+      labels:
+        app: webmail-auth
+    spec:
+      containers:
+        - name: auth
+          image: supabase/gotrue:v2.183.0
+          ports:
+            - containerPort: 9999
+          env:
+            - name: GOTRUE_API_HOST
+              value: "0.0.0.0"
+            - name: GOTRUE_API_PORT
+              value: "9999"
+            - name: GOTRUE_DB_DRIVER
+              value: "postgres"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: POSTGRES_PASSWORD
+            - name: GOTRUE_DB_DATABASE_URL
+              value: "postgres://supabase_auth_admin:$(POSTGRES_PASSWORD)@10.43.9.14:5432/webmail"
+            - name: GOTRUE_SITE_URL
+              value: "https://mail.lurus.cn"
+            - name: API_EXTERNAL_URL
+              value: "https://mail.lurus.cn/api"
+            - name: GOTRUE_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: JWT_SECRET
+            - name: GOTRUE_JWT_EXP
+              value: "3600"
+            - name: GOTRUE_JWT_ADMIN_ROLES
+              value: "service_role"
+            - name: GOTRUE_JWT_AUD
+              value: "authenticated"
+            - name: GOTRUE_JWT_DEFAULT_GROUP_NAME
+              value: "authenticated"
+            - name: GOTRUE_EXTERNAL_EMAIL_ENABLED
+              value: "true"
+            - name: GOTRUE_MAILER_AUTOCONFIRM
+              value: "true"
+            - name: GOTRUE_DISABLE_SIGNUP
+              value: "false"
+            - name: GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED
+              value: "false"
+            - name: GOTRUE_SMTP_HOST
+              value: "stalwart.mail.svc.cluster.local"
+            - name: GOTRUE_SMTP_PORT
+              value: "25"
+            - name: GOTRUE_SMTP_ADMIN_EMAIL
+              value: "noreply@lurus.cn"
+            - name: GOTRUE_SMTP_SENDER_NAME
+              value: "Lurus Mail"
+            # Zitadel OIDC Provider Configuration
+            - name: GOTRUE_EXTERNAL_ZITADEL_ENABLED
+              value: "true"
+            - name: GOTRUE_EXTERNAL_ZITADEL_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: ZITADEL_CLIENT_ID
+            - name: GOTRUE_EXTERNAL_ZITADEL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: ZITADEL_CLIENT_SECRET
+            - name: GOTRUE_EXTERNAL_ZITADEL_REDIRECT_URI
+              value: "https://mail.lurus.cn/api/kong/auth/v1/callback"
+            - name: GOTRUE_EXTERNAL_ZITADEL_URL
+              value: "https://auth.lurus.cn"
+            - name: GOTRUE_MAILER_URLPATHS_CONFIRMATION
+              value: "/auth/v1/verify"
+            - name: GOTRUE_MAILER_URLPATHS_INVITE
+              value: "/auth/v1/verify"
+            - name: GOTRUE_MAILER_URLPATHS_RECOVERY
+              value: "/auth/v1/verify"
+            - name: GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE
+              value: "/auth/v1/verify"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9999
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webmail-auth
+  namespace: lurus-webmail
+spec:
+  selector:
+    app: webmail-auth
+  ports:
+    - port: 9999
+      targetPort: 9999
+---
+# PostgREST API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webmail-rest
+  namespace: lurus-webmail
+  labels:
+    app: webmail-rest
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webmail-rest
+  template:
+    metadata:
+      labels:
+        app: webmail-rest
+    spec:
+      containers:
+        - name: rest
+          image: postgrest/postgrest:v14.1
+          command: ["postgrest"]
+          ports:
+            - containerPort: 3000
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: POSTGRES_PASSWORD
+            - name: PGRST_DB_URI
+              value: "postgres://authenticator:LurusOps2026@10.43.9.14:5432/webmail"
+            - name: PGRST_DB_SCHEMAS
+              value: "public,storage,graphql_public"
+            - name: PGRST_DB_ANON_ROLE
+              value: "anon"
+            - name: PGRST_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: JWT_SECRET
+            - name: PGRST_DB_USE_LEGACY_GUCS
+              value: "false"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webmail-rest
+  namespace: lurus-webmail
+spec:
+  selector:
+    app: webmail-rest
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+# Kong API Gateway
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webmail-kong
+  namespace: lurus-webmail
+  labels:
+    app: webmail-kong
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webmail-kong
+  template:
+    metadata:
+      labels:
+        app: webmail-kong
+    spec:
+      containers:
+        - name: kong
+          image: kong:2.8.1
+          ports:
+            - containerPort: 8000
+          env:
+            - name: KONG_DATABASE
+              value: "off"
+            - name: KONG_DECLARATIVE_CONFIG
+              value: "/home/kong/kong.yml"
+            - name: KONG_DNS_ORDER
+              value: "LAST,A,CNAME"
+            - name: KONG_PLUGINS
+              value: "request-transformer,cors,key-auth,acl,basic-auth"
+            - name: KONG_NGINX_PROXY_PROXY_BUFFER_SIZE
+              value: "160k"
+            - name: KONG_NGINX_PROXY_PROXY_BUFFERS
+              value: "64 160k"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          volumeMounts:
+            - name: kong-config
+              mountPath: /home/kong/kong.yml
+              subPath: kong.yml
+      volumes:
+        - name: kong-config
+          configMap:
+            name: kong-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webmail-kong
+  namespace: lurus-webmail
+spec:
+  selector:
+    app: webmail-kong
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+# Storage API (v2 已废弃 — 附件改由 Stalwart 存储)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webmail-storage
+  namespace: lurus-webmail
+  labels:
+    app: webmail-storage
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: webmail-storage
+  template:
+    metadata:
+      labels:
+        app: webmail-storage
+    spec:
+      containers:
+        - name: storage
+          image: supabase/storage-api:v1.33.0
+          ports:
+            - containerPort: 5000
+          env:
+            - name: ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: ANON_KEY
+            - name: SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: SERVICE_ROLE_KEY
+            - name: POSTGREST_URL
+              value: "http://webmail-rest:3000"
+            - name: AUTH_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: JWT_SECRET
+            - name: PGRST_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: JWT_SECRET
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: "postgres://supabase_storage_admin:$(POSTGRES_PASSWORD)@10.43.9.14:5432/webmail"
+            - name: FILE_SIZE_LIMIT
+              value: "52428800"
+            - name: STORAGE_BACKEND
+              value: "file"
+            - name: FILE_STORAGE_BACKEND_PATH
+              value: "/var/lib/storage"
+            - name: TENANT_ID
+              value: "Webmail"
+            - name: REGION
+              value: "local"
+            - name: GLOBAL_S3_BUCKET
+              value: "Webmail"
+            - name: ENABLE_IMAGE_TRANSFORMATION
+              value: "false"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: storage
+              mountPath: /var/lib/storage
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: storage
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webmail-storage
+  namespace: lurus-webmail
+spec:
+  selector:
+    app: webmail-storage
+  ports:
+    - port: 5000
+      targetPort: 5000

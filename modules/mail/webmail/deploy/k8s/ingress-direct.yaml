@@ -1,0 +1,127 @@
+# Traefik IngressRoute for Webmail - Direct Backend Access
+# 绕过 Kong，直接路由到后端服务
+# 前端代码期望API�?/api/kong/... 路径�?
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: webmail-tls
+  namespace: lurus-webmail
+spec:
+  secretName: webmail-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+  - mail.lurus.cn
+---
+# 主入�?- Webmail Web UI
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: webmail-web
+  namespace: lurus-webmail
+spec:
+  entryPoints:
+  - websecure
+  routes:
+  - match: Host(`mail.lurus.cn`) && !PathPrefix(`/api`)
+    kind: Rule
+    services:
+    - name: webmail-web
+      port: 3000
+  tls:
+    secretName: lurus-cn-wildcard-tls
+---
+# Auth API - /api/kong/auth/v1/* -> webmail-auth
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: webmail-auth-api
+  namespace: lurus-webmail
+spec:
+  entryPoints:
+  - websecure
+  routes:
+  - match: Host(`mail.lurus.cn`) && PathPrefix(`/api/kong/auth/v1`)
+    kind: Rule
+    services:
+    - name: webmail-auth
+      port: 9999
+    middlewares:
+    - name: webmail-auth-strip
+  tls:
+    secretName: lurus-cn-wildcard-tls
+---
+# REST API - /api/kong/rest/v1/* -> webmail-rest
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: webmail-rest-api
+  namespace: lurus-webmail
+spec:
+  entryPoints:
+  - websecure
+  routes:
+  - match: Host(`mail.lurus.cn`) && PathPrefix(`/api/kong/rest/v1`)
+    kind: Rule
+    services:
+    - name: webmail-rest
+      port: 3000
+    middlewares:
+    - name: webmail-rest-strip
+  tls:
+    secretName: lurus-cn-wildcard-tls
+---
+# Storage API - /api/kong/storage/v1/* -> webmail-storage
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: webmail-storage-api
+  namespace: lurus-webmail
+spec:
+  entryPoints:
+  - websecure
+  routes:
+  - match: Host(`mail.lurus.cn`) && PathPrefix(`/api/kong/storage/v1`)
+    kind: Rule
+    services:
+    - name: webmail-storage
+      port: 5000
+    middlewares:
+    - name: webmail-storage-strip
+  tls:
+    secretName: lurus-cn-wildcard-tls
+---
+# Middleware: 去掉 /api/kong/auth/v1 前缀
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: webmail-auth-strip
+  namespace: lurus-webmail
+spec:
+  stripPrefix:
+    prefixes:
+    - /api/kong/auth/v1
+---
+# Middleware: 去掉 /api/kong/rest/v1 前缀
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: webmail-rest-strip
+  namespace: lurus-webmail
+spec:
+  stripPrefix:
+    prefixes:
+    - /api/kong/rest/v1
+---
+# Middleware: 去掉 /api/kong/storage/v1 前缀
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: webmail-storage-strip
+  namespace: lurus-webmail
+spec:
+  stripPrefix:
+    prefixes:
+    - /api/kong/storage/v1

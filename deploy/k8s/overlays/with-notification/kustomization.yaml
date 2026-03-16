@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - ../../../../modules/notification/deploy/k8s/deployment.yaml
+  - ../../../../modules/notification/deploy/k8s/service.yaml
+  - ../../../../modules/notification/deploy/k8s/configmap.yaml
+
+patches:
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MODULES_NOTIFICATION_ENABLED
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NOTIFICATION_SERVICE_URL
+          value: "http://platform-notification:18900"
+    target:
+      kind: Deployment
+      name: platform-core

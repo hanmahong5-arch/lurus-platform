@@ -1,0 +1,58 @@
+---
+# Traefik HelmChartConfig for Mail TCP EntryPoints
+# Uses K3s svclb (ServiceLB) for external port exposure
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    # Add TCP entrypoints for mail protocols
+    ports:
+      smtp:
+        port: 25
+        expose:
+          default: true
+        exposedPort: 25
+        protocol: TCP
+      smtps:
+        port: 465
+        expose:
+          default: true
+        exposedPort: 465
+        protocol: TCP
+      submission:
+        port: 587
+        expose:
+          default: true
+        exposedPort: 587
+        protocol: TCP
+      imaps:
+        port: 993
+        expose:
+          default: true
+        exposedPort: 993
+        protocol: TCP
+
+    # Keep existing settings
+    deployment:
+      podAnnotations:
+        prometheus.io/port: "8082"
+        prometheus.io/scrape: "true"
+    providers:
+      kubernetesIngress:
+        publishedService:
+          enabled: true
+    priorityClassName: "system-cluster-critical"
+    image:
+      repository: "rancher/mirrored-library-traefik"
+      tag: "3.5.1"
+    tolerations:
+    - key: "CriticalAddonsOnly"
+      operator: "Exists"
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+    service:
+      ipFamilyPolicy: "PreferDualStack"

@@ -1,0 +1,153 @@
+# Webmail ConfigMap
+# 端口规范: 8882 (工具服务范围 8880-8889, 8880/8881 已被 Stalwart 占用)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: webmail-config
+  namespace: lurus-webmail
+data:
+  # Web - 内部使用 3000，通过 Traefik 暴露�?mail.lurus.cn
+  WEB_PORT: "3000"
+  WEB_URL: "https://mail.lurus.cn"
+  WORKER_URL: "http://webmail-worker:3001"
+
+  # Redis
+  REDIS_HOST: "webmail-redis"
+  REDIS_PORT: "6379"
+
+  # Typesense (全文搜索)
+  TYPESENSE_HOST: "webmail-typesense"
+  TYPESENSE_PORT: "8108"
+  TYPESENSE_PROTOCOL: "http"
+  SEARCH_REBUILD_ON_BOOT: "false"
+
+  # Supabase API (内部)
+  SUPABASE_PUBLIC_URL: "https://mail.lurus.cn/api"
+  API_EXTERNAL_URL: "https://mail.lurus.cn/api"
+
+  # Auth
+  SITE_URL: "https://mail.lurus.cn"
+  JWT_EXPIRY: "3600"
+  DISABLE_SIGNUP: "false"
+  ENABLE_EMAIL_SIGNUP: "true"
+  ENABLE_EMAIL_AUTOCONFIRM: "true"
+  ENABLE_ANONYMOUS_USERS: "false"
+
+  # SMTP for Auth notification emails (使用 Stalwart)
+  SMTP_HOST: "stalwart.mail.svc.cluster.local"
+  SMTP_PORT: "25"
+  SMTP_ADMIN_EMAIL: "noreply@lurus.cn"
+  SMTP_SENDER_NAME: "Lurus Mail"
+
+  # Stalwart SMTP (cluster-internal direct delivery)
+  STALWART_SMTP_HOST: "stalwart.mail.svc.cluster.local"
+  STALWART_SMTP_PORT: "587"
+  STALWART_API_URL: "http://stalwart.mail.svc.cluster.local:8080"
+  STALWART_ADMIN_USER: "admin"
+
+  # lurus-identity service (account overview, VIP, wallet)
+  IDENTITY_SERVICE_URL: "http://identity-service.lurus-identity.svc.cluster.local:18104"
+
+  # Zitadel OIDC (v2.0 direct auth, replacing Supabase GoTrue)
+  ZITADEL_ISSUER: "https://auth.lurus.cn"
+  ZITADEL_REDIRECT_URI: "https://mail.lurus.cn/auth/callback"
+  ZITADEL_POST_LOGOUT_URI: "https://mail.lurus.cn/auth/login"
+  ZITADEL_SCOPES: "openid profile email"
+
+  # SendCloud relay (China domestic delivery)
+  SENDCLOUD_HOST: "smtp.sendcloud.net"
+  SENDCLOUD_PORT: "587"
+
+  # PostgREST
+  PGRST_DB_SCHEMAS: "public,storage,graphql_public"
+
+  # Database (使用现有 CNPG)
+  POSTGRES_HOST: "lurus-pg-rw.database.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "webmail"
+---
+# Kong API Gateway 配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kong-config
+  namespace: lurus-webmail
+data:
+  kong.yml: |
+    _format_version: "2.1"
+    _transform: true
+
+    services:
+      - name: auth-v1-open
+        url: http://10.43.197.41:9999/verify
+        routes:
+          - name: auth-v1-open
+            strip_path: true
+            paths:
+              - /auth/v1/verify
+        plugins:
+          - name: cors
+      - name: auth-v1-open-callback
+        url: http://10.43.197.41:9999/callback
+        routes:
+          - name: auth-v1-open-callback
+            strip_path: true
+            paths:
+              - /auth/v1/callback
+        plugins:
+          - name: cors
+      - name: auth-v1
+        url: http://10.43.197.41:9999/
+        routes:
+          - name: auth-v1-all
+            strip_path: true
+            paths:
+              - /auth/v1/
+        plugins:
+          - name: cors
+      - name: rest-v1
+        url: http://10.43.220.64:3000/
+        routes:
+          - name: rest-v1-all
+            strip_path: true
+            paths:
+              - /rest/v1/
+        plugins:
+          - name: cors
+      - name: storage-v1
+        url: http://10.43.227.251:5000/
+        routes:
+          - name: storage-v1-all
+            strip_path: true
+            paths:
+              - /storage/v1/
+        plugins:
+          - name: cors
+
+    plugins:
+      - name: cors
+        config:
+          origins:
+            - "https://mail.lurus.cn"
+            - "https://*.lurus.cn"
+          methods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - OPTIONS
+          headers:
+            - Accept
+            - Accept-Version
+            - Content-Length
+            - Content-MD5
+            - Content-Type
+            - Date
+            - Authorization
+            - X-Client-Info
+            - apikey
+          exposed_headers:
+            - X-Supabase-Api-Version
+          credentials: true
+          max_age: 3600

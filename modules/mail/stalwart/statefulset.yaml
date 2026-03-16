@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: stalwart
+  namespace: mail
+  labels:
+    app: stalwart
+spec:
+  serviceName: stalwart
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stalwart
+  template:
+    metadata:
+      labels:
+        app: stalwart
+    spec:
+      # Schedule on master node for public IP access
+      nodeSelector:
+        node-role.kubernetes.io/master: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: stalwart
+          image: stalwartlabs/mail-server:latest
+          ports:
+            - containerPort: 25
+              name: smtp
+            - containerPort: 465
+              name: submissions
+            - containerPort: 587
+              name: submission
+            - containerPort: 143
+              name: imap
+            - containerPort: 993
+              name: imaps
+            - containerPort: 8080
+              name: http
+          env:
+            - name: TZ
+              value: "Asia/Shanghai"
+            - name: STALWART_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: stalwart-secrets
+                  key: STALWART_ADMIN_PASSWORD
+          volumeMounts:
+            - name: stalwart-data
+              mountPath: /opt/stalwart-mail/data
+            - name: stalwart-config
+              mountPath: /opt/stalwart-mail/etc/config.toml
+              subPath: config.toml
+              readOnly: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: stalwart-data
+          persistentVolumeClaim:
+            claimName: stalwart-data
+        - name: stalwart-config
+          configMap:
+            name: stalwart-config

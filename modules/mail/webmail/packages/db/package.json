@@ -1,0 +1,20 @@
+{
+	"name": "@lurus/webmail-db",
+	"private": true,
+	"version": "1.1.2",
+	"description": "",
+	"types": "src/index.ts",
+	"main": "src/index.ts",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1",
+		"db:generate": "dotenvx run -f ../../db/.env.develop -- bunx drizzle-kit generate",
+		"db:migrate": "dotenvx run -f ../../db/.env.develop -- bunx drizzle-kit migrate",
+		"db:push": "dotenvx run -f ../../db/.env.develop -- bunx drizzle-kit push"
+	},
+	"keywords": [],
+	"author": "Krishna Rokhale",
+	"license": "ISC",
+	"dependencies": {
+		"jwt-decode": "^4.0.0"
+	}
+}

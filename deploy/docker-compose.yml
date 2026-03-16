@@ -1,0 +1,127 @@
+## Lurus Platform — Full Deployment (All Modules)
+## Usage: docker compose -f deploy/docker-compose.yml up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: lurus_platform
+      POSTGRES_USER: lurus
+      POSTGRES_PASSWORD: lurus
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  nats:
+    image: nats:2-alpine
+    command: ["-js"]
+    ports:
+      - "4222:4222"
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:latest
+    command: start-from-init --masterkeyFromEnv --tlsMode disabled
+    environment:
+      ZITADEL_MASTERKEY: "MasterkeyNeedsToHave32Characters"
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: zitadel
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: lurus
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: lurus
+      ZITADEL_EXTERNALDOMAIN: localhost
+      ZITADEL_EXTERNALPORT: 8080
+      ZITADEL_EXTERNALSECURE: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+
+  # ── Core: Auth + Billing ──
+  core:
+    image: ghcr.io/hanmahong5-arch/lurus-platform-core:main
+    environment:
+      PORT: "18104"
+      ENV: development
+      DATABASE_DSN: "postgresql://lurus:lurus@postgres:5432/lurus_platform?search_path=identity,billing,public&sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      REDIS_DB: "3"
+      NATS_ADDR: "nats://nats:4222"
+      INTERNAL_API_KEY: "changeme-internal-key"
+      ZITADEL_ISSUER: "http://zitadel:8080"
+      ZITADEL_JWKS_URL: "http://zitadel:8080/oauth/v2/keys"
+      MODULES_MAIL_ENABLED: "true"
+      STALWART_ADMIN_URL: "http://stalwart:8080"
+      STALWART_ADMIN_USER: "admin"
+      STALWART_ADMIN_PASSWORD: "changeme-stalwart"
+      MODULES_NOTIFICATION_ENABLED: "true"
+      NOTIFICATION_SERVICE_URL: "http://notification:18900"
+      NOTIFICATION_API_KEY: "changeme-internal-key"
+    ports:
+      - "18104:18104"
+      - "18105:18105"
+    depends_on:
+      - postgres
+      - redis
+      - zitadel
+      - nats
+
+  # ── Module: Mail (Stalwart) ──
+  stalwart:
+    image: stalwartlabs/mail-server:latest
+    ports:
+      - "1025:25"
+      - "1587:587"
+      - "1993:993"
+      - "8443:8080"
+    volumes:
+      - stalwart-data:/opt/stalwart-mail
+
+  # ── Module: Notification ──
+  notification:
+    image: ghcr.io/hanmahong5-arch/lurus-platform-notification:main
+    environment:
+      PORT: "18900"
+      ENV: development
+      DATABASE_DSN: "postgresql://lurus:lurus@postgres:5432/lurus_platform?search_path=notification,public&sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      REDIS_DB: "4"
+      NATS_ADDR: "nats://nats:4222"
+      INTERNAL_API_KEY: "changeme-internal-key"
+      SMTP_HOST: "stalwart"
+      SMTP_PORT: "587"
+    ports:
+      - "18900:18900"
+    depends_on:
+      - postgres
+      - redis
+      - nats
+
+  # ── App: Login UI ──
+  login:
+    image: ghcr.io/hanmahong5-arch/lurus-platform-login:main
+    environment:
+      ZITADEL_API_URL: "http://zitadel:8080"
+    ports:
+      - "3010:3000"
+
+  # ── App: Admin Dashboard ──
+  admin:
+    image: ghcr.io/hanmahong5-arch/lurus-platform-admin:main
+    environment:
+      IDENTITY_SERVICE_URL: "http://core:18104"
+      NOTIFICATION_SERVICE_URL: "http://notification:18900"
+    ports:
+      - "3020:3000"
+    depends_on:
+      - core
+
+volumes:
+  pgdata:
+  stalwart-data:

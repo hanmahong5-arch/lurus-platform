@@ -1,0 +1,321 @@
+# Webmail 核心应用 (Web + Worker)
+# Web: 前端 UI，对外通过 Traefik 暴露�?mail.lurus.cn
+# Worker: 后台 IMAP/SMTP 同步服务
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webmail-web
+  namespace: lurus-webmail
+  labels:
+    app: webmail-web
+spec:
+  selector:
+    matchLabels:
+      app: webmail-web
+  template:
+    metadata:
+      labels:
+        app: webmail-web
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/hanmahong5-arch/lurus-webmail-web:latest
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: WEB_PORT
+              value: "3000"
+            - name: WEB_URL
+              value: "https://mail.lurus.cn"
+            - name: WORKER_URL
+              value: "http://webmail-worker:3001"
+            # Database
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: "postgres://postgres:$(POSTGRES_PASSWORD)@10.43.9.14:5432/webmail"
+            - name: RLS_CLIENT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: RLS_CLIENT_PASSWORD
+            - name: DATABASE_RLS_URL
+              value: "postgres://rls_client:$(RLS_CLIENT_PASSWORD)@10.43.9.14:5432/webmail"
+            # Zitadel OIDC (v2.0 direct auth)
+            - name: ZITADEL_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: webmail-config
+                  key: ZITADEL_ISSUER
+            - name: ZITADEL_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: ZITADEL_CLIENT_ID
+            - name: ZITADEL_REDIRECT_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: webmail-config
+                  key: ZITADEL_REDIRECT_URI
+            - name: ZITADEL_POST_LOGOUT_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: webmail-config
+                  key: ZITADEL_POST_LOGOUT_URI
+            # Legacy Supabase keys (v1 compat, remove in Epic 5)
+            - name: API_URL
+              value: "https://mail.lurus.cn/api"
+            - name: API_PUBLIC_URL
+              value: "https://mail.lurus.cn/api"
+            - name: ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: ANON_KEY
+            - name: SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: SERVICE_ROLE_KEY
+            # Redis
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: REDIS_PASSWORD
+            - name: REDIS_HOST
+              value: "webmail-redis"
+            - name: REDIS_PORT
+              value: "6379"
+            # Typesense
+            - name: TYPESENSE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: TYPESENSE_API_KEY
+            - name: TYPESENSE_HOST
+              value: "webmail-typesense"
+            - name: TYPESENSE_PORT
+              value: "8108"
+            - name: TYPESENSE_PROTOCOL
+              value: "http"
+            - name: SEARCH_REBUILD_ON_BOOT
+              value: "false"
+            # lurus-identity (account overview, VIP, wallet)
+            - name: IDENTITY_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: webmail-config
+                  key: IDENTITY_SERVICE_URL
+            - name: IDENTITY_SERVICE_INTERNAL_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: IDENTITY_SERVICE_INTERNAL_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webmail-web
+  namespace: lurus-webmail
+spec:
+  selector:
+    app: webmail-web
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http
+---
+# Webmail Worker (IMAP/SMTP 同步)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webmail-worker
+  namespace: lurus-webmail
+  labels:
+    app: webmail-worker
+spec:
+  selector:
+    matchLabels:
+      app: webmail-worker
+  template:
+    metadata:
+      labels:
+        app: webmail-worker
+    spec:
+      # Init container to create DAV data directory
+      initContainers:
+        - name: init-dav
+          image: busybox:1.36
+          command: ["sh", "-c", "mkdir -p /dav-data/db && chmod 755 /dav-data/db"]
+          volumeMounts:
+            - name: dav-data
+              mountPath: /dav-data
+      containers:
+        - name: worker
+          image: ghcr.io/hanmahong5-arch/lurus-webmail-worker:latest
+          ports:
+            - containerPort: 3001
+              name: http
+          volumeMounts:
+            - name: dav-data
+              mountPath: /dav-data
+          env:
+            - name: NITRO_PORT
+              value: "3001"
+            - name: WEB_PORT
+              value: "3000"
+            - name: WEB_URL
+              value: "https://mail.lurus.cn"
+            # Database
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: "postgres://postgres:$(POSTGRES_PASSWORD)@10.43.9.14:5432/webmail"
+            - name: RLS_CLIENT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: RLS_CLIENT_PASSWORD
+            - name: DATABASE_RLS_URL
+              value: "postgres://rls_client:$(RLS_CLIENT_PASSWORD)@10.43.9.14:5432/webmail"
+            # Zitadel OIDC (v2.0 direct auth)
+            - name: ZITADEL_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: webmail-config
+                  key: ZITADEL_ISSUER
+            - name: ZITADEL_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: ZITADEL_CLIENT_ID
+            - name: ZITADEL_REDIRECT_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: webmail-config
+                  key: ZITADEL_REDIRECT_URI
+            - name: ZITADEL_POST_LOGOUT_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: webmail-config
+                  key: ZITADEL_POST_LOGOUT_URI
+            # Legacy Supabase keys (v1 compat, remove in Epic 5)
+            - name: API_URL
+              value: "https://mail.lurus.cn/api"
+            - name: API_PUBLIC_URL
+              value: "https://mail.lurus.cn/api"
+            - name: ANON_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: ANON_KEY
+            - name: SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: SERVICE_ROLE_KEY
+            # Redis
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: REDIS_PASSWORD
+            - name: REDIS_HOST
+              value: "webmail-redis"
+            - name: REDIS_PORT
+              value: "6379"
+            # Typesense
+            - name: TYPESENSE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: TYPESENSE_API_KEY
+            - name: TYPESENSE_HOST
+              value: "webmail-typesense"
+            - name: TYPESENSE_PORT
+              value: "8108"
+            - name: TYPESENSE_PROTOCOL
+              value: "http"
+            - name: SEARCH_REBUILD_ON_BOOT
+              value: "false"
+            # Stalwart Mail Server (cluster-internal)
+            - name: STALWART_SMTP_HOST
+              value: "stalwart.mail.svc.cluster.local"
+            - name: STALWART_SMTP_PORT
+              value: "587"
+            - name: STALWART_API_URL
+              value: "http://stalwart.mail.svc.cluster.local:8080"
+            - name: STALWART_ADMIN_USER
+              value: "admin"
+            - name: STALWART_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: STALWART_ADMIN_PASSWORD
+            # SendCloud relay (China domestic delivery)
+            - name: SENDCLOUD_HOST
+              value: "smtp.sendcloud.net"
+            - name: SENDCLOUD_PORT
+              value: "587"
+            - name: SENDCLOUD_API_USER
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: SENDCLOUD_API_USER
+            - name: SENDCLOUD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: SENDCLOUD_API_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: dav-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webmail-worker
+  namespace: lurus-webmail
+spec:
+  selector:
+    app: webmail-worker
+  ports:
+    - port: 3001
+      targetPort: 3001
+      name: http

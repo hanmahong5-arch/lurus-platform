@@ -1,0 +1,109 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: stalwart-backup
+  namespace: mail
+  labels:
+    app: stalwart-backup
+spec:
+  schedule: "0 3 * * *"   # Daily at 03:00 cluster time
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+          containers:
+            - name: backup
+              image: alpine/curl:latest
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: false  # /tmp needed for tarball
+              env:
+                - name: STALWART_URL
+                  value: "http://stalwart.mail.svc.cluster.local:8080"
+                - name: STALWART_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: stalwart-secrets
+                      key: STALWART_ADMIN_PASSWORD
+                - name: MINIO_ENDPOINT
+                  value: "http://100.79.24.40:9000"
+                - name: MINIO_BUCKET
+                  value: "lurus-webmail-backups"
+                - name: MINIO_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: access_key
+                - name: MINIO_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: secret_key
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  apk add --no-cache tar curl > /dev/null 2>&1
+
+                  DATE=$(date +%Y%m%d-%H%M)
+                  ARCHIVE="/tmp/stalwart-${DATE}.tar.gz"
+
+                  echo "[backup] Triggering Stalwart atomic snapshot..."
+                  HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+                    -u "admin:${STALWART_ADMIN_PASSWORD}" \
+                    -X POST "${STALWART_URL}/api/store/backup")
+                  if [ "$HTTP_STATUS" != "200" ]; then
+                    echo "[backup] ERROR: Backup API returned HTTP ${HTTP_STATUS}"
+                    exit 1
+                  fi
+                  echo "[backup] Snapshot triggered (HTTP 200)."
+
+                  # Wait briefly for snapshot to be written
+                  sleep 5
+
+                  # Package snapshot directory (Stalwart writes to /opt/stalwart/backup or /var/lib/stalwart)
+                  echo "[backup] Packaging snapshot..."
+                  tar czf "${ARCHIVE}" /opt/stalwart/backup/ 2>/dev/null \
+                    || tar czf "${ARCHIVE}" /var/lib/stalwart/ 2>/dev/null \
+                    || { echo "[backup] ERROR: Could not locate snapshot directory"; exit 1; }
+
+                  ARCHIVE_SIZE=$(du -sh "${ARCHIVE}" | cut -f1)
+                  echo "[backup] Archive created: ${ARCHIVE} (${ARCHIVE_SIZE})"
+
+                  # Upload to MinIO using AWS Signature V4 via curl (pre-signed URL workaround)
+                  # Uses simple PUT with AWS auth header
+                  echo "[backup] Uploading to MinIO..."
+                  OBJECT_KEY="stalwart-${DATE}.tar.gz"
+
+                  # Use mc (MinIO client) if available, else fall back to curl with basic auth
+                  if command -v mc > /dev/null 2>&1; then
+                    mc alias set minio "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}" --api S3v4
+                    mc cp "${ARCHIVE}" "minio/${MINIO_BUCKET}/${OBJECT_KEY}"
+                  else
+                    # Install mc dynamically
+                    curl -sf -o /usr/local/bin/mc \
+                      https://dl.min.io/client/mc/release/linux-amd64/mc \
+                      && chmod +x /usr/local/bin/mc
+                    mc alias set minio "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}" --api S3v4 --quiet
+                    mc cp "${ARCHIVE}" "minio/${MINIO_BUCKET}/${OBJECT_KEY}" --quiet
+                  fi
+
+                  echo "[backup] Upload complete: ${MINIO_BUCKET}/${OBJECT_KEY}"
+                  rm -f "${ARCHIVE}"
+                  echo "[backup] Done."
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "256Mi"

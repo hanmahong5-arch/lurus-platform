@@ -1,0 +1,8 @@
+# lurus-webmail Namespace - 替换 webmail namespace 中的 Roundcube
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lurus-webmail
+  labels:
+    app.kubernetes.io/name: lurus-webmail
+    app.kubernetes.io/part-of: lurus-mail

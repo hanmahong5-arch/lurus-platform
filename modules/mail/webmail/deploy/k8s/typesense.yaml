@@ -1,0 +1,64 @@
+# Typesense 全文搜索引擎 (邮件搜索)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webmail-typesense
+  namespace: lurus-webmail
+  labels:
+    app: webmail-typesense
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webmail-typesense
+  template:
+    metadata:
+      labels:
+        app: webmail-typesense
+    spec:
+      containers:
+        - name: typesense
+          image: typesense/typesense:29.0
+          args:
+            - --data-dir=/data
+            - --api-key=$(TYPESENSE_API_KEY)
+            - --enable-cors
+          env:
+            - name: TYPESENSE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: TYPESENSE_API_KEY
+          ports:
+            - containerPort: 8108
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8108
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webmail-typesense
+  namespace: lurus-webmail
+spec:
+  selector:
+    app: webmail-typesense
+  ports:
+    - port: 8108
+      targetPort: 8108

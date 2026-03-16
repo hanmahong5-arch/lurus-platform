@@ -1,0 +1,65 @@
+# Redis for Webmail (缓存和会�?
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webmail-redis
+  namespace: lurus-webmail
+  labels:
+    app: webmail-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webmail-redis
+  template:
+    metadata:
+      labels:
+        app: webmail-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8-alpine
+          command:
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --requirepass
+            - $(REDIS_PASSWORD)
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: webmail-secrets
+                  key: REDIS_PASSWORD
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webmail-redis
+  namespace: lurus-webmail
+spec:
+  selector:
+    app: webmail-redis
+  ports:
+    - port: 6379
+      targetPort: 6379

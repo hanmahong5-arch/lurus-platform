@@ -1,0 +1,43 @@
+{
+	// https://nitro.build/guide/typescript
+	// "extends": "./.nitro/types/tsconfig.json",
+	"compilerOptions": {
+		// Module resolution
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"jsx": "preserve",
+		"jsxFactory": "h",
+		"jsxFragmentFactory": "Fragment",
+
+		// Core checks
+		"strict": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"resolveJsonModule": true,
+		"allowSyntheticDefaultImports": true,
+
+		// Additional safety
+		"forceConsistentCasingInFileNames": true,
+		"noImplicitReturns": true,
+		"noFallthroughCasesInSwitch": true,
+		"useUnknownInCatchVariables": true,
+		"noUnusedLocals": true,
+		// "noUnusedParameters": true,
+
+		// Libs & paths
+		"lib": ["ESNext", "DOM"],
+		"baseUrl": ".",
+		"paths": {
+			"@worker/*": ["./*"],
+			"@db": ["../../packages/db/src/index.ts"],
+			"@db/*": ["../../packages/db/src/*"],
+			"@schema": ["../../packages/schema/src/index.ts"],
+			"@schema/*": ["../../packages/schema/src/*"],
+			"@providers": ["../../packages/providers/src/index.ts"],
+			"@providers/*": ["../../packages/providers/src/*"],
+			"@common": ["../../packages/common/src/index.ts"],
+			"@common/*": ["../../packages/common/src/*"]
+		}
+	}
+}

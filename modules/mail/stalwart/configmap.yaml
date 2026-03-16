@@ -1,0 +1,256 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stalwart-config
+  namespace: mail
+  labels:
+    app: stalwart
+data:
+  config.toml: |
+    #############################################
+    # Server Configuration
+    #############################################
+
+    [server]
+    hostname = "mail.lurus.cn"
+    max-connections = 8192
+
+    [server.run-as]
+    user = "stalwart-mail"
+    group = "stalwart-mail"
+
+    #############################################
+    # Storage Configuration (RocksDB)
+    #############################################
+
+    [store."rocksdb"]
+    type = "rocksdb"
+    path = "/opt/stalwart-mail/data"
+    compression = "lz4"
+
+    [storage]
+    data = "rocksdb"
+    fts = "rocksdb"
+    blob = "rocksdb"
+    lookup = "rocksdb"
+    directory = "internal"
+
+    #############################################
+    # Directory (User Management)
+    #############################################
+
+    [directory."internal"]
+    type = "internal"
+    store = "rocksdb"
+
+    [directory."internal".options]
+    catch-all = true
+    subaddressing = true
+
+    #############################################
+    # SMTP Configuration
+    #############################################
+
+    [session.ehlo]
+    require = true
+    reject-non-fqdn = false
+
+    [session.auth]
+    mechanisms = ["plain", "login"]
+    require = false
+    allow-plain-text = true
+
+    [session.rcpt]
+    relay = true
+    max-recipients = 100
+
+    [queue]
+    path = "/opt/stalwart-mail/queue"
+    hash = 64
+
+    [queue.schedule]
+    retry = ["2m", "5m", "10m", "30m", "1h", "2h", "4h"]
+    notify = ["1d", "3d"]
+    expire = "5d"
+
+    [queue.outbound]
+    hostname = "mail.lurus.cn"
+    next-hop = false
+
+    #############################################
+    # Security: SPF, DKIM, DMARC, ARC
+    #############################################
+
+    [auth.spf.verify]
+    ehlo = "strict"
+    mail-from = "strict"
+
+    [auth.dkim]
+    verify = "strict"
+    sign = true
+
+    [auth.dmarc]
+    verify = "strict"
+
+    [auth.arc]
+    verify = "strict"
+    seal = true
+
+    [auth.iprev]
+    verify = "strict"
+
+    #############################################
+    # DMARC Reporting
+    #############################################
+
+    [report.dmarc]
+    from-name = "Lurus Mail DMARC"
+    from-address = "dmarc-reports@lurus.cn"
+    org-name = "Lurus"
+    send = "daily"
+
+    [report.tls]
+    from-name = "Lurus Mail TLS"
+    from-address = "tls-reports@lurus.cn"
+    org-name = "Lurus"
+    send = "daily"
+
+    #############################################
+    # Anti-Spam Configuration
+    #############################################
+
+    [spam-filter]
+    enable = true
+
+    [spam-filter.score]
+    spam-threshold = 5.0
+    discard-threshold = 10.0
+    reject-threshold = -1
+
+    [spam-filter.header]
+    status = "X-Spam-Status"
+    result = "X-Spam-Result"
+
+    [spam-filter.bayes]
+    enable = true
+    auto-learn = true
+    auto-learn-spam-threshold = 6.0
+    auto-learn-ham-threshold = -2.0
+
+    [spam-filter.dnsbl]
+    lists = [
+        "zen.spamhaus.org",
+        "bl.spamcop.net"
+    ]
+
+    #############################################
+    # IMAP Configuration
+    #############################################
+
+    [imap]
+    max-request-size = 52428800
+
+    [imap.timeout]
+    authenticated = "30m"
+    anonymous = "1m"
+    idle = "30m"
+
+    #############################################
+    # JMAP Configuration
+    #############################################
+
+    [jmap]
+    max-request-size = 52428800
+    max-upload-size = 52428800
+
+    [jmap.session]
+    timeout = "1h"
+    purge-frequency = "1h"
+
+    #############################################
+    # HTTP/Web Interface
+    #############################################
+
+    [server.listener."http"]
+    bind = ["[::]:8080"]
+    protocol = "http"
+
+    [web-admin]
+    enable = true
+
+    #############################################
+    # Admin API Authentication
+    #############################################
+
+    [authentication.fallback-admin]
+    user = "admin"
+    secret = "%{env:STALWART_ADMIN_PASSWORD}%"
+
+    #############################################
+    # OIDC Authentication (Zitadel)
+    #############################################
+
+    [oauth]
+    issuer = "https://auth.lurus.cn"
+    # Token introspection uses Zitadel's userinfo endpoint
+    # Stalwart validates JWT tokens signed by Zitadel
+    [oauth.token]
+    verification = "strict"
+
+    #############################################
+    # TLS Configuration - ACME (Let's Encrypt)
+    #############################################
+
+    [certificate."acme"]
+    type = "acme"
+    domains = ["mail.lurus.cn"]
+    contact = ["admin@lurus.cn"]
+    directory = "https://acme-v02.api.letsencrypt.org/directory"
+    challenge = "tls-alpn-01"
+
+    #############################################
+    # Listeners
+    #############################################
+
+    [server.listener."smtp"]
+    bind = ["[::]:25"]
+    protocol = "smtp"
+
+    [server.listener."submission"]
+    bind = ["[::]:587"]
+    protocol = "smtp"
+    tls.implicit = false
+    tls.starttls = true
+
+    [server.listener."submissions"]
+    bind = ["[::]:465"]
+    protocol = "smtp"
+    tls.implicit = true
+
+    [server.listener."imap"]
+    bind = ["[::]:143"]
+    protocol = "imap"
+    tls.implicit = false
+    tls.starttls = true
+
+    [server.listener."imaps"]
+    bind = ["[::]:993"]
+    protocol = "imap"
+    tls.implicit = true
+
+    #############################################
+    # Logging
+    #############################################
+
+    [tracing."stdout"]
+    type = "stdout"
+    level = "info"
+    ansi = false
+    enable = true
+
+    #############################################
+    # Metrics (Prometheus)
+    #############################################
+
+    [metrics]
+    prometheus = true

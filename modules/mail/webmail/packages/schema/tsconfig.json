@@ -1,0 +1,9 @@
+{
+	"compilerOptions": {
+		"paths": {
+			"@db": ["../db/src/index.ts"],
+			"@db/*": ["../db/src/*"]
+		}
+	},
+	"exclude": ["node_modules"]
+}

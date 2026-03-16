@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: lurus-notification
+  namespace: lurus-system
+  labels:
+    app: lurus-notification
+    app.kubernetes.io/part-of: lurus
+spec:
+  selector:
+    matchLabels:
+      app: lurus-notification
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

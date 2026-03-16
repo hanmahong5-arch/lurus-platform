@@ -1,0 +1,15 @@
+{
+	"pages": [
+		"index",
+		"installation",
+		"contacts",
+		"calendars",
+		"getting-started",
+		"providers",
+		"api",
+		"upgrading",
+		"contributing",
+		"consulting",
+		"support"
+	]
+}

@@ -1,0 +1,64 @@
+# Traefik IngressRoute for Webmail
+# 域名: mail.lurus.cn (替换原来�?Roundcube)
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: webmail-tls
+  namespace: lurus-webmail
+spec:
+  secretName: webmail-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+  - mail.lurus.cn
+---
+# 主入�?- Webmail Web UI
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: webmail-web
+  namespace: lurus-webmail
+spec:
+  entryPoints:
+  - websecure
+  routes:
+  - match: Host(`mail.lurus.cn`) && !PathPrefix(`/api`)
+    kind: Rule
+    services:
+    - name: webmail-web
+      port: 3000
+  tls:
+    secretName: lurus-cn-wildcard-tls
+---
+# API 入口 - Kong Gateway (Supabase API)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: webmail-api
+  namespace: lurus-webmail
+spec:
+  entryPoints:
+  - websecure
+  routes:
+  - match: Host(`mail.lurus.cn`) && PathPrefix(`/api`)
+    kind: Rule
+    services:
+    - name: webmail-kong
+      port: 8000
+    middlewares:
+    - name: webmail-api-strip
+  tls:
+    secretName: lurus-cn-wildcard-tls
+---
+# Middleware: 去掉 /api 前缀
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: webmail-api-strip
+  namespace: lurus-webmail
+spec:
+  stripPrefix:
+    prefixes:
+    - /api

@@ -1,0 +1,157 @@
+---
+title: Calendars (CalDAV)
+description: Sync your calendars across all your devices using CalDAV with Kurrier
+---
+
+# Calendars (CalDAV)
+
+Kurrier supports **full CalDAV calendar syncing**, giving you a powerful, private, self-hosted scheduling system that works seamlessly across all your devices — phones, tablets, desktops, and native calendar apps.
+
+Whether you're using **Apple Calendar**, **Thunderbird**, **DAVx⁵ on Android**, or **Outlook via CalDAV plugins**, Kurrier keeps everything in perfect sync.
+
+![Docs Contact](/docs-calendar-light.png)
+
+Dark Mode:
+
+![Docs Contact](/docs-calendar-dark.png)
+
+---
+
+## What makes Kurrier Calendars special?
+
+Kurrier isn’t just a standalone calendar server.
+It’s part of a **deeply integrated personal information suite**, alongside:
+
+### ✉️ **Mail**
+Invite guests and receive event invitations **directly inside your Kurrier inbox**.
+Kurrier automatically processes `.ics` attachments, updates your calendar, and tracks attendee responses.
+
+### 👥 **Contacts (CardDAV)**
+Your event attendees automatically link with your Kurrier contacts.
+Names, avatars, and emails are unified across:
+
+- Mail
+- Contacts
+- Calendar
+- Autocomplete fields in the UI
+
+No duplication. No inconsistencies. One shared identity graph.
+
+### 📅 **Calendar**
+Kurrier merges mail + contacts + events into a **single cohesive, self-hosted platform**.
+
+---
+
+## What works today
+
+Kurrier’s CalDAV backend is already fully capable of:
+
+### ✅ Creating and storing calendars
+Create personal calendars, work calendars, or shared calendar collections from any CalDAV app.
+
+### ✅ Two-way syncing of events
+Create, update, or delete events on any device — the changes sync instantly.
+
+### ✅ Accurate timezone handling
+Kurrier stores all events in UTC and converts them to the correct timezone in both your UI and `.ics` files.
+
+### ✅ Event invitations & iTIP support
+Kurrier correctly handles:
+
+- Sending `.ics` invitations
+- Receiving replies (ACCEPTED / DECLINED / TENTATIVE)
+- Updating attendee partstats
+- Cancelation flows
+
+All directly through Kurrier Mail.
+
+### ✅ Multi-device support
+Works flawlessly on:
+
+- iOS & macOS Calendar
+- Android (DAVx⁵)
+- Thunderbird / Lightning
+- Outlook (CalDAV plugin)
+- Any CalDAV-compatible client
+
+### ✅ Integrated attendee management
+Kurrier tracks:
+
+- Organizer identity
+- Guest list
+- RSVP status
+- Roles (chair, required attendee, optional attendee)
+
+All visible inside the Kurrier Calendar UI.
+
+---
+
+## Kurrier Calendar Web UI
+
+The Calendar Web UI is now functional and includes:
+
+- **Popover editing**
+- **Time zone aware event creation**
+- **Guest management**
+- **Email notifications for attendees**
+- **Deep linking from inbox to event**
+
+The goal is a clean, modern, Google Calendar–style interface that fits naturally inside the Kurrier dashboard.
+
+---
+
+## Why CalDAV?
+
+CalDAV is an **open standard**, which means:
+
+- No vendor lock-in
+- Works across all platforms
+- Portable, exportable, future-proof
+- Fully under your control when self-hosted
+
+Kurrier simply acts as your **private calendar engine**, synced across your personal ecosystem.
+
+---
+
+## Coming soon
+
+Kurrier’s calendar system is rapidly evolving. Next on the roadmap:
+
+### 🔁 Recurring events
+Support for RRULEs (daily/weekly/monthly/custom repeats).
+
+### 🌕 All-day events
+Native all-day event rendering and syncing.
+
+### 👥 Shared calendars
+Multiple users sharing the same calendar with view/edit permissions.
+
+### 📎 Attachments & event metadata
+Adding notes, files, and extended properties to events.
+
+### 🔔 In-browser reminders
+Desktop notifications, snooze support, and reminder settings.
+
+### 🗂 Multiple calendars per identity
+Color-coded views & per-calendar visibility toggles.
+
+### 📅 Availability and free/busy
+Auto-computed availability windows for scheduling.
+
+---
+
+## Summary
+
+- ✔ A complete, standards-compliant CalDAV backend
+- ✔ Two-way syncing with all major calendar apps
+- ✔ Event invitations and RSVP processing through Kurrier Mail
+- ✔ Contact-aware attendee management
+- ✔ Modern web UI for creating and editing events
+
+And coming soon:
+
+- 🔁 Recurring events
+- 🌕 All-day events
+- 👥 Shared calendars
+- 🔔 Web reminders
+- 🗂 Multi-calendar management

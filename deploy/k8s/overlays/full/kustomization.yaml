@@ -1,0 +1,50 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  # Mail module
+  - ../../../../modules/mail/stalwart/statefulset.yaml
+  - ../../../../modules/mail/stalwart/service.yaml
+  - ../../../../modules/mail/stalwart/pvc.yaml
+  - ../../../../modules/mail/stalwart/configmap.yaml
+  - ../../../../modules/mail/stalwart/secret.yaml
+  - ../../../../modules/mail/stalwart/backup-cronjob.yaml
+  - ../../../../modules/mail/webmail/deploy/k8s/webmail-app.yaml
+  # Notification module
+  - ../../../../modules/notification/deploy/k8s/deployment.yaml
+  - ../../../../modules/notification/deploy/k8s/service.yaml
+  - ../../../../modules/notification/deploy/k8s/configmap.yaml
+  # Login UI
+  - ../../../../apps/login/deploy/k8s/deployment.yaml
+  - ../../../../apps/login/deploy/k8s/service.yaml
+  - ../../../../apps/login/deploy/k8s/configmap.yaml
+  # Admin dashboard
+  - ../../../../apps/admin/deploy/k8s/deployment.yaml
+  - ../../../../apps/admin/deploy/k8s/service.yaml
+
+patches:
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MODULES_MAIL_ENABLED
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STALWART_ADMIN_URL
+          value: "http://platform-stalwart:8080"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MODULES_NOTIFICATION_ENABLED
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NOTIFICATION_SERVICE_URL
+          value: "http://platform-notification:18900"
+    target:
+      kind: Deployment
+      name: platform-core
