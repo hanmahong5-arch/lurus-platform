@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: identity-service
+  namespace: lurus-identity
+  labels:
+    app: lurus-identity
+    app.kubernetes.io/name: lurus-identity
+    app.kubernetes.io/part-of: lurus
+spec:
+  selector:
+    app: lurus-identity
+  ports:
+    - name: http
+      port: 18104
+      targetPort: 18104
+    - name: grpc
+      port: 18105
+      targetPort: 18105   # reserved for Phase 2 gRPC
+  type: ClusterIP

@@ -1,0 +1,30 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: lurus-login
+  namespace: lurus-login
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`login.lurus.cn`)
+      kind: Rule
+      services:
+        - name: lurus-login
+          port: 3000
+      middlewares:
+        - name: lurus-login-headers
+  tls:
+    certResolver: letsencrypt
+---
+# Inject required headers for Zitadel's OIDC proxy middleware
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: lurus-login-headers
+  namespace: lurus-login
+spec:
+  headers:
+    customRequestHeaders:
+      X-Zitadel-Public-Host: "login.lurus.cn"
+      X-Zitadel-Instance-Host: "auth.lurus.cn"

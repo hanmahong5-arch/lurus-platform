@@ -1,0 +1,118 @@
+package handler
+
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+	"github.com/hanmahong5-arch/lurus-platform/internal/app"
+	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+)
+
+// ProductHandler handles product catalog endpoints.
+type ProductHandler struct {
+	products *app.ProductService
+}
+
+func NewProductHandler(products *app.ProductService) *ProductHandler {
+	return &ProductHandler{products: products}
+}
+
+// ListProducts returns all active products.
+// GET /api/v1/products
+func (h *ProductHandler) ListProducts(c *gin.Context) {
+	list, err := h.products.ListActive(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list products"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"products": list})
+}
+
+// ListPlans returns available plans for a product.
+// GET /api/v1/products/:id/plans
+func (h *ProductHandler) ListPlans(c *gin.Context) {
+	productID := c.Param("id")
+	plans, err := h.products.ListPlans(c.Request.Context(), productID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list plans"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"plans": plans})
+}
+
+// AdminCreateProduct creates a new product.
+// POST /admin/v1/products
+func (h *ProductHandler) AdminCreateProduct(c *gin.Context) {
+	var p entity.Product
+	if err := c.ShouldBindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.products.CreateProduct(c.Request.Context(), &p); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, p)
+}
+
+// AdminUpdateProduct updates a product.
+// PUT /admin/v1/products/:id
+func (h *ProductHandler) AdminUpdateProduct(c *gin.Context) {
+	id := c.Param("id")
+	p, err := h.products.GetByID(c.Request.Context(), id)
+	if err != nil || p == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
+		return
+	}
+	if err := c.ShouldBindJSON(p); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.products.UpdateProduct(c.Request.Context(), p); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, p)
+}
+
+// AdminCreatePlan creates a plan for a product.
+// POST /admin/v1/products/:id/plans
+func (h *ProductHandler) AdminCreatePlan(c *gin.Context) {
+	productID := c.Param("id")
+	var plan entity.ProductPlan
+	if err := c.ShouldBindJSON(&plan); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	plan.ProductID = productID
+	if err := h.products.CreatePlan(c.Request.Context(), &plan); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, plan)
+}
+
+// AdminUpdatePlan updates an existing plan.
+// PUT /admin/v1/plans/:id
+func (h *ProductHandler) AdminUpdatePlan(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid plan id"})
+		return
+	}
+	plan, err := h.products.GetPlanByID(c.Request.Context(), id)
+	if err != nil || plan == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "plan not found"})
+		return
+	}
+	if err := c.ShouldBindJSON(plan); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.products.UpdatePlan(c.Request.Context(), plan); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, plan)
+}

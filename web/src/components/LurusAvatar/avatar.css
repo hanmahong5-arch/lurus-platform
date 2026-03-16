@@ -1,0 +1,46 @@
+.lurus-avatar-wrap {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+}
+
+.vip-dot {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+}
+
+.lurus-popover {
+  min-width: 200px;
+  padding: 4px 0;
+}
+
+.popover-header {
+  display: flex;
+  align-items: center;
+  padding: 4px 0 8px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 8px;
+}
+
+.popover-lurus-id {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
+  letter-spacing: 0.5px;
+}
+
+.popover-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.popover-no-sub {
+  font-size: 12px;
+  color: #8c8c8c;
+}

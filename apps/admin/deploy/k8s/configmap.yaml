@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lurus-admin-config
+  namespace: lurus-admin
+data:
+  NODE_ENV: "production"
+  NEXTAUTH_URL: "https://admin.lurus.cn"
+  ZITADEL_ISSUER: "https://auth.lurus.cn"
+  IDENTITY_SERVICE_URL: "http://identity-service.lurus-identity.svc.cluster.local:18104"
+  NOTIFICATION_SERVICE_URL: "http://lurus-notification.lurus-system.svc.cluster.local:18900"

@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lurus-login
+  namespace: lurus-login
+  labels:
+    app: lurus-login
+    app.kubernetes.io/name: lurus-login
+    app.kubernetes.io/part-of: lurus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lurus-login
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: lurus-login
+        app.kubernetes.io/managed-by: argocd
+    spec:
+      nodeSelector:
+        lurus.cn/vpn: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+        - name: lurus-login
+          image: ghcr.io/hanmahong5-arch/lurus-login:main
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # Next.js needs writable /tmp
+            capabilities:
+              drop: [ALL]
+          ports:
+            - containerPort: 3000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: lurus-login-config
+          env:
+            - name: ZITADEL_SERVICE_USER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-login-secrets
+                  key: ZITADEL_SERVICE_USER_ID
+            - name: ZITADEL_SERVICE_USER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-login-secrets
+                  key: ZITADEL_SERVICE_USER_TOKEN
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3

@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lurus-admin
+  namespace: lurus-admin
+  labels:
+    app: lurus-admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lurus-admin
+  template:
+    metadata:
+      labels:
+        app: lurus-admin
+    spec:
+      containers:
+        - name: lurus-admin
+          image: ghcr.io/hanmahong5-arch/lurus-admin:main
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: lurus-admin-config
+            - secretRef:
+                name: lurus-admin-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /api/auth/session
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/auth/session
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            readOnlyRootFilesystem: false
+            runAsUser: 1001
+            runAsNonRoot: true

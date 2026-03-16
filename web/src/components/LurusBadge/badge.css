@@ -1,0 +1,40 @@
+.lurus-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--badge-color);
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* Size variants */
+.badge-sm { font-size: 10px; padding: 1px 5px; }
+.badge-lg { font-size: 14px; padding: 3px 10px; }
+
+/* Plan tier effects */
+.badge-basic {
+  opacity: 0.9;
+}
+
+.badge-pro {
+  background: linear-gradient(135deg, var(--badge-color) 0%, color-mix(in srgb, var(--badge-color) 70%, #fff) 100%);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--badge-color) 50%, transparent);
+}
+
+.badge-enterprise {
+  background: linear-gradient(135deg, var(--badge-color) 0%, color-mix(in srgb, var(--badge-color) 60%, #fff) 100%);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--badge-color) 70%, transparent);
+  animation: badge-sparkle 2s ease-in-out infinite;
+}
+
+@keyframes badge-sparkle {
+  0%, 100% { box-shadow: 0 0 6px color-mix(in srgb, var(--badge-color) 50%, transparent); }
+  50%       { box-shadow: 0 0 14px color-mix(in srgb, var(--badge-color) 90%, transparent); }
+}
+
+.badge-gem { font-size: 1em; line-height: 1; }

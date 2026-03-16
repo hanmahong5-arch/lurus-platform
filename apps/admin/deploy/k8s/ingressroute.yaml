@@ -1,0 +1,16 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: lurus-admin
+  namespace: lurus-admin
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`admin.lurus.cn`)
+      kind: Rule
+      services:
+        - name: lurus-admin
+          port: 3000
+  tls:
+    secretName: lurus-cn-wildcard-tls

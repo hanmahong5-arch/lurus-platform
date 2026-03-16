@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: lurus-admin
+  namespace: lurus-admin
+  labels:
+    app: lurus-admin
+spec:
+  type: ClusterIP
+  selector:
+    app: lurus-admin
+  ports:
+    - port: 3000
+      targetPort: 3000
+      protocol: TCP

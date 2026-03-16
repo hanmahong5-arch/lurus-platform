@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lurus-identity-pdb
+  namespace: lurus-identity
+  labels:
+    app: lurus-identity
+    app.kubernetes.io/name: lurus-identity
+    app.kubernetes.io/part-of: lurus
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: lurus-identity
