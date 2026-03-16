@@ -26,7 +26,7 @@ RUN go mod download
 COPY --from=frontend /web/dist ./web/dist
 
 COPY . .
-RUN go build -ldflags="-s -w" -trimpath -o lurus-platform-core ./cmd/core
+RUN GOWORK=off go build -ldflags="-s -w" -trimpath -o lurus-platform-core ./cmd/core
 
 FROM scratch
 
