@@ -45,8 +45,8 @@ data:
   STALWART_API_URL: "http://stalwart.mail.svc.cluster.local:8080"
   STALWART_ADMIN_USER: "admin"
 
-  # lurus-identity service (account overview, VIP, wallet)
-  IDENTITY_SERVICE_URL: "http://identity-service.lurus-identity.svc.cluster.local:18104"
+  # lurus-platform service (account overview, VIP, wallet)
+  IDENTITY_SERVICE_URL: "http://platform-core.lurus-platform.svc.cluster.local:18104"
 
   # Zitadel OIDC (v2.0 direct auth, replacing Supabase GoTrue)
   ZITADEL_ISSUER: "https://auth.lurus.cn"

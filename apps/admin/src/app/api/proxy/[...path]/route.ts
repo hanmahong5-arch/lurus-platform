@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 const SERVICE_MAP: Record<string, string> = {
   identity:
     process.env.IDENTITY_SERVICE_URL ||
-    "http://identity-service.lurus-identity.svc.cluster.local:18104",
+    "http://platform-core.lurus-platform.svc.cluster.local:18104",
   notification:
     process.env.NOTIFICATION_SERVICE_URL ||
     "http://lurus-notification.lurus-system.svc.cluster.local:18900",

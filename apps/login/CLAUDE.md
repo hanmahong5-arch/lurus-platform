@@ -9,7 +9,7 @@ Namespace: `lurus-login` | Domain: `login.lurus.cn` | Port: `3000`
 Zitadel 配置 `ZITADEL_LOGIN_URL=https://login.lurus.cn` 后，所有 OIDC 授权流程均由本服务处理。
 
 **品牌化**：通过 Zitadel Console → Instance Settings → Branding 配置 Logo/颜色，login-ui 自动读取。
-**微信登录**：lurus-identity 暴露 `/oauth/wechat/*` OAuth2 端点，在 Zitadel 注册为 Generic OAuth IDP，login-ui 自动显示微信按钮。
+**微信登录**：lurus-platform 暴露 `/oauth/wechat/*` OAuth2 端点，在 Zitadel 注册为 Generic OAuth IDP，login-ui 自动显示微信按钮。
 
 ## Tech Stack
 

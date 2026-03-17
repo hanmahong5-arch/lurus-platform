@@ -37,7 +37,7 @@ bun run typecheck    # tsc --noEmit
 
 ## Backend Dependencies
 
-- **lurus-identity** `/admin/v1/*` — accounts, wallet, products, invoices, refunds, settings, organizations
+- **lurus-platform** `/admin/v1/*` — accounts, wallet, products, invoices, refunds, settings, organizations
 - **lurus-notification** `/admin/v1/templates` — template management
 
 ## BMAD
