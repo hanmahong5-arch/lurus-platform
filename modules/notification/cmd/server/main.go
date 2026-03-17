@@ -77,7 +77,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// --- NATS ---
 	slog.Info("connecting to nats", "addr", cfg.NATSAddr)
 	nc, err := natsgo.Connect(cfg.NATSAddr,
-		natsgo.Timeout(10*time.Second),
+		natsgo.Timeout(30*time.Second),
 		natsgo.MaxReconnects(-1),
 		natsgo.ReconnectWait(5*time.Second),
 		natsgo.DisconnectErrHandler(func(_ *natsgo.Conn, err error) {
