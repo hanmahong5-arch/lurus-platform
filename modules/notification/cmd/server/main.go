@@ -75,15 +75,33 @@ func run(ctx context.Context, cfg *config.Config) error {
 	_ = rdb // reserved for future caching/dedup
 
 	// --- NATS ---
+	slog.Info("connecting to nats", "addr", cfg.NATSAddr)
 	nc, err := natsgo.Connect(cfg.NATSAddr,
-		natsgo.RetryOnFailedConnect(true),
-		natsgo.MaxReconnects(10),
-		natsgo.ReconnectWait(2*time.Second),
+		natsgo.Timeout(10*time.Second),
+		natsgo.MaxReconnects(-1),
+		natsgo.ReconnectWait(5*time.Second),
+		natsgo.DisconnectErrHandler(func(_ *natsgo.Conn, err error) {
+			slog.Warn("nats disconnected", "err", err)
+		}),
+		natsgo.ReconnectHandler(func(_ *natsgo.Conn) {
+			slog.Info("nats reconnected")
+		}),
+		natsgo.ConnectHandler(func(_ *natsgo.Conn) {
+			slog.Info("nats connected successfully")
+		}),
+		natsgo.ErrorHandler(func(_ *natsgo.Conn, _ *natsgo.Subscription, err error) {
+			slog.Error("nats async error", "err", err)
+		}),
 	)
 	if err != nil {
-		return fmt.Errorf("connect nats: %w", err)
+		slog.Warn("nats connection failed, running without event consumers", "err", err)
+		nc = nil
+	} else {
+		slog.Info("nats connect returned", "status", nc.Status().String(), "connected_addr", nc.ConnectedAddr())
 	}
-	defer nc.Close()
+	if nc != nil {
+		defer nc.Close()
+	}
 
 	// --- Repositories ---
 	notifRepo := repo.NewNotificationRepo(db)
@@ -128,11 +146,6 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// --- NATS Consumer ---
-	consumer, err := natsconsumer.NewConsumer(nc, notifSvc)
-	if err != nil {
-		return fmt.Errorf("nats consumer: %w", err)
-	}
-
 	g, gctx := errgroup.WithContext(ctx)
 
 	// HTTP server
@@ -144,10 +157,18 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return nil
 	})
 
-	// NATS consumer
-	g.Go(func() error {
-		return consumer.Run(gctx)
-	})
+	if nc != nil {
+		consumer, err := natsconsumer.NewConsumer(nc, notifSvc)
+		if err != nil {
+			slog.Warn("nats consumer init failed", "err", err)
+		} else {
+			g.Go(func() error {
+				return consumer.Run(gctx)
+			})
+		}
+	} else {
+		slog.Warn("nats consumer disabled (no connection)")
+	}
 
 	// Graceful shutdown
 	g.Go(func() error {
