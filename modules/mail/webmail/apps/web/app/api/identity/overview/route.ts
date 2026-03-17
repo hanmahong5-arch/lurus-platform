@@ -1,7 +1,7 @@
 /**
  * Identity Overview API Route (lurus-webmail)
  *
- * Server-side proxy to lurus-identity internal endpoint.
+ * Server-side proxy to lurus-platform internal endpoint.
  * Extracts the Zitadel sub from Supabase user metadata, resolves the identity
  * account, then fetches the aggregated overview (VIP, wallet, subscription).
  * Returns 404 if no Zitadel identity is linked (email-only users).

@@ -9,7 +9,7 @@ data:
   NODE_ENV: "production"
   NEXT_TELEMETRY_DISABLED: "1"
   ZITADEL_API_URL: "https://auth.lurus.cn"
-  ZITADEL_TLS_ENABLED: "true"
+  # TLS terminated at Traefik, not needed here
   NEXT_PUBLIC_THEME_ROUNDNESS: "mid"
   NEXT_PUBLIC_THEME_LAYOUT: "top-to-bottom"
   NEXT_PUBLIC_THEME_APPEARANCE: "material"

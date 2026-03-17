@@ -106,7 +106,7 @@ spec:
               value: "http"
             - name: SEARCH_REBUILD_ON_BOOT
               value: "false"
-            # lurus-identity (account overview, VIP, wallet)
+            # lurus-platform (account overview, VIP, wallet)
             - name: IDENTITY_SERVICE_URL
               valueFrom:
                 configMapKeyRef:

@@ -15,9 +15,12 @@ spec:
       labels:
         app: lurus-admin
     spec:
+      nodeSelector:
+        lurus.cn/vpn: "true"
       containers:
         - name: lurus-admin
           image: ghcr.io/hanmahong5-arch/lurus-platform-admin:main
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
               protocol: TCP
