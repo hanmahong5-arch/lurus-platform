@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: lurus-login
-  namespace: lurus-login
+  namespace: lurus-platform
   labels:
     app: lurus-login
     app.kubernetes.io/name: lurus-login
@@ -31,7 +31,7 @@ spec:
         fsGroup: 1001
       containers:
         - name: lurus-login
-          image: ghcr.io/hanmahong5-arch/lurus-login:main
+          image: ghcr.io/hanmahong5-arch/lurus-platform-login:main
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

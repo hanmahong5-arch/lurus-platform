@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: lurus-admin
-  namespace: lurus-admin
+  namespace: lurus-platform
   labels:
     app: lurus-admin
 spec:
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: lurus-admin
-          image: ghcr.io/hanmahong5-arch/lurus-admin:main
+          image: ghcr.io/hanmahong5-arch/lurus-platform-admin:main
           ports:
             - containerPort: 3000
               protocol: TCP

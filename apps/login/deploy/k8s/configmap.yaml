@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: lurus-login-config
-  namespace: lurus-login
+  namespace: lurus-platform
 data:
   PORT: "3000"
   TZ: "Asia/Shanghai"

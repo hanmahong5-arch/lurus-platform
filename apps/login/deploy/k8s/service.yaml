@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: lurus-login
-  namespace: lurus-login
+  namespace: lurus-platform
   labels:
     app: lurus-login
 spec:

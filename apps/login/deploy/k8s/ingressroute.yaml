@@ -2,7 +2,7 @@ apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: lurus-login
-  namespace: lurus-login
+  namespace: lurus-platform
 spec:
   entryPoints:
     - websecure
@@ -22,7 +22,7 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: lurus-login-headers
-  namespace: lurus-login
+  namespace: lurus-platform
 spec:
   headers:
     customRequestHeaders:

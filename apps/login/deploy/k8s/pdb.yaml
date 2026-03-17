@@ -2,7 +2,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: lurus-login-pdb
-  namespace: lurus-login
+  namespace: lurus-platform
   labels:
     app: lurus-login
     app.kubernetes.io/name: lurus-login

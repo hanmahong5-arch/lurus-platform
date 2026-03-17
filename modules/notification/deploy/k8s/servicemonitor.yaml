@@ -2,7 +2,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: lurus-notification
-  namespace: lurus-system
+  namespace: lurus-platform
   labels:
     app: lurus-notification
     app.kubernetes.io/part-of: lurus

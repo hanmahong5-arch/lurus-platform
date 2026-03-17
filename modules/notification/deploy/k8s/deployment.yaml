@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: lurus-notification
-  namespace: lurus-system
+  namespace: lurus-platform
   labels:
     app: lurus-notification
     app.kubernetes.io/name: lurus-notification
@@ -35,7 +35,7 @@ spec:
         fsGroup: 65534
       containers:
         - name: lurus-notification
-          image: ghcr.io/hanmahong5-arch/lurus-notification:main
+          image: ghcr.io/hanmahong5-arch/lurus-platform-notification:main
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
