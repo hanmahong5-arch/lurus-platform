@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tracing"
 )
 
@@ -62,11 +64,13 @@ func (s *SubscriptionService) Activate(ctx context.Context, accountID int64, pro
 	sub.ExpiresAt = expiry
 
 	if err := s.subs.Create(ctx, sub); err != nil {
+		slog.Error("subscription/activate: create failed", "account_id", accountID, "product_id", productID, "plan_id", planID, "err", err)
 		return nil, fmt.Errorf("create subscription: %w", err)
 	}
+	slog.Info("subscription/activate", "account_id", accountID, "product_id", productID, "plan_id", planID, "sub_id", sub.ID, "billing_cycle", plan.BillingCycle, "expires_at", sub.ExpiresAt)
+	metrics.RecordSubscriptionTransition("none", "active", productID)
 	if err := s.entitlements.SyncFromSubscription(ctx, sub); err != nil {
-		// Non-fatal: entitlements will be retried asynchronously
-		_ = err
+		slog.Warn("subscription/activate: entitlement sync failed (non-fatal)", "sub_id", sub.ID, "err", err)
 	}
 	return sub, nil
 }
@@ -84,8 +88,11 @@ func (s *SubscriptionService) Expire(ctx context.Context, subID int64) error {
 	sub.Status = entity.SubStatusGrace
 	sub.GraceUntil = &grace
 	if err := s.subs.Update(ctx, sub); err != nil {
+		slog.Error("subscription/expire: update failed", "sub_id", subID, "err", err)
 		return err
 	}
+	slog.Info("subscription/expire: entered grace period", "sub_id", subID, "account_id", sub.AccountID, "product_id", sub.ProductID, "grace_until", grace)
+	metrics.RecordSubscriptionTransition("active", "grace", sub.ProductID)
 	return nil
 }
 
@@ -100,8 +107,11 @@ func (s *SubscriptionService) EndGrace(ctx context.Context, subID int64) error {
 	}
 	sub.Status = entity.SubStatusExpired
 	if err := s.subs.Update(ctx, sub); err != nil {
+		slog.Error("subscription/end-grace: update failed", "sub_id", subID, "err", err)
 		return err
 	}
+	slog.Info("subscription/end-grace: permanently expired", "sub_id", subID, "account_id", sub.AccountID, "product_id", sub.ProductID)
+	metrics.RecordSubscriptionTransition("grace", "expired", sub.ProductID)
 	return s.entitlements.ResetToFree(ctx, sub.AccountID, sub.ProductID)
 }
 
@@ -113,7 +123,13 @@ func (s *SubscriptionService) Cancel(ctx context.Context, accountID int64, produ
 	}
 	sub.Status = entity.SubStatusCancelled
 	sub.AutoRenew = false
-	return s.subs.Update(ctx, sub)
+	if err := s.subs.Update(ctx, sub); err != nil {
+		slog.Error("subscription/cancel: update failed", "sub_id", sub.ID, "account_id", accountID, "product_id", productID, "err", err)
+		return err
+	}
+	slog.Info("subscription/cancel", "sub_id", sub.ID, "account_id", accountID, "product_id", productID)
+	metrics.RecordSubscriptionTransition("active", "cancelled", productID)
+	return nil
 }
 
 // GetActive returns the live subscription for an account+product.

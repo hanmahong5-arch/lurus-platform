@@ -46,7 +46,7 @@ func TestSubscriptionRenewalWorkflow_HappyPath(t *testing.T) {
 	env.OnActivity("PublishToNATS", mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(SubscriptionRenewalWorkflow, RenewalInput{
-		SubscriptionID: 5, AccountID: 1, ProductID: "gushen",
+		SubscriptionID: 5, AccountID: 1, ProductID: "lucrum",
 		PlanID: 10, PaymentMethod: "wallet",
 	})
 
@@ -64,7 +64,7 @@ func TestSubscriptionRenewalWorkflow_DebitFails(t *testing.T) {
 	env.OnActivity("PublishToNATS", mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(SubscriptionRenewalWorkflow, RenewalInput{
-		SubscriptionID: 5, AccountID: 1, ProductID: "gushen", PlanID: 10,
+		SubscriptionID: 5, AccountID: 1, ProductID: "lucrum", PlanID: 10,
 	})
 
 	require.True(t, env.IsWorkflowCompleted())
@@ -86,7 +86,7 @@ func TestSubscriptionRenewalWorkflow_ActivateFails_Refund(t *testing.T) {
 	env.OnActivity("PublishToNATS", mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(SubscriptionRenewalWorkflow, RenewalInput{
-		SubscriptionID: 5, AccountID: 1, ProductID: "gushen", PlanID: 10,
+		SubscriptionID: 5, AccountID: 1, ProductID: "lucrum", PlanID: 10,
 	})
 
 	require.True(t, env.IsWorkflowCompleted())
@@ -134,7 +134,7 @@ func TestPaymentCompletionWorkflow_Subscription(t *testing.T) {
 
 	env.OnActivity("MarkOrderPaid", mock.Anything, "ORD-001").Return(&activities.MarkOrderPaidOutput{
 		OrderNo: "ORD-001", AccountID: 1, OrderType: "subscription",
-		ProductID: "gushen", PlanID: 10, AmountCNY: 29.9,
+		ProductID: "lucrum", PlanID: 10, AmountCNY: 29.9,
 		PaymentMethod: "stripe", ExternalID: "sub_ext_1",
 	}, nil)
 	env.OnActivity("Activate", mock.Anything, mock.Anything).Return(&activities.ActivateOutput{
@@ -163,7 +163,7 @@ func TestSubscriptionLifecycleWorkflow_ForeverPlan(t *testing.T) {
 	env := setup()
 
 	env.ExecuteWorkflow(SubscriptionLifecycleWorkflow, LifecycleInput{
-		SubscriptionID: 1, AccountID: 1, ProductID: "gushen",
+		SubscriptionID: 1, AccountID: 1, ProductID: "lucrum",
 		ExpiresAt: time.Time{},
 	})
 
@@ -182,7 +182,7 @@ func TestSubscriptionLifecycleWorkflow_AlreadyCancelled(t *testing.T) {
 	env.OnActivity("PublishToNATS", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	env.ExecuteWorkflow(SubscriptionLifecycleWorkflow, LifecycleInput{
-		SubscriptionID: 1, AccountID: 1, ProductID: "gushen",
+		SubscriptionID: 1, AccountID: 1, ProductID: "lucrum",
 		PlanID: 10, ExpiresAt: expiresAt, GraceDays: 3, AutoRenew: false,
 	})
 

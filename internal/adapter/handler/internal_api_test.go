@@ -260,7 +260,7 @@ func TestInternalHandler_DebitWallet(t *testing.T) {
 		{
 			"valid_debit",
 			"/internal/v1/accounts/1/wallet/debit",
-			map[string]interface{}{"amount": 10.0, "type": "ai_quota_overage", "product_id": "lurus-gushen"},
+			map[string]interface{}{"amount": 10.0, "type": "ai_quota_overage", "product_id": "lurus-lucrum"},
 			http.StatusOK,
 		},
 		{
@@ -349,7 +349,7 @@ func TestInternalHandler_CreditWallet(t *testing.T) {
 		{
 			"valid_credit",
 			"/internal/v1/accounts/1/wallet/credit",
-			map[string]interface{}{"amount": 3.5, "type": "marketplace_revenue", "product_id": "lurus-gushen"},
+			map[string]interface{}{"amount": 3.5, "type": "marketplace_revenue", "product_id": "lurus-lucrum"},
 			http.StatusOK,
 		},
 		{

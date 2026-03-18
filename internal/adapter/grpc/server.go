@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -64,7 +65,8 @@ func (s *Server) ListenAndServe(ctx context.Context, port int) error {
 	}
 
 	srv := grpc.NewServer(
-		grpc.UnaryInterceptor(s.authInterceptor),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.ChainUnaryInterceptor(otelgrpc.UnaryServerInterceptor(), s.authInterceptor),
 	)
 	identityv1.RegisterIdentityServiceServer(srv, s)
 
@@ -159,8 +161,10 @@ func (s *Server) ReportUsage(ctx context.Context, req *identityv1.ReportUsageReq
 func (s *Server) WalletDebit(ctx context.Context, req *identityv1.WalletOperationRequest) (*identityv1.WalletOperationResponse, error) {
 	tx, err := s.wallet.Debit(ctx, req.AccountId, req.Amount, req.Type, req.Description, "internal_debit", "", req.ProductId)
 	if err != nil {
+		slog.Warn("grpc/wallet-debit: failed", "account_id", req.AccountId, "amount", req.Amount, "type", req.Type, "product_id", req.ProductId, "err", err)
 		return nil, status.Errorf(codes.InvalidArgument, "insufficient_balance")
 	}
+	slog.Info("grpc/wallet-debit", "account_id", req.AccountId, "amount", req.Amount, "type", req.Type, "product_id", req.ProductId, "balance_after", tx.BalanceAfter)
 	return &identityv1.WalletOperationResponse{Success: true, BalanceAfter: tx.BalanceAfter}, nil
 }
 
@@ -168,8 +172,10 @@ func (s *Server) WalletDebit(ctx context.Context, req *identityv1.WalletOperatio
 func (s *Server) WalletCredit(ctx context.Context, req *identityv1.WalletOperationRequest) (*identityv1.WalletOperationResponse, error) {
 	tx, err := s.wallet.Credit(ctx, req.AccountId, req.Amount, req.Type, req.Description, "internal_credit", "", req.ProductId)
 	if err != nil {
+		slog.Error("grpc/wallet-credit: failed", "account_id", req.AccountId, "amount", req.Amount, "type", req.Type, "err", err)
 		return nil, status.Errorf(codes.Internal, "credit failed: %v", err)
 	}
+	slog.Info("grpc/wallet-credit", "account_id", req.AccountId, "amount", req.Amount, "type", req.Type, "balance_after", tx.BalanceAfter)
 	return &identityv1.WalletOperationResponse{Success: true, BalanceAfter: tx.BalanceAfter}, nil
 }
 

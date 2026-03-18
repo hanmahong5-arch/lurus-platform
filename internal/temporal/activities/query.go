@@ -3,6 +3,7 @@ package activities
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 )
@@ -28,9 +29,11 @@ type GetPlanByIDOutput struct {
 func (a *QueryActivities) GetPlanByID(ctx context.Context, planID int64) (*GetPlanByIDOutput, error) {
 	plan, err := a.Plans.GetPlanByID(ctx, planID)
 	if err != nil {
+		slog.Warn("activity/get-plan: failed", "plan_id", planID, "err", err)
 		return nil, fmt.Errorf("get plan %d: %w", planID, err)
 	}
 	if plan == nil {
+		slog.Warn("activity/get-plan: not found", "plan_id", planID)
 		return nil, fmt.Errorf("plan %d not found", planID)
 	}
 	return &GetPlanByIDOutput{

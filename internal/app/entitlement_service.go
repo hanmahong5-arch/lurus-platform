@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tracing"
 )
 
@@ -30,9 +32,11 @@ func (s *EntitlementService) Get(ctx context.Context, accountID int64, productID
 
 	if em, err := s.cache.Get(ctx, accountID, productID); err == nil && em != nil {
 		span.SetAttributes(attribute.Bool("cache.hit", true))
+		metrics.RecordCacheHit()
 		return em, nil
 	}
 	span.SetAttributes(attribute.Bool("cache.hit", false))
+	metrics.RecordCacheMiss()
 	return s.Refresh(ctx, accountID, productID)
 }
 
@@ -95,6 +99,7 @@ func (s *EntitlementService) SyncFromSubscription(ctx context.Context, sub *enti
 		}
 	}
 	_ = s.cache.Invalidate(ctx, sub.AccountID, sub.ProductID)
+	slog.Info("entitlement/sync", "account_id", sub.AccountID, "product_id", sub.ProductID, "plan_code", plan.Code, "keys_synced", len(entries))
 	return nil
 }
 
@@ -115,6 +120,7 @@ func (s *EntitlementService) ResetToFree(ctx context.Context, accountID int64, p
 		return err
 	}
 	_ = s.cache.Invalidate(ctx, accountID, productID)
+	slog.Info("entitlement/reset-to-free", "account_id", accountID, "product_id", productID)
 	return nil
 }
 

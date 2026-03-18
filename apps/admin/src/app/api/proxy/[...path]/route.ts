@@ -8,9 +8,9 @@ const SERVICE_MAP: Record<string, string> = {
   notification:
     process.env.NOTIFICATION_SERVICE_URL ||
     "http://lurus-notification.lurus-system.svc.cluster.local:18900",
-  gushen:
-    process.env.GUSHEN_SERVICE_URL ||
-    "http://gushen-web.ai-qtrd.svc.cluster.local:3000",
+  lucrum:
+    process.env.LUCRUM_SERVICE_URL ||
+    "http://lucrum-web.lucrum.svc.cluster.local:3000",
 };
 
 export async function GET(

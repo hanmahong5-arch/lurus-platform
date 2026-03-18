@@ -207,7 +207,7 @@ func TestSubHandler_Checkout_ExternalPayment_ProviderNil(t *testing.T) {
 	planID := int64(999)
 	ps.plans[planID] = &entity.ProductPlan{
 		ID:        planID,
-		ProductID: "gushen",
+		ProductID: "lucrum",
 		PriceCNY:  99.0,
 	}
 	h := NewSubscriptionHandler(
@@ -221,7 +221,7 @@ func TestSubHandler_Checkout_ExternalPayment_ProviderNil(t *testing.T) {
 	r.POST("/api/v1/subscriptions/checkout", withAccountID(1), h.Checkout)
 
 	body, _ := json.Marshal(map[string]interface{}{
-		"product_id":     "gushen",
+		"product_id":     "lucrum",
 		"plan_id":        planID,
 		"payment_method": "stripe",
 		"return_url":     "https://example.com/return",
@@ -243,7 +243,7 @@ func TestSubHandler_Checkout_EpayAlipay_ProviderNil(t *testing.T) {
 	planID := int64(998)
 	ps.plans[planID] = &entity.ProductPlan{
 		ID:        planID,
-		ProductID: "gushen",
+		ProductID: "lucrum",
 		PriceCNY:  49.0,
 	}
 	h := NewSubscriptionHandler(
@@ -257,7 +257,7 @@ func TestSubHandler_Checkout_EpayAlipay_ProviderNil(t *testing.T) {
 	r.POST("/api/v1/subscriptions/checkout", withAccountID(1), h.Checkout)
 
 	body, _ := json.Marshal(map[string]interface{}{
-		"product_id":     "gushen",
+		"product_id":     "lucrum",
 		"plan_id":        planID,
 		"payment_method": "epay_alipay",
 	})
@@ -277,7 +277,7 @@ func TestSubHandler_Checkout_UnknownMethod_ProviderNil(t *testing.T) {
 	planID := int64(997)
 	ps.plans[planID] = &entity.ProductPlan{
 		ID:        planID,
-		ProductID: "gushen",
+		ProductID: "lucrum",
 		PriceCNY:  29.0,
 	}
 	h := NewSubscriptionHandler(
@@ -291,7 +291,7 @@ func TestSubHandler_Checkout_UnknownMethod_ProviderNil(t *testing.T) {
 	r.POST("/api/v1/subscriptions/checkout", withAccountID(1), h.Checkout)
 
 	body, _ := json.Marshal(map[string]interface{}{
-		"product_id":     "gushen",
+		"product_id":     "lucrum",
 		"plan_id":        planID,
 		"payment_method": "unknown_provider",
 	})
@@ -309,13 +309,13 @@ func TestSubHandler_Checkout_UnknownMethod_ProviderNil(t *testing.T) {
 func TestSubHandler_Checkout_Creem_ProviderNil(t *testing.T) {
 	ps := newMockPlanStore()
 	planID := int64(996)
-	ps.plans[planID] = &entity.ProductPlan{ID: planID, ProductID: "gushen", PriceCNY: 15.0}
+	ps.plans[planID] = &entity.ProductPlan{ID: planID, ProductID: "lucrum", PriceCNY: 15.0}
 	h := NewSubscriptionHandler(makeSubService(), app.NewProductService(ps), makeWalletService(), nil, nil, nil)
 	r := testRouter()
 	r.POST("/api/v1/subscriptions/checkout", withAccountID(1), h.Checkout)
 
 	body, _ := json.Marshal(map[string]any{
-		"product_id":     "gushen",
+		"product_id":     "lucrum",
 		"plan_id":        planID,
 		"payment_method": "creem",
 	})

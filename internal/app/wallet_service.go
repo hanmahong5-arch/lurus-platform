@@ -3,11 +3,16 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/google/uuid"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tracing"
 )
 
 // generateOrderNo creates a unique order number: "LO" + yyyyMMdd + 8-hex-chars.
@@ -37,13 +42,25 @@ func (s *WalletService) GetBalance(ctx context.Context, accountID int64) (*entit
 
 // Topup credits the wallet and triggers a VIP recalculation.
 func (s *WalletService) Topup(ctx context.Context, accountID int64, amountCNY float64, orderNo string) (*entity.WalletTransaction, error) {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "wallet.topup")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int64("account.id", accountID),
+		attribute.Float64("amount.cny", amountCNY),
+	)
+
 	tx, err := s.wallets.Credit(ctx, accountID, amountCNY,
 		entity.TxTypeTopup,
 		fmt.Sprintf("充值 %.2f CNY", amountCNY),
 		"payment_order", orderNo, "")
 	if err != nil {
+		slog.Error("wallet/topup: credit failed", "account_id", accountID, "amount_cny", amountCNY, "order_no", orderNo, "err", err)
+		metrics.RecordWalletOperation("topup", "error")
 		return nil, err
 	}
+	slog.Info("wallet/topup", "account_id", accountID, "amount_cny", amountCNY, "order_no", orderNo, "balance_after", tx.BalanceAfter)
+	metrics.RecordWalletOperation("topup", "success")
+	metrics.RecordWalletAmount("topup", amountCNY)
 	// Async-safe: VIP recalculation is idempotent
 	_ = s.vip.RecalculateFromWallet(ctx, accountID)
 	return tx, nil
@@ -51,13 +68,48 @@ func (s *WalletService) Topup(ctx context.Context, accountID int64, amountCNY fl
 
 // Credit adds a balance to the wallet (admin adjustments, bonuses, etc.).
 func (s *WalletService) Credit(ctx context.Context, accountID int64, amount float64, txType, desc, refType, refID, productID string) (*entity.WalletTransaction, error) {
-	return s.wallets.Credit(ctx, accountID, amount, txType, desc, refType, refID, productID)
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "wallet.credit")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int64("account.id", accountID),
+		attribute.Float64("amount.cny", amount),
+		attribute.String("tx.type", txType),
+	)
+
+	tx, err := s.wallets.Credit(ctx, accountID, amount, txType, desc, refType, refID, productID)
+	if err != nil {
+		slog.Error("wallet/credit: failed", "account_id", accountID, "amount", amount, "tx_type", txType, "ref_id", refID, "err", err)
+		metrics.RecordWalletOperation("credit", "error")
+		return nil, err
+	}
+	slog.Info("wallet/credit", "account_id", accountID, "amount", amount, "tx_type", txType, "ref_id", refID, "balance_after", tx.BalanceAfter)
+	metrics.RecordWalletOperation("credit", "success")
+	metrics.RecordWalletAmount("credit", amount)
+	return tx, nil
 }
 
 // Debit charges the wallet for a product purchase or subscription.
 // Parameter order matches walletStore: txType, desc, refType, refID, productID.
 func (s *WalletService) Debit(ctx context.Context, accountID int64, amount float64, txType, desc, refType, refID, productID string) (*entity.WalletTransaction, error) {
-	return s.wallets.Debit(ctx, accountID, amount, txType, desc, refType, refID, productID)
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "wallet.debit")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int64("account.id", accountID),
+		attribute.Float64("amount.cny", amount),
+		attribute.String("tx.type", txType),
+		attribute.String("product.id", productID),
+	)
+
+	tx, err := s.wallets.Debit(ctx, accountID, amount, txType, desc, refType, refID, productID)
+	if err != nil {
+		slog.Warn("wallet/debit: failed", "account_id", accountID, "amount", amount, "tx_type", txType, "product_id", productID, "ref_id", refID, "err", err)
+		metrics.RecordWalletOperation("debit", "error")
+		return nil, err
+	}
+	slog.Info("wallet/debit", "account_id", accountID, "amount", amount, "tx_type", txType, "product_id", productID, "balance_after", tx.BalanceAfter)
+	metrics.RecordWalletOperation("debit", "success")
+	metrics.RecordWalletAmount("debit", amount)
+	return tx, nil
 }
 
 // UpdatePaymentOrder persists changes to a payment order (e.g. storing the external ID).
@@ -91,6 +143,14 @@ func (s *WalletService) CreateSubscriptionOrder(ctx context.Context, o *entity.P
 // CreateTopup creates a payment order for a wallet topup and returns the order.
 // The caller is responsible for redirecting the user to the returned payURL.
 func (s *WalletService) CreateTopup(ctx context.Context, accountID int64, amountCNY float64, method string) (*entity.PaymentOrder, error) {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "wallet.create_topup")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int64("account.id", accountID),
+		attribute.Float64("amount.cny", amountCNY),
+		attribute.String("payment.method", method),
+	)
+
 	if amountCNY <= 0 {
 		return nil, fmt.Errorf("amount must be positive")
 	}
@@ -138,12 +198,21 @@ func (s *WalletService) ExpireStalePendingOrders(ctx context.Context, maxAge tim
 // MarkOrderPaid atomically marks an order as paid and credits the wallet.
 // Uses conditional UPDATE to prevent double-charge on concurrent webhook delivery.
 func (s *WalletService) MarkOrderPaid(ctx context.Context, orderNo string) (*entity.PaymentOrder, error) {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "wallet.mark_order_paid")
+	defer span.End()
+	span.SetAttributes(attribute.String("order.no", orderNo))
+
 	o, didTransition, err := s.wallets.MarkPaymentOrderPaid(ctx, orderNo)
 	if err != nil {
+		slog.Error("wallet/mark-order-paid: failed", "order_no", orderNo, "err", err)
 		return nil, err
 	}
 	if o == nil {
 		return nil, fmt.Errorf("order %s not found", orderNo)
+	}
+	slog.Info("wallet/mark-order-paid", "order_no", orderNo, "account_id", o.AccountID, "order_type", o.OrderType, "amount_cny", o.AmountCNY, "did_transition", didTransition)
+	if didTransition {
+		metrics.RecordPaymentOrderTransition("pending", "paid", o.OrderType, o.PaymentMethod)
 	}
 	// Only credit wallet when this call actually flipped pending→paid.
 	if didTransition && o.OrderType == "topup" {

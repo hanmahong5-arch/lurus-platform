@@ -65,7 +65,7 @@ func TestReferralService_BulkGenerateCodes_WithExpiresAt(t *testing.T) {
 
 	codes, err := svc.BulkGenerateCodes(
 		context.Background(),
-		"gushen", "basic", 7, &exp, "exp test", 3,
+		"lucrum", "basic", 7, &exp, "exp test", 3,
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

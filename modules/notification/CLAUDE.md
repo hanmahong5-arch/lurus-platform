@@ -1,6 +1,6 @@
 # lurus-notification
 
-Unified multi-channel notification hub. Consumes NATS events from identity/gushen/LLM streams and dispatches via in-app (WebSocket), email (SMTP), and mobile push (FCM placeholder).
+Unified multi-channel notification hub. Consumes NATS events from identity/lucrum/LLM streams and dispatches via in-app (WebSocket), email (SMTP), and mobile push (FCM placeholder).
 
 Namespace: `lurus-system` | Port: `18900` | DB schema: `notification`
 
@@ -10,7 +10,7 @@ Namespace: `lurus-system` | Port: `18900` | DB schema: `notification`
 |-------|--------|
 | Backend | Go 1.25, Gin, GORM (pgx driver) |
 | DB | PostgreSQL (`search_path=notification,public`), Redis DB 4 |
-| Messaging | NATS JetStream (consumes: IDENTITY_EVENTS, GUSHEN_EVENTS, LLM_EVENTS) |
+| Messaging | NATS JetStream (consumes: IDENTITY_EVENTS, LUCRUM_EVENTS, LLM_EVENTS) |
 | Email | Stalwart SMTP (`stalwart.mail.svc:587`) |
 | Push | FCM (placeholder, activated in Sprint D) |
 | Real-time | WebSocket (gorilla/websocket) |
@@ -87,8 +87,8 @@ lurus-notification/
 | IDENTITY_EVENTS | `identity.subscription.activated` | handleSubscriptionActivated | in_app, email |
 | IDENTITY_EVENTS | `identity.subscription.expired` | handleSubscriptionExpired | in_app, email |
 | IDENTITY_EVENTS | `identity.topup.completed` | handleTopupCompleted | in_app |
-| GUSHEN_EVENTS | `gushen.strategy.triggered` | handleStrategyTriggered | in_app, fcm |
-| GUSHEN_EVENTS | `gushen.risk.alert` | handleRiskAlert | in_app, email, fcm |
+| LUCRUM_EVENTS | `lucrum.strategy.triggered` | handleStrategyTriggered | in_app, fcm |
+| LUCRUM_EVENTS | `lucrum.risk.alert` | handleRiskAlert | in_app, email, fcm |
 | LLM_EVENTS | `llm.quota.threshold` | handleQuotaThreshold | in_app |
 
 ## Environment Variables

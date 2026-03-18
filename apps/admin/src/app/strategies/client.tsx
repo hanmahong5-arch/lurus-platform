@@ -26,8 +26,8 @@ import type {
   MarketplaceStrategy,
   StrategyStatus,
   StrategiesResponse,
-} from "@/lib/api/gushen";
-import { fetchStrategies, updateStrategyStatus } from "@/lib/api/gushen";
+} from "@/lib/api/lucrum";
+import { fetchStrategies, updateStrategyStatus } from "@/lib/api/lucrum";
 
 const PAGE_SIZE = 20;
 

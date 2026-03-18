@@ -7,8 +7,12 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tracing"
 )
 
 const (
@@ -59,6 +63,13 @@ func (s *RefundService) WithSubscriptionCanceller(c subscriptionCanceller) *Refu
 //   - The order must have been created within the last refundWindowDays.
 //   - No pending or approved refund may exist for the same order.
 func (s *RefundService) RequestRefund(ctx context.Context, accountID int64, orderNo, reason string) (*entity.Refund, error) {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "refund.request")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int64("account.id", accountID),
+		attribute.String("order.no", orderNo),
+	)
+
 	// Fetch the order directly; we do not use WalletService.GetOrderByNo to avoid
 	// the IDOR obscure-error behaviour — we want distinct error messages internally.
 	order, err := s.wallets.GetPaymentOrderByNo(ctx, orderNo)
@@ -96,8 +107,11 @@ func (s *RefundService) RequestRefund(ctx context.Context, accountID int64, orde
 		Status:    entity.RefundStatusPending,
 	}
 	if err := s.refunds.Create(ctx, r); err != nil {
+		metrics.RecordRefundOperation("request", "error")
 		return nil, fmt.Errorf("create refund: %w", err)
 	}
+	slog.Info("refund/request", "refund_no", r.RefundNo, "account_id", accountID, "order_no", orderNo, "amount_cny", r.AmountCNY)
+	metrics.RecordRefundOperation("request", "success")
 	return r, nil
 }
 
@@ -122,6 +136,10 @@ func (s *RefundService) ListByAccount(ctx context.Context, accountID int64, page
 // Workflow: pending → approved (DB, conditional) → credit wallet → completed (DB) → publish NATS event.
 // The conditional UPDATE prevents double-refund on concurrent admin approvals.
 func (s *RefundService) Approve(ctx context.Context, refundNo, reviewerID, reviewNote string) error {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "refund.approve")
+	defer span.End()
+	span.SetAttributes(attribute.String("refund.no", refundNo))
+
 	r, err := s.refunds.GetByRefundNo(ctx, refundNo)
 	if err != nil {
 		return fmt.Errorf("get refund: %w", err)
@@ -183,11 +201,18 @@ func (s *RefundService) Approve(ctx context.Context, refundNo, reviewerID, revie
 	// Best-effort NATS event publish.
 	s.publishRefundCompleted(r)
 
+	slog.Info("refund/approve", "refund_no", refundNo, "account_id", r.AccountID, "amount_cny", r.AmountCNY, "reviewer_id", reviewerID)
+	span.SetAttributes(attribute.Float64("amount.cny", r.AmountCNY))
+	metrics.RecordRefundOperation("approve", "success")
 	return nil
 }
 
 // Reject transitions a pending refund to rejected.
 func (s *RefundService) Reject(ctx context.Context, refundNo, reviewerID, reviewNote string) error {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "refund.reject")
+	defer span.End()
+	span.SetAttributes(attribute.String("refund.no", refundNo))
+
 	r, err := s.refunds.GetByRefundNo(ctx, refundNo)
 	if err != nil {
 		return fmt.Errorf("get refund: %w", err)
@@ -205,6 +230,8 @@ func (s *RefundService) Reject(ctx context.Context, refundNo, reviewerID, review
 		reviewNote, reviewerID, &now); err != nil {
 		return fmt.Errorf("update refund status to rejected: %w", err)
 	}
+	slog.Info("refund/reject", "refund_no", refundNo, "account_id", r.AccountID, "reviewer_id", reviewerID)
+	metrics.RecordRefundOperation("reject", "success")
 	return nil
 }
 

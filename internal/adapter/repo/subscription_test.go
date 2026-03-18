@@ -63,7 +63,7 @@ func TestSubscriptionRepo_GetActive(t *testing.T) {
 	})
 	// Expired subscription (different product)
 	repo.Create(ctx, &entity.Subscription{
-		AccountID: 1, ProductID: "gushen", PlanID: 2,
+		AccountID: 1, ProductID: "lucrum", PlanID: 2,
 		Status: entity.SubStatusExpired, StartedAt: &now, ExpiresAt: &expires,
 	})
 
@@ -76,7 +76,7 @@ func TestSubscriptionRepo_GetActive(t *testing.T) {
 	}
 
 	// Expired product should not be found
-	got, _ = repo.GetActive(ctx, 1, "gushen")
+	got, _ = repo.GetActive(ctx, 1, "lucrum")
 	if got != nil {
 		t.Error("expected nil for expired subscription")
 	}
@@ -241,7 +241,7 @@ func TestSubscriptionRepo_GetEntitlements_Multiple(t *testing.T) {
 	})
 	// Different product — should not appear
 	repo.UpsertEntitlement(ctx, &entity.AccountEntitlement{
-		AccountID: 1, ProductID: "gushen",
+		AccountID: 1, ProductID: "lucrum",
 		Key: "max_rpm", Value: "10", ValueType: "integer",
 	})
 

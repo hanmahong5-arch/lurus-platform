@@ -3,6 +3,7 @@ package activities
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
 )
@@ -36,7 +37,9 @@ func (a *EventActivities) PublishToNATS(ctx context.Context, in PublishEventInpu
 		return fmt.Errorf("build event: %w", err)
 	}
 	if err := a.Publisher.Publish(ctx, ev); err != nil {
+		slog.Warn("activity/publish-nats: failed", "subject", in.Subject, "account_id", in.AccountID, "err", err)
 		return fmt.Errorf("publish %s: %w", in.Subject, err)
 	}
+	slog.Info("activity/publish-nats", "subject", in.Subject, "account_id", in.AccountID)
 	return nil
 }

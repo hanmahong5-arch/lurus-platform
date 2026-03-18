@@ -8,7 +8,7 @@ Optional modules add enterprise email (Stalwart) and multi-channel notifications
 
 ```
                          Consumers
-                    (lurus-api, gushen, ...)
+                    (lurus-api, lucrum, ...)
                            |
               REST :18104  |  gRPC :18105
                     +------+------+
@@ -99,7 +99,7 @@ if cfg.Modules.Mail.Enabled {
 ### Notification Module
 
 - Independent Go binary (`modules/notification/`)
-- Consumes NATS events from 3 streams (IDENTITY/GUSHEN/LLM_EVENTS)
+- Consumes NATS events from 3 streams (IDENTITY/LUCRUM/LLM_EVENTS)
 - Dispatches via WebSocket (real-time), Email (SMTP), FCM (mobile push)
 
 ## Data Model / 数据模型
@@ -118,7 +118,7 @@ if cfg.Modules.Mail.Enabled {
 | DB | Service |
 |----|---------|
 | 0 | lurus-api |
-| 1 | gushen |
+| 1 | lucrum |
 | 2 | rate limiting |
 | 3 | lurus-platform (entitlements cache) |
 | 4 | notification |

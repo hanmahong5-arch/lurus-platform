@@ -3,6 +3,7 @@ package activities
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/email"
@@ -27,10 +28,12 @@ type SendReminderInput struct {
 func (a *NotificationActivities) SendExpiryReminder(ctx context.Context, in SendReminderInput) error {
 	account, err := a.Accounts.GetByID(ctx, in.AccountID)
 	if err != nil || account == nil {
+		slog.Warn("activity/send-reminder: account lookup failed", "account_id", in.AccountID, "err", err)
 		return fmt.Errorf("get account %d: %w", in.AccountID, err)
 	}
 	if account.Email == "" {
-		return nil // no email on file, skip silently
+		slog.Info("activity/send-reminder: no email, skipping", "account_id", in.AccountID, "sub_id", in.SubscriptionID)
+		return nil
 	}
 
 	subject := fmt.Sprintf("Your subscription expires in %d day(s)", in.DaysLeft)
@@ -45,5 +48,10 @@ func (a *NotificationActivities) SendExpiryReminder(ctx context.Context, in Send
 		in.DaysLeft,
 		in.ExpiresAt,
 	)
-	return a.Mailer.Send(ctx, account.Email, subject, body)
+	if err := a.Mailer.Send(ctx, account.Email, subject, body); err != nil {
+		slog.Warn("activity/send-reminder: send failed", "account_id", in.AccountID, "sub_id", in.SubscriptionID, "email", account.Email, "err", err)
+		return err
+	}
+	slog.Info("activity/send-reminder", "account_id", in.AccountID, "sub_id", in.SubscriptionID, "days_left", in.DaysLeft)
+	return nil
 }

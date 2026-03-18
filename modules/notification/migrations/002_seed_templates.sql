@@ -20,13 +20,13 @@ INSERT INTO notification.templates (event_type, channel, title, body, priority) 
     ('identity.topup.completed', 'in_app', 'Top-up Successful', '{{credits_added}} credits have been added to your wallet.', 'normal'),
 
     -- Strategy triggered
-    ('gushen.strategy.triggered', 'in_app', 'Strategy Signal', '{{strategy_name}}: {{signal}} signal on {{symbol}}', 'high'),
-    ('gushen.strategy.triggered', 'fcm', 'Strategy Signal', '{{strategy_name}}: {{signal}} on {{symbol}}', 'high'),
+    ('lucrum.strategy.triggered', 'in_app', 'Strategy Signal', '{{strategy_name}}: {{signal}} signal on {{symbol}}', 'high'),
+    ('lucrum.strategy.triggered', 'fcm', 'Strategy Signal', '{{strategy_name}}: {{signal}} on {{symbol}}', 'high'),
 
     -- Risk alert
-    ('gushen.risk.alert', 'in_app', 'Risk Alert', '{{alert_type}} alert on {{symbol}}: {{message}}', 'urgent'),
-    ('gushen.risk.alert', 'email', 'Urgent: Risk Alert', 'Risk alert on {{symbol}} ({{alert_type}}): {{message}}. Please check your positions.', 'urgent'),
-    ('gushen.risk.alert', 'fcm', 'Risk Alert', '{{symbol}}: {{message}}', 'urgent'),
+    ('lucrum.risk.alert', 'in_app', 'Risk Alert', '{{alert_type}} alert on {{symbol}}: {{message}}', 'urgent'),
+    ('lucrum.risk.alert', 'email', 'Urgent: Risk Alert', 'Risk alert on {{symbol}} ({{alert_type}}): {{message}}. Please check your positions.', 'urgent'),
+    ('lucrum.risk.alert', 'fcm', 'Risk Alert', '{{symbol}}: {{message}}', 'urgent'),
 
     -- Quota threshold
     ('llm.quota.threshold', 'in_app', 'Usage Warning', 'Your API usage has reached {{usage_percent}} of your monthly quota.', 'high')

@@ -9,11 +9,14 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
 	"go.temporal.io/sdk/client"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/idempotency"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tracing"
 	"github.com/hanmahong5-arch/lurus-platform/internal/temporal/activities"
 	"github.com/hanmahong5-arch/lurus-platform/internal/temporal/workflows"
 )
@@ -75,14 +78,18 @@ func (h *WebhookHandler) EpayNotify(c *gin.Context) {
 
 	orderNo, ok := h.epay.VerifyCallback(params)
 	if !ok {
+		slog.Warn("webhook/epay: signature verification failed", "trade_no", tradeNo)
+		metrics.RecordWebhookEvent("epay", "invalid_signature")
 		c.String(http.StatusBadRequest, "fail")
 		return
 	}
 	if err := h.processOrderPaid(c, orderNo, "epay"); err != nil {
 		slog.Error("webhook/epay: process order failed", "order_no", orderNo, "err", err)
+		metrics.RecordWebhookEvent("epay", "error")
 		c.String(http.StatusInternalServerError, "fail")
 		return
 	}
+	metrics.RecordWebhookEvent("epay", "success")
 	c.String(http.StatusOK, "success")
 }
 
@@ -103,6 +110,8 @@ func (h *WebhookHandler) StripeWebhook(c *gin.Context) {
 	sig := c.GetHeader("Stripe-Signature")
 	orderNo, eventID, ok := h.stripe.VerifyWebhook(body, sig)
 	if !ok {
+		slog.Warn("webhook/stripe: signature verification failed")
+		metrics.RecordWebhookEvent("stripe", "invalid_signature")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid stripe signature"})
 		return
 	}
@@ -119,10 +128,12 @@ func (h *WebhookHandler) StripeWebhook(c *gin.Context) {
 	if orderNo != "" {
 		if err := h.processOrderPaid(c, orderNo, "stripe"); err != nil {
 			slog.Error("webhook/stripe: process order failed", "order_no", orderNo, "err", err)
+			metrics.RecordWebhookEvent("stripe", "error")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "order processing failed"})
 			return
 		}
 	}
+	metrics.RecordWebhookEvent("stripe", "success")
 	c.JSON(http.StatusOK, gin.H{"received": true})
 }
 
@@ -143,6 +154,8 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 	sig := c.GetHeader("X-Creem-Signature")
 	orderNo, ok := h.creem.VerifyWebhook(body, sig)
 	if !ok {
+		slog.Warn("webhook/creem: signature verification failed")
+		metrics.RecordWebhookEvent("creem", "invalid_signature")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid creem signature"})
 		return
 	}
@@ -163,10 +176,12 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 	if orderNo != "" {
 		if err := h.processOrderPaid(c, orderNo, "creem"); err != nil {
 			slog.Error("webhook/creem: process order failed", "order_no", orderNo, "err", err)
+			metrics.RecordWebhookEvent("creem", "error")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "order processing failed"})
 			return
 		}
 	}
+	metrics.RecordWebhookEvent("creem", "success")
 	c.JSON(http.StatusOK, gin.H{"received": true})
 }
 
@@ -174,6 +189,14 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 // When Temporal is enabled, it starts a PaymentCompletionWorkflow (idempotent via workflow ID).
 // Otherwise falls back to the direct synchronous path.
 func (h *WebhookHandler) processOrderPaid(c *gin.Context, orderNo string, provider string) error {
+	ctx, span := tracing.Tracer("lurus-platform").Start(c.Request.Context(), "webhook.process_order")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("order.no", orderNo),
+		attribute.String("payment.provider", provider),
+	)
+	c.Request = c.Request.WithContext(ctx)
+
 	if h.temporalClient != nil {
 		return h.processOrderPaidTemporal(c, orderNo, provider)
 	}
@@ -190,8 +213,10 @@ func (h *WebhookHandler) processOrderPaidTemporal(c *gin.Context, orderNo, provi
 		Provider: provider,
 	})
 	if err != nil {
+		slog.Error("webhook/temporal: start payment workflow failed", "order_no", orderNo, "provider", provider, "err", err)
 		return fmt.Errorf("start payment workflow: %w", err)
 	}
+	slog.Info("webhook/temporal: payment workflow started", "order_no", orderNo, "provider", provider, "workflow_id", fmt.Sprintf("payment:%s", orderNo))
 	return nil
 }
 

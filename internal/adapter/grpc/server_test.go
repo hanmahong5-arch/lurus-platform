@@ -66,7 +66,7 @@ func TestOverviewToProto(t *testing.T) {
 			DiscountTier: "silver_holder",
 		},
 		Subscription: &app.SubscriptionSummary{
-			ProductID: "gushen",
+			ProductID: "lucrum",
 			PlanCode:  "pro",
 			Status:    "active",
 			ExpiresAt: &expires,

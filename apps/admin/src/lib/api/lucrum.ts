@@ -36,7 +36,7 @@ export interface StrategyActionResponse {
 
 // --- Client-side API helpers (call through Next.js proxy) ---
 
-const PROXY_BASE = "/api/proxy/gushen";
+const PROXY_BASE = "/api/proxy/lucrum";
 
 async function proxyRequest<T>(
   path: string,

@@ -12,11 +12,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+const namespace = "lurus_platform"
+
 // Registered Prometheus metrics.
 var (
 	httpRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "lurus_identity",
+			Namespace: namespace,
 			Name:      "http_requests_total",
 			Help:      "Total number of HTTP requests, partitioned by method, route, and status.",
 		},
@@ -25,7 +27,7 @@ var (
 
 	httpRequestDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Namespace: "lurus_identity",
+			Namespace: namespace,
 			Name:      "http_request_duration_seconds",
 			Help:      "HTTP request latency histogram by method and route.",
 			Buckets:   prometheus.DefBuckets,
@@ -35,37 +37,65 @@ var (
 
 	webhookTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "lurus_identity",
+			Namespace: namespace,
 			Name:      "webhook_events_total",
 			Help:      "Total webhook events processed, by provider and result.",
 		},
-		[]string{"provider", "result"}, // result: success | duplicate | error
+		[]string{"provider", "result"}, // result: success | duplicate | error | invalid_signature
 	)
 
-	cacheHits = promauto.NewCounterVec(
+	cacheOps = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "lurus_identity",
+			Namespace: namespace,
 			Name:      "cache_operations_total",
 			Help:      "Cache get operations, partitioned by result (hit/miss/error).",
 		},
 		[]string{"result"},
 	)
 
-	cronRunsTotal = promauto.NewCounterVec(
+	walletOpsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "lurus_identity",
-			Name:      "cron_runs_total",
-			Help:      "Total cron job executions, by job name and result.",
+			Namespace: namespace,
+			Name:      "wallet_operations_total",
+			Help:      "Total wallet operations, by operation type and result.",
 		},
-		[]string{"job", "result"},
+		[]string{"operation", "result"},
 	)
 
-	subscriptionExpiredTotal = promauto.NewCounter(
+	walletAmountTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "lurus_identity",
-			Name:      "subscriptions_expired_total",
-			Help:      "Total subscriptions transitioned to expired state by the cron job.",
+			Namespace: namespace,
+			Name:      "wallet_operation_amount_cny_total",
+			Help:      "Cumulative CNY amount processed by wallet operations.",
 		},
+		[]string{"operation"},
+	)
+
+	paymentOrderTransitions = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "payment_order_transitions_total",
+			Help:      "Payment order state transitions.",
+		},
+		[]string{"from_status", "to_status", "order_type", "provider"},
+	)
+
+	subscriptionTransitions = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "subscription_transitions_total",
+			Help:      "Subscription lifecycle state transitions.",
+		},
+		[]string{"from_status", "to_status", "product_id"},
+	)
+
+	refundOpsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "refund_operations_total",
+			Help:      "Total refund operations, by action and result.",
+		},
+		[]string{"action", "result"},
 	)
 )
 
@@ -100,16 +130,39 @@ func RecordWebhookEvent(provider, result string) {
 }
 
 // RecordCacheHit increments the cache hit counter.
-func RecordCacheHit() { cacheHits.WithLabelValues("hit").Inc() }
+func RecordCacheHit() { cacheOps.WithLabelValues("hit").Inc() }
 
 // RecordCacheMiss increments the cache miss counter.
-func RecordCacheMiss() { cacheHits.WithLabelValues("miss").Inc() }
+func RecordCacheMiss() { cacheOps.WithLabelValues("miss").Inc() }
 
 // RecordCacheError increments the cache error counter.
-func RecordCacheError() { cacheHits.WithLabelValues("error").Inc() }
+func RecordCacheError() { cacheOps.WithLabelValues("error").Inc() }
 
-// RecordCronRun records a cron job execution outcome.
-func RecordCronRun(job, result string) { cronRunsTotal.WithLabelValues(job, result).Inc() }
+// RecordWalletOperation records a wallet operation outcome.
+// operation: "topup" | "debit" | "credit"
+// result: "success" | "error"
+func RecordWalletOperation(operation, result string) {
+	walletOpsTotal.WithLabelValues(operation, result).Inc()
+}
 
-// RecordSubscriptionExpired increments the expiry counter.
-func RecordSubscriptionExpired() { subscriptionExpiredTotal.Inc() }
+// RecordWalletAmount accumulates the CNY amount for a wallet operation.
+func RecordWalletAmount(operation string, amountCNY float64) {
+	walletAmountTotal.WithLabelValues(operation).Add(amountCNY)
+}
+
+// RecordPaymentOrderTransition records a payment order state transition.
+func RecordPaymentOrderTransition(fromStatus, toStatus, orderType, provider string) {
+	paymentOrderTransitions.WithLabelValues(fromStatus, toStatus, orderType, provider).Inc()
+}
+
+// RecordSubscriptionTransition records a subscription lifecycle state transition.
+func RecordSubscriptionTransition(fromStatus, toStatus, productID string) {
+	subscriptionTransitions.WithLabelValues(fromStatus, toStatus, productID).Inc()
+}
+
+// RecordRefundOperation records a refund operation outcome.
+// action: "request" | "approve" | "reject"
+// result: "success" | "error"
+func RecordRefundOperation(action, result string) {
+	refundOpsTotal.WithLabelValues(action, result).Inc()
+}

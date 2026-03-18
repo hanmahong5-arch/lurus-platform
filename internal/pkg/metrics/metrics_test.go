@@ -69,31 +69,95 @@ func TestMetrics_RecordCacheOperations_NoPanic(t *testing.T) {
 	RecordCacheError()
 }
 
-// TestMetrics_RecordCronRun_NoPanic verifies cron metric function does not panic.
-func TestMetrics_RecordCronRun_NoPanic(t *testing.T) {
-	jobs := []string{"expiry", "renewal", "notification", "outbox_relay"}
-	results := []string{"success", "error", "skipped"}
-	for _, j := range jobs {
+// TestMetrics_RecordWalletOperation_NoPanic verifies wallet metric functions do not panic.
+func TestMetrics_RecordWalletOperation_NoPanic(t *testing.T) {
+	operations := []string{"topup", "debit", "credit"}
+	results := []string{"success", "error"}
+	for _, op := range operations {
 		for _, r := range results {
-			defer func() {
-				if rec := recover(); rec != nil {
-					t.Errorf("RecordCronRun panicked: %v", rec)
-				}
-			}()
-			RecordCronRun(j, r)
+			t.Run(op+"/"+r, func(t *testing.T) {
+				defer func() {
+					if rec := recover(); rec != nil {
+						t.Errorf("RecordWalletOperation(%q, %q) panicked: %v", op, r, rec)
+					}
+				}()
+				RecordWalletOperation(op, r)
+			})
 		}
 	}
 }
 
-// TestMetrics_RecordSubscriptionExpired_NoPanic verifies subscription expiry counter.
-func TestMetrics_RecordSubscriptionExpired_NoPanic(t *testing.T) {
+// TestMetrics_RecordWalletAmount_NoPanic verifies wallet amount counter does not panic.
+func TestMetrics_RecordWalletAmount_NoPanic(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.Errorf("RecordSubscriptionExpired panicked: %v", r)
+			t.Errorf("RecordWalletAmount panicked: %v", r)
 		}
 	}()
-	RecordSubscriptionExpired()
-	RecordSubscriptionExpired()
+	RecordWalletAmount("topup", 100.50)
+	RecordWalletAmount("debit", 25.00)
+	RecordWalletAmount("credit", 10.00)
+}
+
+// TestMetrics_RecordPaymentOrderTransition_NoPanic verifies payment order transition metrics.
+func TestMetrics_RecordPaymentOrderTransition_NoPanic(t *testing.T) {
+	transitions := []struct {
+		from, to, orderType, provider string
+	}{
+		{"pending", "paid", "topup", "epay"},
+		{"pending", "paid", "subscription", "stripe"},
+		{"pending", "expired", "topup", "creem"},
+	}
+	for _, tr := range transitions {
+		t.Run(tr.from+"->"+tr.to, func(t *testing.T) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					t.Errorf("RecordPaymentOrderTransition panicked: %v", rec)
+				}
+			}()
+			RecordPaymentOrderTransition(tr.from, tr.to, tr.orderType, tr.provider)
+		})
+	}
+}
+
+// TestMetrics_RecordSubscriptionTransition_NoPanic verifies subscription transition metrics.
+func TestMetrics_RecordSubscriptionTransition_NoPanic(t *testing.T) {
+	transitions := []struct {
+		from, to, productID string
+	}{
+		{"none", "active", "api-gateway"},
+		{"active", "grace", "api-gateway"},
+		{"grace", "expired", "api-gateway"},
+		{"active", "cancelled", "lucrum"},
+	}
+	for _, tr := range transitions {
+		t.Run(tr.from+"->"+tr.to, func(t *testing.T) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					t.Errorf("RecordSubscriptionTransition panicked: %v", rec)
+				}
+			}()
+			RecordSubscriptionTransition(tr.from, tr.to, tr.productID)
+		})
+	}
+}
+
+// TestMetrics_RecordRefundOperation_NoPanic verifies refund metric functions do not panic.
+func TestMetrics_RecordRefundOperation_NoPanic(t *testing.T) {
+	actions := []string{"request", "approve", "reject"}
+	results := []string{"success", "error"}
+	for _, a := range actions {
+		for _, r := range results {
+			t.Run(a+"/"+r, func(t *testing.T) {
+				defer func() {
+					if rec := recover(); rec != nil {
+						t.Errorf("RecordRefundOperation(%q, %q) panicked: %v", a, r, rec)
+					}
+				}()
+				RecordRefundOperation(a, r)
+			})
+		}
+	}
 }
 
 // TestMetrics_HTTPMiddleware_RecordsRequest verifies the middleware records metrics.
@@ -121,13 +185,13 @@ func TestMetrics_HTTPMiddleware_RecordsRequest(t *testing.T) {
 
 	found := false
 	for _, mf := range mfs {
-		if mf.GetName() == "lurus_identity_http_requests_total" {
+		if mf.GetName() == "lurus_platform_http_requests_total" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Error("lurus_identity_http_requests_total metric not found after request")
+		t.Error("lurus_platform_http_requests_total metric not found after request")
 	}
 }
 

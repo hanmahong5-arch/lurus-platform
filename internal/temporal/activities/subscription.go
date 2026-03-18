@@ -5,6 +5,7 @@ package activities
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
@@ -40,12 +41,14 @@ type ActivateOutput struct {
 func (a *SubscriptionActivities) Activate(ctx context.Context, in ActivateInput) (*ActivateOutput, error) {
 	sub, err := a.Subs.Activate(ctx, in.AccountID, in.ProductID, in.PlanID, in.PaymentMethod, in.ExternalSubID)
 	if err != nil {
+		slog.Warn("activity/activate: failed", "account_id", in.AccountID, "product_id", in.ProductID, "plan_id", in.PlanID, "err", err)
 		return nil, fmt.Errorf("activate subscription: %w", err)
 	}
 	out := &ActivateOutput{SubscriptionID: sub.ID}
 	if sub.ExpiresAt != nil {
 		out.ExpiresAt = sub.ExpiresAt.Format("2006-01-02T15:04:05Z07:00")
 	}
+	slog.Info("activity/activate", "account_id", in.AccountID, "product_id", in.ProductID, "plan_id", in.PlanID, "sub_id", sub.ID, "expires_at", out.ExpiresAt)
 	return out, nil
 }
 
@@ -61,12 +64,22 @@ func (a *SubscriptionActivities) ResetRenewalState(ctx context.Context, subID in
 
 // Expire transitions a subscription from active to grace period.
 func (a *SubscriptionActivities) Expire(ctx context.Context, subID int64) error {
-	return a.Subs.Expire(ctx, subID)
+	if err := a.Subs.Expire(ctx, subID); err != nil {
+		slog.Warn("activity/expire: failed", "sub_id", subID, "err", err)
+		return err
+	}
+	slog.Info("activity/expire", "sub_id", subID)
+	return nil
 }
 
 // EndGrace transitions a grace-period subscription to expired and resets entitlements.
 func (a *SubscriptionActivities) EndGrace(ctx context.Context, subID int64) error {
-	return a.Subs.EndGrace(ctx, subID)
+	if err := a.Subs.EndGrace(ctx, subID); err != nil {
+		slog.Warn("activity/end-grace: failed", "sub_id", subID, "err", err)
+		return err
+	}
+	slog.Info("activity/end-grace", "sub_id", subID)
+	return nil
 }
 
 // SubscriptionSummary is a serializable subset of entity.Subscription for workflow use.

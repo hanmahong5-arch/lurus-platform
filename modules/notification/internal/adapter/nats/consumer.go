@@ -16,7 +16,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/pkg/metrics"
 )
 
-// Consumer subscribes to IDENTITY_EVENTS, GUSHEN_EVENTS, and LLM_EVENTS
+// Consumer subscribes to IDENTITY_EVENTS, LUCRUM_EVENTS, and LLM_EVENTS
 // and dispatches notifications accordingly.
 type Consumer struct {
 	js       natsgo.JetStreamContext
@@ -63,7 +63,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 			queue:   "notif-topup-completed",
 			handler: c.handleTopupCompleted,
 		},
-		// GUSHEN_EVENTS
+		// LUCRUM_EVENTS
 		{
 			subject: event.SubjectStrategyTriggered,
 			queue:   "notif-strategy-triggered",
@@ -208,7 +208,7 @@ func (c *Consumer) handleTopupCompleted(ctx context.Context, msg *natsgo.Msg) er
 }
 
 func (c *Consumer) handleStrategyTriggered(ctx context.Context, msg *natsgo.Msg) error {
-	var ev event.GushenEvent
+	var ev event.LucrumEvent
 	if err := json.Unmarshal(msg.Data, &ev); err != nil {
 		return fmt.Errorf("unmarshal strategy.triggered: %w", err)
 	}
@@ -233,7 +233,7 @@ func (c *Consumer) handleStrategyTriggered(ctx context.Context, msg *natsgo.Msg)
 }
 
 func (c *Consumer) handleRiskAlert(ctx context.Context, msg *natsgo.Msg) error {
-	var ev event.GushenEvent
+	var ev event.LucrumEvent
 	if err := json.Unmarshal(msg.Data, &ev); err != nil {
 		return fmt.Errorf("unmarshal risk.alert: %w", err)
 	}

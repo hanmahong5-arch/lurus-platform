@@ -704,7 +704,7 @@ func TestGRPCServer_GetEntitlements_DefaultFree(t *testing.T) {
 
 	resp, err := s.GetEntitlements(context.Background(), &identityv1.GetEntitlementsRequest{
 		AccountId: 1,
-		ProductId: "gushen",
+		ProductId: "lucrum",
 	})
 	if err != nil {
 		t.Fatalf("GetEntitlements: %v", err)
@@ -718,7 +718,7 @@ func TestGRPCServer_GetEntitlements_DefaultFree(t *testing.T) {
 func TestGRPCServer_GetEntitlements_FromCache(t *testing.T) {
 	d := newTestServerDeps()
 	// Pre-seed entitlement cache.
-	_ = d.entCache.Set(context.Background(), 42, "gushen", map[string]string{
+	_ = d.entCache.Set(context.Background(), 42, "lucrum", map[string]string{
 		"plan_code": "pro",
 		"api_limit": "100",
 	})
@@ -726,7 +726,7 @@ func TestGRPCServer_GetEntitlements_FromCache(t *testing.T) {
 
 	resp, err := s.GetEntitlements(context.Background(), &identityv1.GetEntitlementsRequest{
 		AccountId: 42,
-		ProductId: "gushen",
+		ProductId: "lucrum",
 	})
 	if err != nil {
 		t.Fatalf("GetEntitlements: %v", err)
@@ -755,13 +755,13 @@ func TestGRPCServer_GetAccountOverview_FromCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
-	_ = d.overviewCache.Set(context.Background(), 5, "gushen", b)
+	_ = d.overviewCache.Set(context.Background(), 5, "lucrum", b)
 
 	s := d.buildServer("key")
 
 	resp, err := s.GetAccountOverview(context.Background(), &identityv1.GetAccountOverviewRequest{
 		AccountId: 5,
-		ProductId: "gushen",
+		ProductId: "lucrum",
 	})
 	if err != nil {
 		t.Fatalf("GetAccountOverview: %v", err)
@@ -828,7 +828,7 @@ func TestGRPCServer_WalletDebit_Success(t *testing.T) {
 		Amount:      30.00,
 		Type:        "subscription",
 		Description: "Pro plan",
-		ProductId:   "gushen",
+		ProductId:   "lucrum",
 	})
 	if err != nil {
 		t.Fatalf("WalletDebit: %v", err)
@@ -873,7 +873,7 @@ func TestGRPCServer_WalletCredit_Success(t *testing.T) {
 		Amount:      50.00,
 		Type:        "bonus",
 		Description: "Referral reward",
-		ProductId:   "gushen",
+		ProductId:   "lucrum",
 	})
 	if err != nil {
 		t.Fatalf("WalletCredit: %v", err)
@@ -950,7 +950,7 @@ func TestGRPCServer_GetEntitlements_StoreError(t *testing.T) {
 
 	_, err := s.GetEntitlements(context.Background(), &identityv1.GetEntitlementsRequest{
 		AccountId: 1,
-		ProductId: "gushen",
+		ProductId: "lucrum",
 	})
 	if err == nil {
 		t.Fatal("expected Internal error, got nil")

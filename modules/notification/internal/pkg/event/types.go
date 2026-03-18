@@ -9,7 +9,7 @@ import (
 // Stream constants.
 const (
 	StreamIdentityEvents = "IDENTITY_EVENTS"
-	StreamGushenEvents   = "GUSHEN_EVENTS"
+	StreamLucrumEvents   = "LUCRUM_EVENTS"
 	StreamLLMEvents      = "LLM_EVENTS"
 )
 
@@ -22,9 +22,9 @@ const (
 	SubjectTopupCompleted        = "identity.topup.completed"
 	SubjectVIPLevelChanged       = "identity.vip.level_changed"
 
-	// GUSHEN_EVENTS subjects
-	SubjectStrategyTriggered = "gushen.strategy.triggered"
-	SubjectRiskAlert         = "gushen.risk.alert"
+	// LUCRUM_EVENTS subjects
+	SubjectStrategyTriggered = "lucrum.strategy.triggered"
+	SubjectRiskAlert         = "lucrum.risk.alert"
 
 	// LLM_EVENTS subjects
 	SubjectQuotaThreshold = "llm.quota.threshold"
@@ -41,8 +41,8 @@ type IdentityEvent struct {
 	OccurredAt time.Time       `json:"occurred_at"`
 }
 
-// GushenEvent is the standard envelope from GUSHEN_EVENTS stream.
-type GushenEvent struct {
+// LucrumEvent is the standard envelope from LUCRUM_EVENTS stream.
+type LucrumEvent struct {
 	EventID    string          `json:"event_id"`
 	EventType  string          `json:"event_type"`
 	UserID     string          `json:"user_id"`
@@ -65,7 +65,7 @@ type TopupCompletedPayload struct {
 	CreditsAdded   float64 `json:"credits_added"`
 }
 
-// StrategyTriggeredPayload from gushen.strategy.triggered.
+// StrategyTriggeredPayload from lucrum.strategy.triggered.
 type StrategyTriggeredPayload struct {
 	StrategyID   string `json:"strategy_id"`
 	StrategyName string `json:"strategy_name"`
@@ -73,7 +73,7 @@ type StrategyTriggeredPayload struct {
 	Symbol       string `json:"symbol"`
 }
 
-// RiskAlertPayload from gushen.risk.alert.
+// RiskAlertPayload from lucrum.risk.alert.
 type RiskAlertPayload struct {
 	AlertType string  `json:"alert_type"` // "drawdown", "position_limit", "volatility"
 	Symbol    string  `json:"symbol"`

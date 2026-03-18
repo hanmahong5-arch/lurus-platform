@@ -53,7 +53,7 @@ func TestCategoryFromEvent(t *testing.T) {
 		want      string
 	}{
 		{"identity.account.created", "account"},
-		{"gushen.strategy.triggered", "strategy"},
+		{"lucrum.strategy.triggered", "strategy"},
 		{"llm.quota.threshold", "quota"},
 		{"simple", "general"},
 	}

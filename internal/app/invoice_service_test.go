@@ -23,7 +23,7 @@ func seedPaidOrder(ws *mockWalletStore, accountID int64, orderNo string) *entity
 		AccountID: accountID,
 		OrderNo:   orderNo,
 		OrderType: "topup",
-		ProductID: "gushen",
+		ProductID: "lucrum",
 		AmountCNY: 99.00,
 		Status:    entity.OrderStatusPaid,
 		CreatedAt: time.Now().UTC(),
