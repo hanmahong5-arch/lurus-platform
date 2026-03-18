@@ -5,7 +5,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: webmail-tls
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   secretName: webmail-tls
   issuerRef:
@@ -19,7 +19,7 @@ apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: webmail-web
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   entryPoints:
   - websecure
@@ -37,7 +37,7 @@ apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: webmail-api
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   entryPoints:
   - websecure
@@ -57,7 +57,7 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: webmail-api-strip
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   stripPrefix:
     prefixes:

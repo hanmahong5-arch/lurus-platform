@@ -2,7 +2,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: webmail-web-pdb
-  namespace: lurus-webmail
+  namespace: lurus-platform
   labels:
     app: webmail-web
     app.kubernetes.io/name: webmail-web
@@ -17,7 +17,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: webmail-worker-pdb
-  namespace: lurus-webmail
+  namespace: lurus-platform
   labels:
     app: webmail-worker
     app.kubernetes.io/name: webmail-worker

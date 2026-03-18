@@ -6,7 +6,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: webmail-tls
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   secretName: webmail-tls
   issuerRef:
@@ -20,7 +20,7 @@ apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: webmail-web
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   entryPoints:
   - websecure
@@ -38,7 +38,7 @@ apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: webmail-auth-api
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   entryPoints:
   - websecure
@@ -58,7 +58,7 @@ apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: webmail-rest-api
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   entryPoints:
   - websecure
@@ -78,7 +78,7 @@ apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: webmail-storage-api
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   entryPoints:
   - websecure
@@ -98,7 +98,7 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: webmail-auth-strip
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   stripPrefix:
     prefixes:
@@ -109,7 +109,7 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: webmail-rest-strip
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   stripPrefix:
     prefixes:
@@ -120,7 +120,7 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: webmail-storage-strip
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   stripPrefix:
     prefixes:

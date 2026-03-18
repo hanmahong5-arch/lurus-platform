@@ -3,7 +3,7 @@
 Self-hosted unified communication platform (email / calendar / contacts).
 v2.0 "Stalwart-Native" — migrating from Kurrier fork + Supabase to JMAP-first + Zitadel direct.
 
-**Production URL:** `https://mail.lurus.cn` | **Namespace:** `lurus-webmail` (app) + `mail` (Stalwart)
+**Production URL:** `https://mail.lurus.cn` | **Namespace:** `lurus-platform`
 
 ## Tech Stack
 
@@ -85,15 +85,15 @@ bun run format           # biome format --write
 # DB migrations (run from repo root with dotenvx)
 dotenvx run -f db/.env.develop -- bunx drizzle-kit migrate
 
-# K8s — deploy app (lurus-webmail namespace)
+# K8s — deploy app (lurus-platform namespace)
 kubectl apply -k k8s/
 
 # K8s — deploy Stalwart separately (mail namespace)
 kubectl apply -k k8s/stalwart/
 
 # K8s — restart pods
-ssh root@100.98.57.55 "kubectl rollout restart deployment/webmail-web -n lurus-webmail"
-ssh root@100.98.57.55 "kubectl rollout restart deployment/webmail-worker -n lurus-webmail"
+ssh root@100.98.57.55 "kubectl rollout restart deployment/webmail-web -n lurus-platform"
+ssh root@100.98.57.55 "kubectl rollout restart deployment/webmail-worker -n lurus-platform"
 
 # Docker build (web)
 docker build -f apps/web/Dockerfile -t ghcr.io/hanmahong5-arch/lurus-webmail-web:local .

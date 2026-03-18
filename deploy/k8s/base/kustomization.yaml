@@ -11,3 +11,4 @@ resources:
   - hpa.yaml
   - pdb.yaml
   - servicemonitor.yaml
+  - zitadel.yaml

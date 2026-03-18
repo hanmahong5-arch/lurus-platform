@@ -2,7 +2,7 @@
 
 Unified multi-channel notification hub. Consumes NATS events from identity/lucrum/LLM streams and dispatches via in-app (WebSocket), email (SMTP), and mobile push (FCM placeholder).
 
-Namespace: `lurus-system` | Port: `18900` | DB schema: `notification`
+Namespace: `lurus-platform` | Port: `18900` | DB schema: `notification`
 
 ## Tech Stack
 

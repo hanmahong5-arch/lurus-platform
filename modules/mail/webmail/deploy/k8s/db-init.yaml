@@ -4,7 +4,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: webmail-db-init
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   ttlSecondsAfterFinished: 300
   template:

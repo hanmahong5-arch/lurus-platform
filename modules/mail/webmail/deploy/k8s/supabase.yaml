@@ -5,7 +5,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: webmail-auth
-  namespace: lurus-webmail
+  namespace: lurus-platform
   labels:
     app: webmail-auth
 spec:
@@ -113,7 +113,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: webmail-auth
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   selector:
     app: webmail-auth
@@ -126,7 +126,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: webmail-rest
-  namespace: lurus-webmail
+  namespace: lurus-platform
   labels:
     app: webmail-rest
 spec:
@@ -176,7 +176,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: webmail-rest
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   selector:
     app: webmail-rest
@@ -189,7 +189,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: webmail-kong
-  namespace: lurus-webmail
+  namespace: lurus-platform
   labels:
     app: webmail-kong
 spec:
@@ -240,7 +240,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: webmail-kong
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   selector:
     app: webmail-kong
@@ -254,7 +254,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: webmail-storage
-  namespace: lurus-webmail
+  namespace: lurus-platform
   labels:
     app: webmail-storage
 spec:
@@ -340,7 +340,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: webmail-storage
-  namespace: lurus-webmail
+  namespace: lurus-platform
 spec:
   selector:
     app: webmail-storage
