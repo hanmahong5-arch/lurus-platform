@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	natsgo "github.com/nats-io/nats.go"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/domain/entity"
@@ -21,15 +23,16 @@ import (
 type Consumer struct {
 	js       natsgo.JetStreamContext
 	notifSvc *app.NotificationService
+	rdb      *redis.Client
 }
 
 // NewConsumer creates a NATS JetStream consumer.
-func NewConsumer(nc *natsgo.Conn, notifSvc *app.NotificationService) (*Consumer, error) {
+func NewConsumer(nc *natsgo.Conn, notifSvc *app.NotificationService, rdb *redis.Client) (*Consumer, error) {
 	js, err := nc.JetStream()
 	if err != nil {
 		return nil, fmt.Errorf("jetstream context: %w", err)
 	}
-	return &Consumer{js: js, notifSvc: notifSvc}, nil
+	return &Consumer{js: js, notifSvc: notifSvc, rdb: rdb}, nil
 }
 
 // subscription defines a NATS subject to listen on and how to handle it.
@@ -258,6 +261,17 @@ func (c *Consumer) handleRiskAlert(ctx context.Context, msg *natsgo.Msg) error {
 	})
 }
 
+// quotaThresholds defines the alert levels and their corresponding event types.
+var quotaThresholds = []struct {
+	percent   float64
+	eventType string
+}{
+	{50, "llm.quota.50"},
+	{80, "llm.quota.80"},
+	{95, "llm.quota.95"},
+	{100, "llm.quota.100"},
+}
+
 func (c *Consumer) handleQuotaThreshold(ctx context.Context, msg *natsgo.Msg) error {
 	var payload event.QuotaThresholdPayload
 	if err := json.Unmarshal(msg.Data, &payload); err != nil {
@@ -266,13 +280,55 @@ func (c *Consumer) handleQuotaThreshold(ctx context.Context, msg *natsgo.Msg) er
 	if payload.AccountID <= 0 {
 		return nil
 	}
-	return c.notifSvc.Send(ctx, app.SendRequest{
-		AccountID: payload.AccountID,
-		EventType: event.SubjectQuotaThreshold,
-		EventID:   "", // no event_id for quota warnings
-		Channels:  []entity.Channel{entity.ChannelInApp},
-		Vars: map[string]string{
-			"usage_percent": fmt.Sprintf("%.0f%%", payload.UsagePercent),
-		},
-	})
+
+	// Determine which threshold(s) have been crossed.
+	for _, t := range quotaThresholds {
+		if payload.UsagePercent < t.percent {
+			continue
+		}
+
+		// Redis dedup: one alert per threshold per account per month.
+		month := time.Now().Format("2006-01")
+		dedupKey := fmt.Sprintf("quota_alert:%d:%.0f:%s", payload.AccountID, t.percent, month)
+		if c.rdb != nil {
+			set, err := c.rdb.SetNX(ctx, dedupKey, "1", 31*24*time.Hour).Result()
+			if err != nil {
+				slog.Warn("quota alert dedup check failed",
+					"key", dedupKey, "err", err)
+			} else if !set {
+				// Already alerted for this threshold this month.
+				continue
+			}
+		}
+
+		channels := []entity.Channel{entity.ChannelInApp}
+		// Add email for 80%+ thresholds.
+		if t.percent >= 80 {
+			channels = append(channels, entity.ChannelEmail)
+		}
+
+		remaining := payload.LimitTokens - payload.UsedTokens
+		if remaining < 0 {
+			remaining = 0
+		}
+
+		if err := c.notifSvc.Send(ctx, app.SendRequest{
+			AccountID: payload.AccountID,
+			EventType: t.eventType,
+			EventID:   fmt.Sprintf("quota_%d_%.0f_%s", payload.AccountID, t.percent, month),
+			Channels:  channels,
+			Vars: map[string]string{
+				"percent":   fmt.Sprintf("%.0f", t.percent),
+				"remaining": fmt.Sprintf("%d", remaining),
+			},
+		}); err != nil {
+			slog.Error("failed to send quota alert",
+				"account_id", payload.AccountID,
+				"threshold", t.percent,
+				"err", err,
+			)
+		}
+	}
+
+	return nil
 }

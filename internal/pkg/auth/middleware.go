@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
 )
 
 const (
@@ -57,6 +58,8 @@ func (m *JWTMiddleware) Auth() gin.HandlerFunc {
 		if m.sessionSecret != "" {
 			if accountID, err := ValidateSessionToken(token, m.sessionSecret); err == nil {
 				c.Set(ContextKeyAccountID, accountID)
+				// Propagate account_id to context.Context for structured log correlation.
+				c.Request = c.Request.WithContext(slogctx.WithAccountID(c.Request.Context(), accountID))
 				c.Next()
 				return
 			}
@@ -87,6 +90,8 @@ func (m *JWTMiddleware) Auth() gin.HandlerFunc {
 
 		c.Set(ContextKeyAccountID, accountID)
 		c.Set(ContextKeyClaims, claims)
+		// Propagate account_id to context.Context for structured log correlation.
+		c.Request = c.Request.WithContext(slogctx.WithAccountID(c.Request.Context(), accountID))
 		c.Next()
 	}
 }
@@ -137,6 +142,8 @@ func (m *JWTMiddleware) AdminAuth() gin.HandlerFunc {
 
 		c.Set(ContextKeyAccountID, accountID)
 		c.Set(ContextKeyClaims, claims)
+		// Propagate account_id to context.Context for structured log correlation.
+		c.Request = c.Request.WithContext(slogctx.WithAccountID(c.Request.Context(), accountID))
 		c.Next()
 	}
 }

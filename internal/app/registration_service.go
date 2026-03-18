@@ -52,18 +52,22 @@ type ForgotPasswordResult struct {
 	Channel string `json:"channel"` // "email" or "sms"
 }
 
+// ReferralSignupHookFunc is called after a referred user completes registration.
+type ReferralSignupHookFunc func(ctx context.Context, referrerAccountID int64, referredName string)
+
 // RegistrationService handles user registration and password reset flows.
 type RegistrationService struct {
-	accounts      accountStore
-	wallets       walletStore
-	vip           vipStore
-	referral      *ReferralService
-	zitadel       *zitadel.Client
-	sessionSecret string
-	emailSender   email.Sender
-	smsSender     sms.Sender
-	redis         *redis.Client
-	smsCfg        sms.SMSConfig
+	accounts          accountStore
+	wallets           walletStore
+	vip               vipStore
+	referral          *ReferralService
+	zitadel           *zitadel.Client
+	sessionSecret     string
+	emailSender       email.Sender
+	smsSender         sms.Sender
+	redis             *redis.Client
+	smsCfg            sms.SMSConfig
+	onReferralSignup  ReferralSignupHookFunc
 }
 
 // NewRegistrationService creates the registration service.
@@ -96,6 +100,11 @@ func NewRegistrationService(
 		redis:         rdb,
 		smsCfg:        smsCfg,
 	}
+}
+
+// SetOnReferralSignupHook sets the post-referral-signup hook (typically wired to module.Registry.FireReferralSignup).
+func (s *RegistrationService) SetOnReferralSignupHook(fn ReferralSignupHookFunc) {
+	s.onReferralSignup = fn
 }
 
 // Register creates a new user account with username + password.
@@ -211,6 +220,14 @@ func (s *RegistrationService) Register(ctx context.Context, req RegisterRequest)
 			account.ReferrerID = &referrerID
 			if uerr := s.accounts.Update(ctx, account); uerr == nil {
 				_ = s.referral.OnSignup(ctx, account.ID, referrer.ID)
+				// Fire referral signup hook (notification to referrer) — non-blocking.
+				if s.onReferralSignup != nil {
+					referredName := account.DisplayName
+					if referredName == "" {
+						referredName = account.Username
+					}
+					go s.onReferralSignup(ctx, referrer.ID, referredName)
+				}
 			}
 		}
 	}

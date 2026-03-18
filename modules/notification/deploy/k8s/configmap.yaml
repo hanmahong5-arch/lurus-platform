@@ -14,3 +14,7 @@ data:
   SMTP_PORT: "587"
   EMAIL_FROM: "noreply@lurus.cn"
   SHUTDOWN_TIMEOUT: "30s"
+  OTEL_SERVICE_NAME: "lurus-notification"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector.observability.svc:4317"
+  # JWT authentication — platform-core session token validation
+  PLATFORM_INTERNAL_URL: "http://platform-core.lurus-platform.svc.cluster.local:18104"

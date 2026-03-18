@@ -29,6 +29,7 @@ const (
 	StatusPending   Status = "pending"
 	StatusSent      Status = "sent"
 	StatusDelivered Status = "delivered"
+	StatusRetrying  Status = "retrying"
 	StatusFailed    Status = "failed"
 	StatusRead      Status = "read"
 )

@@ -10,6 +10,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/handler"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
 )
 
 // Deps holds all handler dependencies injected at startup.
@@ -35,14 +36,21 @@ type Deps struct {
 	InternalKey   string                            // secret for /internal/* bearer auth
 	JWT           *auth.JWTMiddleware
 	RateLimit     *ratelimit.Limiter
+	ExtraMiddleware []gin.HandlerFunc               // metrics, tracing, etc. (applied before routes)
 }
 
 // Build constructs and returns the root Gin engine.
 func Build(deps Deps) *gin.Engine {
 	r := gin.New()
+	r.Use(slogctx.Middleware()) // Assign request_id early for log correlation.
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 	r.Use(cors.Default())
+
+	// Apply caller-provided middleware (Prometheus metrics, OTel tracing) before routes.
+	for _, mw := range deps.ExtraMiddleware {
+		r.Use(mw)
+	}
 
 	// Health check — unauthenticated
 	r.GET("/health", func(c *gin.Context) {

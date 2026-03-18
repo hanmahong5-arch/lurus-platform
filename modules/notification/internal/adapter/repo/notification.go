@@ -99,6 +99,28 @@ func (r *NotificationRepo) UpdateStatus(ctx context.Context, id int64, status en
 	return nil
 }
 
+// UpdateStatusWithMetadata updates the delivery status and appends metadata (e.g. failure reason).
+func (r *NotificationRepo) UpdateStatusWithMetadata(ctx context.Context, id int64, status entity.Status, metadata string) error {
+	updates := map[string]any{"status": status, "metadata": metadata}
+	if status == entity.StatusSent {
+		now := time.Now().UTC()
+		updates["sent_at"] = now
+	}
+	if err := r.db.WithContext(ctx).Model(&entity.Notification{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return fmt.Errorf("update status with metadata: %w", err)
+	}
+	return nil
+}
+
+// GetByID retrieves a single notification by ID.
+func (r *NotificationRepo) GetByID(ctx context.Context, id int64) (*entity.Notification, error) {
+	var n entity.Notification
+	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&n).Error; err != nil {
+		return nil, fmt.Errorf("get notification by id: %w", err)
+	}
+	return &n, nil
+}
+
 // FindByEventID checks if a notification for this event already exists (idempotency).
 func (r *NotificationRepo) FindByEventID(ctx context.Context, eventID string, channel entity.Channel) (*entity.Notification, error) {
 	var n entity.Notification

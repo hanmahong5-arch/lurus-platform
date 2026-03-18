@@ -2,17 +2,48 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	otelgin "go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+
+	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/pkg/auth"
+)
+
+var (
+	httpRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "lurus_notification",
+			Name:      "http_requests_total",
+			Help:      "Total HTTP requests by method, route, and status.",
+		},
+		[]string{"method", "route", "status"},
+	)
+	httpRequestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "lurus_notification",
+			Name:      "http_request_duration_seconds",
+			Help:      "HTTP request latency by method and route.",
+			Buckets:   prometheus.DefBuckets,
+		},
+		[]string{"method", "route"},
+	)
 )
 
 // Deps holds all handler dependencies for router construction.
 type Deps struct {
-	Notifications *NotificationHandler
-	Templates     *TemplateHandler
-	InternalKey   string
-	WebhookSecret string // shared secret for alertmanager webhook (empty = no auth)
+	Notifications   *NotificationHandler
+	Templates       *TemplateHandler
+	Preferences     *PreferenceHandler
+	Devices         *DeviceHandler
+	JWT             *auth.Middleware
+	InternalKey     string
+	WebhookSecret   string // shared secret for alertmanager webhook (empty = no auth)
+	OtelServiceName string // service name for OTel tracing (default: lurus-notification)
 }
 
 // BuildRouter creates the Gin engine with all routes.
@@ -20,6 +51,16 @@ func BuildRouter(deps Deps) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+
+	// HTTP RED metrics middleware (Prometheus)
+	r.Use(httpMetricsMiddleware())
+
+	// OTel distributed tracing middleware
+	svcName := deps.OtelServiceName
+	if svcName == "" {
+		svcName = "lurus-notification"
+	}
+	r.Use(otelgin.Middleware(svcName))
 
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
@@ -46,17 +87,32 @@ func BuildRouter(deps Deps) *gin.Engine {
 		internal.POST("/notify", deps.Notifications.InternalNotify)
 	}
 
-	// User-facing API (protected by account_id from JWT middleware)
-	// NOTE: JWT middleware to be added when integrating with auth system.
-	// For now, account_id is expected in header X-Account-ID for testing.
+	// User-facing API (protected by JWT authentication)
 	api := r.Group("/api/v1/notifications")
-	api.Use(tempAccountIDMiddleware())
+	if deps.JWT != nil {
+		api.Use(deps.JWT.Auth())
+	} else {
+		// Fallback for dev/test without JWT configured.
+		api.Use(devAccountIDMiddleware())
+	}
 	{
 		api.GET("", deps.Notifications.List)
 		api.GET("/unread", deps.Notifications.Unread)
 		api.POST("/:id/read", deps.Notifications.MarkRead)
 		api.POST("/read-all", deps.Notifications.MarkAllRead)
 		api.GET("/ws", deps.Notifications.WebSocket)
+
+		// Preference management
+		if deps.Preferences != nil {
+			api.GET("/preferences", deps.Preferences.Get)
+			api.PUT("/preferences", deps.Preferences.Update)
+		}
+
+		// Device token management (FCM push)
+		if deps.Devices != nil {
+			api.POST("/devices", deps.Devices.Register)
+			api.DELETE("/devices/:token", deps.Devices.Unregister)
+		}
 	}
 
 	// Admin API (template management, protected by internal key for now)
@@ -96,14 +152,31 @@ func webhookSecretAuth(secret string) gin.HandlerFunc {
 	}
 }
 
-// tempAccountIDMiddleware extracts account_id from X-Account-ID header.
-// This is a temporary middleware for testing; in production, JWT middleware
-// will set account_id from Zitadel claims.
-func tempAccountIDMiddleware() gin.HandlerFunc {
+// httpMetricsMiddleware records RED metrics for every HTTP request.
+func httpMetricsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+
+		route := c.FullPath()
+		if route == "" {
+			route = "unmatched"
+		}
+		status := strconv.Itoa(c.Writer.Status())
+		elapsed := time.Since(start).Seconds()
+
+		httpRequestsTotal.WithLabelValues(c.Request.Method, route, status).Inc()
+		httpRequestDuration.WithLabelValues(c.Request.Method, route).Observe(elapsed)
+	}
+}
+
+// devAccountIDMiddleware extracts account_id from X-Account-ID header.
+// Used only when SESSION_SECRET is not configured (dev/test environments).
+func devAccountIDMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		idStr := c.GetHeader("X-Account-ID")
 		if idStr == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing X-Account-ID header"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing X-Account-ID header (dev mode)"})
 			return
 		}
 		var accountID int64

@@ -1,0 +1,224 @@
+{
+  "annotations": { "list": [] },
+  "description": "Lurus Platform Core — HTTP RED, Wallet, Payment, Subscription metrics",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "HTTP Request Rate (req/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(lurus_platform_http_requests_total[5m])) by (status)",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true },
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "title": "HTTP Latency p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(lurus_platform_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(lurus_platform_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(lurus_platform_http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "title": "HTTP Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(lurus_platform_http_requests_total{status=~\"5..\"}[5m])) / sum(rate(lurus_platform_http_requests_total[5m]))",
+          "legendFormat": "5xx error rate",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(lurus_platform_http_requests_total{status=~\"4..\"}[5m])) / sum(rate(lurus_platform_http_requests_total[5m]))",
+          "legendFormat": "4xx error rate",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "percentunit",
+          "max": 1
+        }
+      }
+    },
+    {
+      "title": "Top Routes by Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "topk(10, sum(rate(lurus_platform_http_requests_total[5m])) by (route))",
+          "legendFormat": "{{route}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "fillOpacity": 50 },
+          "unit": "reqps"
+        }
+      }
+    },
+    {
+      "title": "Wallet Operations",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(lurus_platform_wallet_operations_total[5m])) by (operation, result)",
+          "legendFormat": "{{operation}} ({{result}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "title": "Wallet Amount (CNY/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(lurus_platform_wallet_operation_amount_cny_total[5m])) by (operation) * 60",
+          "legendFormat": "{{operation}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "currencyCNY"
+        }
+      }
+    },
+    {
+      "title": "Payment Order Transitions",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(rate(lurus_platform_payment_order_transitions_total[5m])) by (to_status, provider)",
+          "legendFormat": "{{provider}} → {{to_status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "title": "Subscription Transitions",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(rate(lurus_platform_subscription_transitions_total[5m])) by (from_status, to_status)",
+          "legendFormat": "{{from_status}} → {{to_status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "title": "Webhook Events",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "expr": "sum(rate(lurus_platform_webhook_events_total[5m])) by (provider, result)",
+          "legendFormat": "{{provider}} ({{result}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "title": "Cache Hit/Miss Ratio",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 32 },
+      "targets": [
+        {
+          "expr": "sum(increase(lurus_platform_cache_operations_total[1h])) by (result)",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Refund Operations",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 32 },
+      "targets": [
+        {
+          "expr": "sum(increase(lurus_platform_refund_operations_total[24h])) by (action, result)",
+          "legendFormat": "{{action}} ({{result}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["lurus", "platform-core"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "Asia/Shanghai",
+  "title": "Lurus Platform Core",
+  "uid": "lurus-platform-core",
+  "version": 1
+}

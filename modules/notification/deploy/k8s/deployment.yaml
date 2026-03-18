@@ -71,6 +71,18 @@ spec:
                   name: lurus-notification-secrets
                   key: SMTP_PASS
                   optional: true
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-notification-secrets
+                  key: SESSION_SECRET
+                  optional: true
+            - name: PLATFORM_INTERNAL_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: lurus-notification-secrets
+                  key: PLATFORM_INTERNAL_KEY
+                  optional: true
           resources:
             requests:
               memory: "128Mi"

@@ -17,11 +17,19 @@ type AccountHook func(ctx context.Context, account *entity.Account) error
 // PlanChangeHook is called when a subscription plan changes.
 type PlanChangeHook func(ctx context.Context, account *entity.Account, plan *entity.ProductPlan) error
 
+// CheckinHook is called after a successful daily check-in.
+type CheckinHook func(ctx context.Context, accountID int64, streak int) error
+
+// ReferralSignupHook is called when a referred user completes registration.
+type ReferralSignupHook func(ctx context.Context, referrerAccountID int64, referredName string) error
+
 // Registry holds module hooks registered at startup.
 type Registry struct {
-	onAccountCreated []AccountHook
-	onAccountDeleted []AccountHook
-	onPlanChanged    []PlanChangeHook
+	onAccountCreated  []AccountHook
+	onAccountDeleted  []AccountHook
+	onPlanChanged     []PlanChangeHook
+	onCheckin         []CheckinHook
+	onReferralSignup  []ReferralSignupHook
 }
 
 // NewRegistry creates an empty module registry.
@@ -42,6 +50,16 @@ func (r *Registry) OnAccountDeleted(hook AccountHook) {
 // OnPlanChanged registers a hook for subscription plan changes.
 func (r *Registry) OnPlanChanged(hook PlanChangeHook) {
 	r.onPlanChanged = append(r.onPlanChanged, hook)
+}
+
+// OnCheckin registers a hook for daily check-in events.
+func (r *Registry) OnCheckin(hook CheckinHook) {
+	r.onCheckin = append(r.onCheckin, hook)
+}
+
+// OnReferralSignup registers a hook for referral sign-up events.
+func (r *Registry) OnReferralSignup(hook ReferralSignupHook) {
+	r.onReferralSignup = append(r.onReferralSignup, hook)
 }
 
 // FireAccountCreated invokes all registered account-created hooks.
@@ -85,7 +103,35 @@ func (r *Registry) FirePlanChanged(ctx context.Context, account *entity.Account,
 	}
 }
 
+// FireCheckin invokes all registered check-in hooks.
+func (r *Registry) FireCheckin(ctx context.Context, accountID int64, streak int) {
+	for _, hook := range r.onCheckin {
+		if err := hook(ctx, accountID, streak); err != nil {
+			slog.Warn("module hook failed",
+				"event", "checkin",
+				"account_id", accountID,
+				"streak", streak,
+				"error", err,
+			)
+		}
+	}
+}
+
+// FireReferralSignup invokes all registered referral sign-up hooks.
+func (r *Registry) FireReferralSignup(ctx context.Context, referrerAccountID int64, referredName string) {
+	for _, hook := range r.onReferralSignup {
+		if err := hook(ctx, referrerAccountID, referredName); err != nil {
+			slog.Warn("module hook failed",
+				"event", "referral_signup",
+				"referrer_account_id", referrerAccountID,
+				"error", err,
+			)
+		}
+	}
+}
+
 // HookCount returns the total number of registered hooks (useful for startup logging).
 func (r *Registry) HookCount() int {
-	return len(r.onAccountCreated) + len(r.onAccountDeleted) + len(r.onPlanChanged)
+	return len(r.onAccountCreated) + len(r.onAccountDeleted) + len(r.onPlanChanged) +
+		len(r.onCheckin) + len(r.onReferralSignup)
 }

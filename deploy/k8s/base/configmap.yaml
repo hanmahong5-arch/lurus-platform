@@ -22,5 +22,7 @@ data:
   EPAY_RETURN_URL: "https://id.lurus.cn/topup/result"
   STRIPE_RETURN_URL: "https://id.lurus.cn/topup/result"
   CREEM_RETURN_URL: "https://id.lurus.cn/topup/result"
+  OTEL_SERVICE_NAME: "lurus-platform"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector.observability.svc:4317"
   MODULES_MAIL_ENABLED: "false"
   MODULES_NOTIFICATION_ENABLED: "false"

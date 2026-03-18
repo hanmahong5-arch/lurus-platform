@@ -30,6 +30,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/repo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
+	"github.com/hanmahong5-arch/lurus-platform/internal/module"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/cache"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/config"
@@ -38,6 +39,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/sms"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tracing"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/zitadel"
 	lurustemporal "github.com/hanmahong5-arch/lurus-platform/internal/temporal"
@@ -55,11 +57,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Use JSON log handler in production for structured log ingestion.
+	// Use JSON log handler in production with context enrichment (trace_id,
+	// span_id, account_id, request_id) for log-trace correlation in Loki/Grafana.
 	if cfg.Env == "production" {
-		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
-		})))
+		})
+		slog.SetDefault(slog.New(slogctx.New(jsonHandler)))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -160,6 +164,24 @@ func run(ctx context.Context, cfg *config.Config) error {
 	overviewSvc := app.NewOverviewService(accountRepo, vipSvc, walletRepo, subSvc, productRepo, ovCache)
 	checkinSvc := app.NewCheckinService(checkinRepo, walletRepo)
 
+	// --- Module Registry (pluggable hooks for notification, mail, etc.) ---
+	registry := module.NewRegistry()
+	if cfg.InternalAPIKey != "" {
+		notifMod := module.NewNotificationModule(module.NotificationConfig{
+			Enabled:    true,
+			ServiceURL: "http://lurus-notification.lurus-platform.svc.cluster.local:18900",
+			APIKey:     cfg.InternalAPIKey,
+		})
+		notifMod.Register(registry)
+	}
+
+	// Wire check-in hook to fire module events (notifications on streak milestones).
+	checkinSvc.SetOnCheckinHook(func(ctx context.Context, accountID int64, streak int) {
+		registry.FireCheckin(ctx, accountID, streak)
+	})
+
+	slog.Info("module registry initialized", "hooks", registry.HookCount())
+
 	// --- NATS Publisher (non-fatal: degrade gracefully if NATS unavailable) ---
 	publisher, err := identitynats.NewPublisher(nc)
 	if err != nil {
@@ -224,6 +246,11 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// --- Zitadel Client + Registration Service ---
 	zitadelClient := zitadel.NewClient(cfg.ZitadelIssuer, cfg.ZitadelServiceAccountPAT)
 	registrationSvc := app.NewRegistrationService(accountRepo, walletRepo, vipRepo, referralSvc, zitadelClient, cfg.SessionSecret, emailSender, smsSender, rdb, smsCfg)
+	if registrationSvc != nil {
+		registrationSvc.SetOnReferralSignupHook(func(ctx context.Context, referrerAccountID int64, referredName string) {
+			registry.FireReferralSignup(ctx, referrerAccountID, referredName)
+		})
+	}
 
 	// --- HTTP Handlers ---
 	accountH := handler.NewAccountHandler(accountSvc, vipSvc, subSvc, overviewSvc, referralSvc)
@@ -278,14 +305,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 		InternalKey:   cfg.InternalAPIKey,
 		JWT:           jwtMiddleware,
 		RateLimit:     rateLimiter,
+		ExtraMiddleware: []gin.HandlerFunc{
+			metrics.HTTPMiddleware(),
+			otelgin.Middleware(cfg.OtelServiceName),
+		},
 	})
 
 	// Prometheus /metrics endpoint (unauthenticated, scraped internally by Prometheus).
 	engine.GET("/metrics", gin.WrapH(metrics.Handler()))
-
-	// Instrument all routes with Prometheus HTTP metrics and OTel traces.
-	engine.Use(metrics.HTTPMiddleware())
-	engine.Use(otelgin.Middleware(cfg.OtelServiceName))
 
 	// --- SPA static files (web/dist embedded) ---
 	webFS, err := fs.Sub(lurusweb.Dist, "dist")

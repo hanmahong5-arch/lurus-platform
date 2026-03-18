@@ -20,10 +20,13 @@ import (
 
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/adapter/handler"
 	natsconsumer "github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/adapter/nats"
+	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/adapter/platform"
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/adapter/repo"
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/adapter/sender"
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/app"
+	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/pkg/config"
+	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/pkg/tracing"
 )
 
 func main() {
@@ -51,6 +54,17 @@ func main() {
 }
 
 func run(ctx context.Context, cfg *config.Config) error {
+	// --- OpenTelemetry tracing ---
+	tracingShutdown, err := tracing.Init(ctx, cfg.OtelServiceName, cfg.OtelEndpoint)
+	if err != nil {
+		return fmt.Errorf("init tracing: %w", err)
+	}
+	defer func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tracingShutdown(shutCtx)
+	}()
+
 	// --- Database ---
 	db, err := gorm.Open(postgres.Open(cfg.DatabaseDSN), &gorm.Config{})
 	if err != nil {
@@ -72,7 +86,6 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("connect redis: %w", err)
 	}
 	defer rdb.Close()
-	_ = rdb // reserved for future caching/dedup
 
 	// --- NATS ---
 	slog.Info("connecting to nats", "addr", cfg.NATSAddr)
@@ -107,6 +120,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	notifRepo := repo.NewNotificationRepo(db)
 	tmplRepo := repo.NewTemplateRepo(db)
 	prefRepo := repo.NewPreferenceRepo(db)
+	deviceRepo := repo.NewDeviceTokenRepo(db)
 
 	// --- Senders ---
 	var emailSender sender.Sender
@@ -124,17 +138,39 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	// --- App Services ---
 	notifSvc := app.NewNotificationService(notifRepo, tmplRepo, prefRepo, emailSender, fcmSender, wsSender, wsHub)
+	notifSvc.SetRedis(rdb)
 	tmplSvc := app.NewTemplateService(tmplRepo)
+	prefSvc := app.NewPreferenceService(prefRepo)
+	deviceSvc := app.NewDeviceService(deviceRepo)
+
+	// --- JWT Authentication ---
+	var jwtMiddleware *auth.Middleware
+	if cfg.SessionSecret != "" {
+		jwtMiddleware = auth.NewMiddleware(auth.Config{
+			SessionSecret:       cfg.SessionSecret,
+			PlatformURL:         cfg.PlatformURL,
+			PlatformInternalKey: cfg.PlatformInternalKey,
+		})
+		slog.Info("JWT authentication enabled")
+	} else {
+		slog.Warn("JWT authentication disabled (SESSION_SECRET not set), using dev X-Account-ID header")
+	}
 
 	// --- HTTP Handlers ---
 	notifH := handler.NewNotificationHandler(notifSvc, wsHub, cfg.AlertAdminEmail)
 	tmplH := handler.NewTemplateHandler(tmplSvc)
+	prefH := handler.NewPreferenceHandler(prefSvc)
+	deviceH := handler.NewDeviceHandler(deviceSvc)
 
 	engine := handler.BuildRouter(handler.Deps{
-		Notifications: notifH,
-		Templates:     tmplH,
-		InternalKey:   cfg.InternalAPIKey,
-		WebhookSecret: cfg.WebhookSecret,
+		Notifications:   notifH,
+		Templates:       tmplH,
+		Preferences:     prefH,
+		Devices:         deviceH,
+		JWT:             jwtMiddleware,
+		InternalKey:     cfg.InternalAPIKey,
+		WebhookSecret:   cfg.WebhookSecret,
+		OtelServiceName: cfg.OtelServiceName,
 	})
 
 	srv := &http.Server{
@@ -144,6 +180,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+
+	// --- Retry Worker ---
+	notifSvc.StartRetryWorker(ctx)
+
+	// --- Weekly Digest Worker ---
+	digestFetcher := platform.NewDigestFetcher(cfg.PlatformURL, cfg.PlatformInternalKey)
+	digestWorker := app.NewDigestWorker(notifSvc, digestFetcher)
+	digestWorker.Start(ctx)
 
 	// --- NATS Consumer ---
 	g, gctx := errgroup.WithContext(ctx)
@@ -158,7 +202,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	})
 
 	if nc != nil {
-		consumer, err := natsconsumer.NewConsumer(nc, notifSvc)
+		consumer, err := natsconsumer.NewConsumer(nc, notifSvc, rdb)
 		if err != nil {
 			slog.Warn("nats consumer init failed", "err", err)
 		} else {

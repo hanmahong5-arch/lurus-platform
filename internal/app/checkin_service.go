@@ -39,15 +39,24 @@ type CheckinResult struct {
 	WalletBalance   float64 `json:"wallet_balance"`
 }
 
+// CheckinHookFunc is called after a successful check-in to trigger notifications.
+type CheckinHookFunc func(ctx context.Context, accountID int64, streak int)
+
 // CheckinService orchestrates daily check-in operations.
 type CheckinService struct {
-	checkins checkinStore
-	wallets  walletStore
+	checkins    checkinStore
+	wallets     walletStore
+	onCheckin   CheckinHookFunc
 }
 
 // NewCheckinService creates a new CheckinService.
 func NewCheckinService(checkins checkinStore, wallets walletStore) *CheckinService {
 	return &CheckinService{checkins: checkins, wallets: wallets}
+}
+
+// SetOnCheckinHook sets the post-checkin hook (typically wired to module.Registry.FireCheckin).
+func (s *CheckinService) SetOnCheckinHook(fn CheckinHookFunc) {
+	s.onCheckin = fn
 }
 
 // GetStatus returns the check-in status for the current month.
@@ -130,6 +139,11 @@ func (s *CheckinService) DoCheckin(ctx context.Context, accountID int64) (*Check
 		"checkin", fmt.Sprintf("%d", checkin.ID), "")
 	if err != nil {
 		return nil, fmt.Errorf("checkin: credit wallet: %w", err)
+	}
+
+	// Fire post-checkin hooks (notification, etc.) — non-blocking.
+	if s.onCheckin != nil {
+		go s.onCheckin(ctx, accountID, consecutiveDays)
 	}
 
 	return &CheckinResult{

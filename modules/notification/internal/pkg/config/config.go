@@ -27,6 +27,15 @@ type Config struct {
 	FCMCredentials  string // path to FCM service account JSON (empty = disabled)
 	AlertAdminEmail string // email recipient for system alerts from Alertmanager
 	WebhookSecret   string // shared secret for webhook endpoints (empty = no auth)
+
+	// JWT authentication
+	SessionSecret      string // shared secret for lurus session token validation (HS256)
+	PlatformURL        string // platform-core internal URL for Zitadel sub resolution
+	PlatformInternalKey string // bearer key for platform internal API (same as INTERNAL_API_KEY if co-deployed)
+
+	// OpenTelemetry tracing
+	OtelEndpoint    string // OTEL_EXPORTER_OTLP_ENDPOINT (empty = noop)
+	OtelServiceName string // OTEL_SERVICE_NAME (default: lurus-notification)
 }
 
 // Load reads configuration from environment variables and returns an error
@@ -59,6 +68,11 @@ func Load() (*Config, error) {
 		FCMCredentials:  envStr("FCM_CREDENTIALS_PATH", ""),
 		AlertAdminEmail: envStr("ALERT_ADMIN_EMAIL", ""),
 		WebhookSecret:   envStr("WEBHOOK_SECRET", ""),
+		SessionSecret:      envStr("SESSION_SECRET", ""),
+		PlatformURL:        envStr("PLATFORM_INTERNAL_URL", "http://platform-core.lurus-platform.svc.cluster.local:18104"),
+		PlatformInternalKey: envStr("PLATFORM_INTERNAL_KEY", internalKey),
+		OtelEndpoint:       envStr("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OtelServiceName:    envStr("OTEL_SERVICE_NAME", "lurus-notification"),
 	}
 	return cfg, nil
 }

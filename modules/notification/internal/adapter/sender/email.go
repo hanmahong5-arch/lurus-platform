@@ -4,6 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/smtp"
+	"strings"
+)
+
+const (
+	// ContentTypeHTML signals that the message body is HTML.
+	ContentTypeHTML = "text/html"
 )
 
 // EmailSender delivers notifications via SMTP (Stalwart mail server).
@@ -30,20 +36,27 @@ func NewEmailSender(host string, port int, username, password, from string) *Ema
 	}
 }
 
-// Send delivers an email message.
+// Send delivers an email message. Supports both plain text and HTML content
+// based on the "content_type" metadata field.
 func (s *EmailSender) Send(_ context.Context, msg Message) error {
 	if msg.To == "" {
 		return fmt.Errorf("email send: recipient address is empty")
 	}
-	raw := []byte(
-		"From: " + s.from + "\r\n" +
-			"To: " + msg.To + "\r\n" +
-			"Subject: " + msg.Subject + "\r\n" +
-			"MIME-Version: 1.0\r\n" +
-			"Content-Type: text/plain; charset=UTF-8\r\n\r\n" +
-			msg.Body + "\r\n",
-	)
-	if err := smtp.SendMail(s.addr, s.auth, s.from, []string{msg.To}, raw); err != nil {
+
+	contentType := "text/plain; charset=UTF-8"
+	if ct, ok := msg.Metadata["content_type"]; ok && ct == ContentTypeHTML {
+		contentType = "text/html; charset=UTF-8"
+	}
+
+	var raw strings.Builder
+	raw.WriteString("From: " + s.from + "\r\n")
+	raw.WriteString("To: " + msg.To + "\r\n")
+	raw.WriteString("Subject: " + msg.Subject + "\r\n")
+	raw.WriteString("MIME-Version: 1.0\r\n")
+	raw.WriteString("Content-Type: " + contentType + "\r\n\r\n")
+	raw.WriteString(msg.Body + "\r\n")
+
+	if err := smtp.SendMail(s.addr, s.auth, s.from, []string{msg.To}, []byte(raw.String())); err != nil {
 		return fmt.Errorf("smtp send to %s: %w", msg.To, err)
 	}
 	return nil
