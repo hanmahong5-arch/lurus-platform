@@ -32,10 +32,12 @@ data:
         ConnectTimeout: 10s
         User:
           Username: zitadel
+          Password: Lurus@ops
           SSL:
             Mode: disable
         Admin:
           Username: zitadel
+          Password: Lurus@ops
           SSL:
             Mode: disable
 
@@ -81,6 +83,41 @@ data:
     DefaultInstance:
       InstanceName: Lurus Identity
       DefaultLanguage: zh
+      Org:
+        Name: Lurus
+        Human:
+          UserName: admin
+          FirstName: Admin
+          LastName: User
+          Email:
+            Address: admin@lurus.cn
+            Verified: true
+          Password: Lurus@ops
+          PasswordChangeRequired: false
+      PasswordComplexityPolicy:
+        MinLength: 6
+        HasUppercase: false
+        HasLowercase: false
+        HasNumber: false
+        HasSymbol: false
+      LoginPolicy:
+        AllowUsernamePassword: true
+        AllowRegister: true
+        AllowExternalIDP: true
+        ForceMFA: false
+        PasswordlessType: 1
+        HidePasswordReset: false
+        IgnoreUnknownUsernames: true
+        DisableLoginWithEmail: false
+        DisableLoginWithPhone: true
+      SMTPConfiguration:
+        SMTP:
+          Host: stalwart.mail.svc.cluster.local:587
+          User: noreply@lurus.cn
+          Password: Lurus@ops
+        TLS: true
+        From: noreply@lurus.cn
+        FromName: Lurus
 
     OIDC:
       AccessTokenLifetime: 1h
