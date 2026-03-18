@@ -78,6 +78,14 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "200m"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 18900
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 20
+            timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: /health
