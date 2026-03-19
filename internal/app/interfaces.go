@@ -43,6 +43,23 @@ type walletStore interface {
 	RedeemCode(ctx context.Context, accountID int64, code string) (*entity.WalletTransaction, error)
 	// ExpireStalePendingOrders marks pending orders older than maxAge as expired.
 	ExpireStalePendingOrders(ctx context.Context, maxAge time.Duration) (int64, error)
+	// GetPendingOrderByIdempotencyKey returns a pending order matching the key, or nil.
+	GetPendingOrderByIdempotencyKey(ctx context.Context, key string) (*entity.PaymentOrder, error)
+
+	// Pre-authorization methods for streaming API calls.
+	CreatePreAuth(ctx context.Context, pa *entity.WalletPreAuthorization) error
+	GetPreAuthByID(ctx context.Context, id int64) (*entity.WalletPreAuthorization, error)
+	GetPreAuthByReference(ctx context.Context, productID, referenceID string) (*entity.WalletPreAuthorization, error)
+	// SettlePreAuth atomically transitions active→settled with actual amount.
+	SettlePreAuth(ctx context.Context, id int64, actualAmount float64) (*entity.WalletPreAuthorization, error)
+	// ReleasePreAuth atomically transitions active→released, unfreezing the hold.
+	ReleasePreAuth(ctx context.Context, id int64) (*entity.WalletPreAuthorization, error)
+	// ExpireStalePreAuths marks active pre-auths past their deadline as expired and unfreezes.
+	ExpireStalePreAuths(ctx context.Context) (int64, error)
+	// CountActivePreAuths returns the number of active pre-authorizations for an account.
+	CountActivePreAuths(ctx context.Context, accountID int64) (int64, error)
+	// CountPendingOrders returns the number of pending payment orders for an account.
+	CountPendingOrders(ctx context.Context, accountID int64) (int64, error)
 }
 
 // vipStore is the minimal DB interface required by VIPService.

@@ -66,7 +66,7 @@ func (s *Server) ListenAndServe(ctx context.Context, port int) error {
 
 	srv := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.ChainUnaryInterceptor(otelgrpc.UnaryServerInterceptor(), s.authInterceptor),
+		grpc.ChainUnaryInterceptor(s.authInterceptor),
 	)
 	identityv1.RegisterIdentityServiceServer(srv, s)
 

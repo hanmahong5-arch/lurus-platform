@@ -103,3 +103,9 @@ func (a *WalletActivities) MarkOrderPaid(ctx context.Context, orderNo string) (*
 func (a *WalletActivities) ExpireStalePendingOrders(ctx context.Context) (int64, error) {
 	return a.Wallets.ExpireStalePendingOrders(ctx, 24*time.Hour)
 }
+
+// ExpireStalePreAuths marks active pre-authorizations past their deadline as expired
+// and unfreezes the held balance back to the wallet.
+func (a *WalletActivities) ExpireStalePreAuths(ctx context.Context) (int64, error) {
+	return a.Wallets.ExpireStalePreAuths(ctx)
+}

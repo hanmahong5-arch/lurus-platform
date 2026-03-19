@@ -288,6 +288,42 @@ func (m *mockWalletStore) ExpireStalePendingOrders(_ context.Context, _ time.Dur
 	return 0, nil
 }
 
+func (m *mockWalletStore) GetPendingOrderByIdempotencyKey(_ context.Context, _ string) (*entity.PaymentOrder, error) {
+	return nil, nil
+}
+
+func (m *mockWalletStore) CreatePreAuth(_ context.Context, _ *entity.WalletPreAuthorization) error {
+	return nil
+}
+
+func (m *mockWalletStore) GetPreAuthByID(_ context.Context, _ int64) (*entity.WalletPreAuthorization, error) {
+	return nil, nil
+}
+
+func (m *mockWalletStore) GetPreAuthByReference(_ context.Context, _, _ string) (*entity.WalletPreAuthorization, error) {
+	return nil, nil
+}
+
+func (m *mockWalletStore) SettlePreAuth(_ context.Context, _ int64, _ float64) (*entity.WalletPreAuthorization, error) {
+	return nil, nil
+}
+
+func (m *mockWalletStore) ReleasePreAuth(_ context.Context, _ int64) (*entity.WalletPreAuthorization, error) {
+	return nil, nil
+}
+
+func (m *mockWalletStore) ExpireStalePreAuths(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockWalletStore) CountActivePreAuths(_ context.Context, _ int64) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockWalletStore) CountPendingOrders(_ context.Context, _ int64) (int64, error) {
+	return 0, nil
+}
+
 // ---------- mock vip store ----------
 
 type mockVIPStore struct {

@@ -202,6 +202,7 @@ func TestExpiryScannerWorkflow_WithGraceExpired(t *testing.T) {
 	env.OnActivity("EndGrace", mock.Anything, int64(2)).Return(nil)
 	env.OnActivity("PublishToNATS", mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity("ExpireStalePendingOrders", mock.Anything).Return(int64(0), nil)
+	env.OnActivity("ExpireStalePreAuths", mock.Anything).Return(int64(0), nil)
 
 	env.ExecuteWorkflow(ExpiryScannerWorkflow)
 
@@ -215,6 +216,7 @@ func TestExpiryScannerWorkflow_EmptyLists(t *testing.T) {
 	env.OnActivity("ListActiveExpired", mock.Anything).Return([]activities.SubscriptionSummary{}, nil)
 	env.OnActivity("ListGraceExpired", mock.Anything).Return([]activities.SubscriptionSummary{}, nil)
 	env.OnActivity("ExpireStalePendingOrders", mock.Anything).Return(int64(0), nil)
+	env.OnActivity("ExpireStalePreAuths", mock.Anything).Return(int64(0), nil)
 
 	env.ExecuteWorkflow(ExpiryScannerWorkflow)
 

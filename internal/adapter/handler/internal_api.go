@@ -3,9 +3,12 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
+	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 )
 
@@ -23,6 +26,9 @@ type InternalHandler struct {
 	wallet        *app.WalletService
 	referral      *app.ReferralService
 	sessionSecret string
+	epay          *payment.EpayProvider
+	stripe        *payment.StripeProvider
+	creem         *payment.CreemProvider
 }
 
 func NewInternalHandler(
@@ -45,6 +51,14 @@ func NewInternalHandler(
 		referral:      referral,
 		sessionSecret: sessionSecret,
 	}
+}
+
+// WithPaymentProviders sets payment providers for checkout resolution.
+func (h *InternalHandler) WithPaymentProviders(epay *payment.EpayProvider, stripe *payment.StripeProvider, creem *payment.CreemProvider) *InternalHandler {
+	h.epay = epay
+	h.stripe = stripe
+	h.creem = creem
+	return h
 }
 
 // GetAccountByZitadelSub looks up an account by Zitadel OIDC sub.
@@ -293,8 +307,24 @@ func (h *InternalHandler) ValidateSession(c *gin.Context) {
 	c.JSON(http.StatusOK, a)
 }
 
-// CreditWallet adds LB to an account wallet (e.g. marketplace author revenue).
-// POST /internal/v1/accounts/:id/wallet/credit
+// GetBillingSummary returns an aggregated billing overview for an account.
+// GET /internal/v1/accounts/:id/billing-summary
+func (h *InternalHandler) GetBillingSummary(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+		return
+	}
+	summary, err := h.wallet.GetBillingSummary(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "billing summary lookup failed"})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
+// CreditWallet adds LB to an account wallet (admin-only, e.g. marketplace author revenue).
+// POST /admin/v1/accounts/:id/wallet/credit
 func (h *InternalHandler) CreditWallet(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -317,4 +347,221 @@ func (h *InternalHandler) CreditWallet(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "balance_after": tx.BalanceAfter})
+}
+
+// CreateCheckout creates a checkout session for a cross-service topup.
+// POST /internal/v1/checkout/create
+func (h *InternalHandler) CreateCheckout(c *gin.Context) {
+	var req struct {
+		AccountID      int64   `json:"account_id"      binding:"required"`
+		AmountCNY      float64 `json:"amount_cny"      binding:"required,gt=0"`
+		PaymentMethod  string  `json:"payment_method"  binding:"required"`
+		SourceService  string  `json:"source_service"  binding:"required"`
+		IdempotencyKey string  `json:"idempotency_key"`
+		ReturnURL      string  `json:"return_url"`
+		TTLSeconds     int     `json:"ttl_seconds"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.AmountCNY < minTopupCNY {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_cny must be at least 1.00"})
+		return
+	}
+	if req.AmountCNY > maxTopupCNY {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_cny exceeds maximum allowed per transaction"})
+		return
+	}
+	if !validPaymentMethods[req.PaymentMethod] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported payment method"})
+		return
+	}
+
+	ttl := 30 * time.Minute
+	if req.TTLSeconds > 0 {
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+	}
+
+	order, err := h.wallet.CreateCheckoutSession(c.Request.Context(),
+		req.AccountID, req.AmountCNY, req.PaymentMethod, req.SourceService, req.IdempotencyKey, ttl)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create checkout session"})
+		return
+	}
+
+	// Resolve payment URL via provider.
+	returnURL := req.ReturnURL
+	if returnURL == "" {
+		returnURL = "/topup/result"
+	}
+	payURL, externalID, err := h.resolveCheckout(c, order, returnURL)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if externalID != "" {
+		order.ExternalID = externalID
+	}
+	order.PayURL = payURL
+	_ = h.wallet.UpdatePaymentOrder(c.Request.Context(), order)
+
+	c.JSON(http.StatusCreated, gin.H{
+		"order_no": order.OrderNo,
+		"pay_url":  payURL,
+		"status":   order.Status,
+		"expires_at": order.ExpiresAt,
+	})
+}
+
+// GetCheckoutStatus returns the status of a checkout order.
+// GET /internal/v1/checkout/:order_no/status
+func (h *InternalHandler) GetCheckoutStatus(c *gin.Context) {
+	orderNo := c.Param("order_no")
+	order, err := h.wallet.GetCheckoutStatus(c.Request.Context(), orderNo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"order_no":   order.OrderNo,
+		"status":     order.Status,
+		"amount_cny": order.AmountCNY,
+		"pay_url":    order.PayURL,
+		"paid_at":    order.PaidAt,
+		"expires_at": order.ExpiresAt,
+	})
+}
+
+// GetPaymentMethods returns the list of available payment methods.
+// GET /internal/v1/payment-methods
+func (h *InternalHandler) GetPaymentMethods(c *gin.Context) {
+	methods := make([]gin.H, 0, 4)
+	if h.epay != nil {
+		methods = append(methods,
+			gin.H{"id": "epay_alipay", "name": "支付宝", "provider": "epay", "type": "qr"},
+			gin.H{"id": "epay_wechat", "name": "微信支付", "provider": "epay", "type": "qr"},
+		)
+	}
+	if h.stripe != nil {
+		methods = append(methods, gin.H{"id": "stripe", "name": "信用卡 (Stripe)", "provider": "stripe", "type": "redirect"})
+	}
+	if h.creem != nil {
+		methods = append(methods, gin.H{"id": "creem", "name": "Creem", "provider": "creem", "type": "redirect"})
+	}
+	c.JSON(http.StatusOK, gin.H{"payment_methods": methods})
+}
+
+// PreAuthorize creates a pre-authorization hold on a wallet.
+// POST /internal/v1/accounts/:id/wallet/pre-authorize
+func (h *InternalHandler) PreAuthorize(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+		return
+	}
+	var req struct {
+		Amount      float64 `json:"amount"       binding:"required,gt=0"`
+		ProductID   string  `json:"product_id"   binding:"required"`
+		ReferenceID string  `json:"reference_id"`
+		Description string  `json:"description"`
+		TTLSeconds  int     `json:"ttl_seconds"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ttl := 10 * time.Minute
+	if req.TTLSeconds > 0 {
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+	}
+
+	pa, err := h.wallet.PreAuthorize(c.Request.Context(), id, req.Amount, req.ProductID, req.ReferenceID, req.Description, ttl)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"preauth_id": pa.ID,
+		"amount":     pa.Amount,
+		"expires_at": pa.ExpiresAt,
+		"status":     pa.Status,
+	})
+}
+
+// SettlePreAuth settles a pre-authorization with the actual charge amount.
+// POST /internal/v1/wallet/pre-auth/:id/settle
+func (h *InternalHandler) SettlePreAuth(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid preauth id"})
+		return
+	}
+	var req struct {
+		ActualAmount float64 `json:"actual_amount" binding:"required,gte=0"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	pa, err := h.wallet.SettlePreAuth(c.Request.Context(), id, req.ActualAmount)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"preauth_id":    pa.ID,
+		"status":        pa.Status,
+		"held_amount":   pa.Amount,
+		"actual_amount": pa.ActualAmount,
+		"settled_at":    pa.SettledAt,
+	})
+}
+
+// ReleasePreAuth releases a pre-authorization, unfreezing the hold.
+// POST /internal/v1/wallet/pre-auth/:id/release
+func (h *InternalHandler) ReleasePreAuth(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid preauth id"})
+		return
+	}
+
+	pa, err := h.wallet.ReleasePreAuth(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"preauth_id": pa.ID,
+		"status":     pa.Status,
+		"amount":     pa.Amount,
+	})
+}
+
+// resolveCheckout routes the order to the correct payment provider.
+func (h *InternalHandler) resolveCheckout(c *gin.Context, order *entity.PaymentOrder, returnURL string) (payURL, externalID string, err error) {
+	switch order.PaymentMethod {
+	case "epay_alipay", "epay_wxpay", "epay_wechat":
+		if h.epay == nil {
+			return "", "", &providerError{name: "epay"}
+		}
+		return h.epay.CreateCheckout(c.Request.Context(), order, returnURL)
+	case "stripe":
+		if h.stripe == nil {
+			return "", "", &providerError{name: "stripe"}
+		}
+		return h.stripe.CreateCheckout(c.Request.Context(), order, returnURL)
+	case "creem":
+		if h.creem == nil {
+			return "", "", &providerError{name: "creem"}
+		}
+		return h.creem.CreateCheckout(c.Request.Context(), order, returnURL)
+	default:
+		return "", "", &providerError{name: order.PaymentMethod}
+	}
 }

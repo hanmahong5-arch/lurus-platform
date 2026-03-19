@@ -289,12 +289,215 @@ func (r *WalletRepo) RedeemCode(ctx context.Context, accountID int64, code strin
 }
 
 // ExpireStalePendingOrders marks pending orders older than maxAge as expired.
+// Prefers expires_at when set; falls back to created_at + maxAge for legacy orders.
 func (r *WalletRepo) ExpireStalePendingOrders(ctx context.Context, maxAge time.Duration) (int64, error) {
-	cutoff := time.Now().UTC().Add(-maxAge)
+	now := time.Now().UTC()
+	cutoff := now.Add(-maxAge)
 	result := r.db.WithContext(ctx).
 		Model(&entity.PaymentOrder{}).
-		Where("status = ? AND created_at < ?", entity.OrderStatusPending, cutoff).
-		Update("status", "expired")
+		Where("status = ? AND ((expires_at IS NOT NULL AND expires_at < ?) OR (expires_at IS NULL AND created_at < ?))",
+			entity.OrderStatusPending, now, cutoff).
+		Update("status", entity.OrderStatusExpired)
 	return result.RowsAffected, result.Error
+}
+
+// GetPendingOrderByIdempotencyKey returns a pending order matching the key, or nil.
+func (r *WalletRepo) GetPendingOrderByIdempotencyKey(ctx context.Context, key string) (*entity.PaymentOrder, error) {
+	var o entity.PaymentOrder
+	err := r.db.WithContext(ctx).
+		Where("idempotency_key = ? AND status = ?", key, entity.OrderStatusPending).
+		First(&o).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &o, err
+}
+
+// CountActivePreAuths returns the number of active pre-authorizations for an account.
+func (r *WalletRepo) CountActivePreAuths(ctx context.Context, accountID int64) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&entity.WalletPreAuthorization{}).
+		Where("account_id = ? AND status = ?", accountID, entity.PreAuthStatusActive).
+		Count(&count).Error
+	return count, err
+}
+
+// CountPendingOrders returns the number of pending payment orders for an account.
+func (r *WalletRepo) CountPendingOrders(ctx context.Context, accountID int64) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&entity.PaymentOrder{}).
+		Where("account_id = ? AND status = ?", accountID, entity.OrderStatusPending).
+		Count(&count).Error
+	return count, err
+}
+
+// --- Pre-authorization methods ---
+
+// CreatePreAuth inserts a new pre-authorization and freezes the amount on the wallet.
+func (r *WalletRepo) CreatePreAuth(ctx context.Context, pa *entity.WalletPreAuthorization) error {
+	return r.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
+		// Lock wallet and freeze amount.
+		var w entity.Wallet
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("account_id = ?", pa.AccountID).First(&w).Error; err != nil {
+			return fmt.Errorf("lock wallet: %w", err)
+		}
+		if w.Balance-w.Frozen < pa.Amount {
+			return fmt.Errorf("insufficient available balance: have %.4f, need %.4f (frozen: %.4f)",
+				w.Balance, pa.Amount, w.Frozen)
+		}
+		if err := db.Model(&w).Update("frozen", gorm.Expr("frozen + ?", pa.Amount)).Error; err != nil {
+			return fmt.Errorf("freeze amount: %w", err)
+		}
+		pa.WalletID = w.ID
+		pa.Status = entity.PreAuthStatusActive
+		return db.Create(pa).Error
+	})
+}
+
+// GetPreAuthByID returns a pre-authorization by its ID.
+func (r *WalletRepo) GetPreAuthByID(ctx context.Context, id int64) (*entity.WalletPreAuthorization, error) {
+	var pa entity.WalletPreAuthorization
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&pa).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &pa, err
+}
+
+// GetPreAuthByReference returns a pre-authorization by product+reference pair.
+func (r *WalletRepo) GetPreAuthByReference(ctx context.Context, productID, referenceID string) (*entity.WalletPreAuthorization, error) {
+	var pa entity.WalletPreAuthorization
+	err := r.db.WithContext(ctx).
+		Where("product_id = ? AND reference_id = ?", productID, referenceID).
+		First(&pa).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &pa, err
+}
+
+// SettlePreAuth atomically settles a pre-auth: charges actual_amount, unfreezes the hold,
+// and creates a debit ledger entry.
+func (r *WalletRepo) SettlePreAuth(ctx context.Context, id int64, actualAmount float64) (*entity.WalletPreAuthorization, error) {
+	var pa entity.WalletPreAuthorization
+	err := r.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
+		// Lock the pre-auth row.
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND status = ?", id, entity.PreAuthStatusActive).
+			First(&pa).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("pre-auth %d not found or not active", id)
+			}
+			return fmt.Errorf("lock pre-auth: %w", err)
+		}
+
+		now := time.Now().UTC()
+		pa.ActualAmount = &actualAmount
+		pa.Status = entity.PreAuthStatusSettled
+		pa.SettledAt = &now
+		if err := db.Save(&pa).Error; err != nil {
+			return fmt.Errorf("update pre-auth: %w", err)
+		}
+
+		// Lock wallet: unfreeze the held amount, debit actual amount.
+		var w entity.Wallet
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", pa.WalletID).First(&w).Error; err != nil {
+			return fmt.Errorf("lock wallet: %w", err)
+		}
+
+		// Unfreeze the original hold.
+		if err := db.Model(&w).Updates(map[string]any{
+			"frozen":         gorm.Expr("frozen - ?", pa.Amount),
+			"balance":        gorm.Expr("balance - ?", actualAmount),
+			"lifetime_spend": gorm.Expr("lifetime_spend + ?", actualAmount),
+		}).Error; err != nil {
+			return fmt.Errorf("settle wallet: %w", err)
+		}
+
+		// Re-read for balance_after.
+		if err := db.Where("id = ?", w.ID).First(&w).Error; err != nil {
+			return fmt.Errorf("re-read wallet: %w", err)
+		}
+
+		// Ledger entry.
+		tx := entity.WalletTransaction{
+			WalletID:      w.ID,
+			AccountID:     pa.AccountID,
+			Type:          entity.TxTypePreAuthSettle,
+			Amount:        -actualAmount,
+			BalanceAfter:  w.Balance,
+			ProductID:     pa.ProductID,
+			ReferenceType: "pre_auth",
+			ReferenceID:   fmt.Sprintf("%d", pa.ID),
+			Description:   pa.Description,
+		}
+		return db.Create(&tx).Error
+	})
+	return &pa, err
+}
+
+// ReleasePreAuth atomically releases a pre-auth hold, returning the frozen amount.
+func (r *WalletRepo) ReleasePreAuth(ctx context.Context, id int64) (*entity.WalletPreAuthorization, error) {
+	var pa entity.WalletPreAuthorization
+	err := r.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
+		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND status = ?", id, entity.PreAuthStatusActive).
+			First(&pa).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("pre-auth %d not found or not active", id)
+			}
+			return fmt.Errorf("lock pre-auth: %w", err)
+		}
+
+		pa.Status = entity.PreAuthStatusReleased
+		if err := db.Save(&pa).Error; err != nil {
+			return fmt.Errorf("update pre-auth: %w", err)
+		}
+
+		// Unfreeze wallet.
+		return db.Model(&entity.Wallet{}).Where("id = ?", pa.WalletID).
+			Update("frozen", gorm.Expr("frozen - ?", pa.Amount)).Error
+	})
+	return &pa, err
+}
+
+// ExpireStalePreAuths marks active pre-auths past their expires_at as expired and unfreezes.
+func (r *WalletRepo) ExpireStalePreAuths(ctx context.Context) (int64, error) {
+	now := time.Now().UTC()
+	var expired []entity.WalletPreAuthorization
+	if err := r.db.WithContext(ctx).
+		Where("status = ? AND expires_at < ?", entity.PreAuthStatusActive, now).
+		Find(&expired).Error; err != nil {
+		return 0, err
+	}
+	if len(expired) == 0 {
+		return 0, nil
+	}
+
+	var count int64
+	for _, pa := range expired {
+		err := r.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
+			result := db.Model(&entity.WalletPreAuthorization{}).
+				Where("id = ? AND status = ?", pa.ID, entity.PreAuthStatusActive).
+				Update("status", entity.PreAuthStatusExpired)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return nil // already transitioned by another process
+			}
+			return db.Model(&entity.Wallet{}).Where("id = ?", pa.WalletID).
+				Update("frozen", gorm.Expr("frozen - ?", pa.Amount)).Error
+		})
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
 }
 

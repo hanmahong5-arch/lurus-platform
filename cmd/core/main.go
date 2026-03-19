@@ -257,7 +257,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 	subH := handler.NewSubscriptionHandler(subSvc, productSvc, walletSvc, epayProvider, stripeProvider, creemProvider)
 	walletH := handler.NewWalletHandler(walletSvc, epayProvider, stripeProvider, creemProvider)
 	productH := handler.NewProductHandler(productSvc)
-	internalH := handler.NewInternalHandler(accountSvc, subSvc, entSvc, vipSvc, overviewSvc, walletSvc, referralSvc, cfg.SessionSecret)
+	internalH := handler.NewInternalHandler(accountSvc, subSvc, entSvc, vipSvc, overviewSvc, walletSvc, referralSvc, cfg.SessionSecret).
+		WithPaymentProviders(epayProvider, stripeProvider, creemProvider)
 	webhookH := handler.NewWebhookHandler(walletSvc, subSvc, epayProvider, stripeProvider, creemProvider, webhookDeduper)
 	invoiceH := handler.NewInvoiceHandler(invoiceSvc)
 	refundH := handler.NewRefundHandler(refundSvc)
@@ -407,6 +408,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 			return temporalWorker.Run(gctx)
 		})
 	}
+
+	// Reconciliation worker: periodic cleanup of stale payment orders and pre-auths.
+	// Runs every 5 minutes as a lightweight complement to the hourly Temporal ExpiryScanner.
+	reconciler := app.NewReconciliationWorker(walletSvc)
+	g.Go(func() error {
+		reconciler.Start(gctx)
+		return nil
+	})
 
 	// Graceful shutdown trigger
 	g.Go(func() error {

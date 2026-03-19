@@ -180,20 +180,24 @@ func (m *mockAccountStore) GetByOAuthBinding(_ context.Context, provider, provid
 // ── walletStore mock ──────────────────────────────────────────────────────────
 
 type mockWalletStore struct {
-	mu      sync.Mutex
-	wallets map[int64]*entity.Wallet
-	txs     []entity.WalletTransaction
-	orders  map[string]*entity.PaymentOrder
-	codes   map[string]*entity.RedemptionCode
-	nextWID int64
+	mu       sync.Mutex
+	wallets  map[int64]*entity.Wallet
+	txs      []entity.WalletTransaction
+	orders   map[string]*entity.PaymentOrder
+	codes    map[string]*entity.RedemptionCode
+	preauths map[int64]*entity.WalletPreAuthorization
+	nextWID  int64
+	nextPAID int64
 }
 
 func newMockWalletStore() *mockWalletStore {
 	return &mockWalletStore{
-		wallets: make(map[int64]*entity.Wallet),
-		orders:  make(map[string]*entity.PaymentOrder),
-		codes:   make(map[string]*entity.RedemptionCode),
-		nextWID: 1,
+		wallets:  make(map[int64]*entity.Wallet),
+		orders:   make(map[string]*entity.PaymentOrder),
+		codes:    make(map[string]*entity.RedemptionCode),
+		preauths: make(map[int64]*entity.WalletPreAuthorization),
+		nextWID:  1,
+		nextPAID: 1,
 	}
 }
 
@@ -402,6 +406,147 @@ func (m *mockWalletStore) RedeemCode(_ context.Context, accountID int64, code st
 	m.txs = append(m.txs, tx)
 	cp := tx
 	return &cp, nil
+}
+
+func (m *mockWalletStore) GetPendingOrderByIdempotencyKey(_ context.Context, key string) (*entity.PaymentOrder, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, o := range m.orders {
+		if o.IdempotencyKey == key && o.Status == entity.OrderStatusPending {
+			cp := *o
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockWalletStore) CreatePreAuth(_ context.Context, pa *entity.WalletPreAuthorization) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, ok := m.wallets[pa.AccountID]
+	if !ok {
+		return fmt.Errorf("wallet not found for account %d", pa.AccountID)
+	}
+	if w.Balance-w.Frozen < pa.Amount {
+		return fmt.Errorf("insufficient available balance")
+	}
+	w.Frozen += pa.Amount
+	pa.ID = m.nextPAID
+	m.nextPAID++
+	pa.WalletID = w.ID
+	pa.Status = entity.PreAuthStatusActive
+	cp := *pa
+	m.preauths[cp.ID] = &cp
+	return nil
+}
+
+func (m *mockWalletStore) GetPreAuthByID(_ context.Context, id int64) (*entity.WalletPreAuthorization, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pa, ok := m.preauths[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *pa
+	return &cp, nil
+}
+
+func (m *mockWalletStore) GetPreAuthByReference(_ context.Context, productID, referenceID string) (*entity.WalletPreAuthorization, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, pa := range m.preauths {
+		if pa.ProductID == productID && pa.ReferenceID == referenceID {
+			cp := *pa
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockWalletStore) SettlePreAuth(_ context.Context, id int64, actualAmount float64) (*entity.WalletPreAuthorization, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pa, ok := m.preauths[id]
+	if !ok {
+		return nil, fmt.Errorf("pre-auth %d not found", id)
+	}
+	if pa.Status != entity.PreAuthStatusActive {
+		return nil, fmt.Errorf("pre-auth %d not active", id)
+	}
+	w, ok := m.wallets[pa.AccountID]
+	if !ok {
+		return nil, fmt.Errorf("wallet not found")
+	}
+	now := time.Now().UTC()
+	pa.ActualAmount = &actualAmount
+	pa.Status = entity.PreAuthStatusSettled
+	pa.SettledAt = &now
+	w.Frozen -= pa.Amount
+	w.Balance -= actualAmount
+	w.LifetimeSpend += actualAmount
+	cp := *pa
+	return &cp, nil
+}
+
+func (m *mockWalletStore) ReleasePreAuth(_ context.Context, id int64) (*entity.WalletPreAuthorization, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pa, ok := m.preauths[id]
+	if !ok {
+		return nil, fmt.Errorf("pre-auth %d not found", id)
+	}
+	if pa.Status != entity.PreAuthStatusActive {
+		return nil, fmt.Errorf("pre-auth %d not active", id)
+	}
+	w, ok := m.wallets[pa.AccountID]
+	if !ok {
+		return nil, fmt.Errorf("wallet not found")
+	}
+	pa.Status = entity.PreAuthStatusReleased
+	w.Frozen -= pa.Amount
+	cp := *pa
+	return &cp, nil
+}
+
+func (m *mockWalletStore) ExpireStalePreAuths(_ context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	var count int64
+	for _, pa := range m.preauths {
+		if pa.Status == entity.PreAuthStatusActive && pa.ExpiresAt.Before(now) {
+			pa.Status = entity.PreAuthStatusExpired
+			if w, ok := m.wallets[pa.AccountID]; ok {
+				w.Frozen -= pa.Amount
+			}
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *mockWalletStore) CountActivePreAuths(_ context.Context, accountID int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, pa := range m.preauths {
+		if pa.AccountID == accountID && pa.Status == entity.PreAuthStatusActive {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *mockWalletStore) CountPendingOrders(_ context.Context, accountID int64) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, o := range m.orders {
+		if o.AccountID == accountID && o.Status == entity.OrderStatusPending {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // ── vipStore mock ─────────────────────────────────────────────────────────────

@@ -282,6 +282,42 @@ func (m *grpcMockWalletStore) ExpireStalePendingOrders(_ context.Context, _ time
 	return 0, nil
 }
 
+func (m *grpcMockWalletStore) CountActivePreAuths(_ context.Context, _ int64) (int64, error) {
+	return 0, nil
+}
+
+func (m *grpcMockWalletStore) CountPendingOrders(_ context.Context, _ int64) (int64, error) {
+	return 0, nil
+}
+
+func (m *grpcMockWalletStore) GetPendingOrderByIdempotencyKey(_ context.Context, _ string) (*entity.PaymentOrder, error) {
+	return nil, nil
+}
+
+func (m *grpcMockWalletStore) CreatePreAuth(_ context.Context, _ *entity.WalletPreAuthorization) error {
+	return nil
+}
+
+func (m *grpcMockWalletStore) GetPreAuthByID(_ context.Context, _ int64) (*entity.WalletPreAuthorization, error) {
+	return nil, nil
+}
+
+func (m *grpcMockWalletStore) GetPreAuthByReference(_ context.Context, _, _ string) (*entity.WalletPreAuthorization, error) {
+	return nil, nil
+}
+
+func (m *grpcMockWalletStore) SettlePreAuth(_ context.Context, _ int64, _ float64) (*entity.WalletPreAuthorization, error) {
+	return nil, nil
+}
+
+func (m *grpcMockWalletStore) ReleasePreAuth(_ context.Context, _ int64) (*entity.WalletPreAuthorization, error) {
+	return nil, nil
+}
+
+func (m *grpcMockWalletStore) ExpireStalePreAuths(_ context.Context) (int64, error) {
+	return 0, nil
+}
+
 // grpcMockVIPStore satisfies app.vipStore.
 type grpcMockVIPStore struct {
 	mu  sync.Mutex

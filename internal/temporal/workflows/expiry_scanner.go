@@ -64,6 +64,9 @@ func ExpiryScannerWorkflow(ctx workflow.Context) error {
 	// Phase 3: Expire stale pending payment orders (>24h).
 	_ = workflow.ExecuteActivity(ctx, "ExpireStalePendingOrders").Get(ctx, nil)
 
+	// Phase 4: Expire stale pre-authorizations past their deadline and unfreeze held balance.
+	_ = workflow.ExecuteActivity(ctx, "ExpireStalePreAuths").Get(ctx, nil)
+
 	return nil
 }
 

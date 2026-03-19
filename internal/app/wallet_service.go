@@ -189,10 +189,199 @@ func (s *WalletService) GetOrderByNo(ctx context.Context, accountID int64, order
 	return o, nil
 }
 
+// BillingSummary holds aggregated billing information for an account.
+type BillingSummary struct {
+	Balance        float64 `json:"balance"`
+	Frozen         float64 `json:"frozen"`
+	Available      float64 `json:"available"`
+	LifetimeTopup  float64 `json:"lifetime_topup"`
+	LifetimeSpend  float64 `json:"lifetime_spend"`
+	ActivePreAuths int64   `json:"active_pre_auths"`
+	PendingOrders  int64   `json:"pending_orders"`
+}
+
+// GetBillingSummary returns an aggregated billing overview for an account.
+func (s *WalletService) GetBillingSummary(ctx context.Context, accountID int64) (*BillingSummary, error) {
+	w, err := s.wallets.GetByAccountID(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("get wallet: %w", err)
+	}
+	if w == nil {
+		// Account has no wallet yet — return zeroed summary.
+		return &BillingSummary{}, nil
+	}
+
+	preAuths, err := s.wallets.CountActivePreAuths(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("count active pre-auths: %w", err)
+	}
+
+	pendingOrders, err := s.wallets.CountPendingOrders(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("count pending orders: %w", err)
+	}
+
+	return &BillingSummary{
+		Balance:        w.Balance,
+		Frozen:         w.Frozen,
+		Available:      w.Balance - w.Frozen,
+		LifetimeTopup:  w.LifetimeTopup,
+		LifetimeSpend:  w.LifetimeSpend,
+		ActivePreAuths: preAuths,
+		PendingOrders:  pendingOrders,
+	}, nil
+}
+
 // ExpireStalePendingOrders marks pending orders older than maxAge as expired.
 // Returns the number of orders expired.
 func (s *WalletService) ExpireStalePendingOrders(ctx context.Context, maxAge time.Duration) (int64, error) {
 	return s.wallets.ExpireStalePendingOrders(ctx, maxAge)
+}
+
+// ExpireStalePreAuths marks active pre-authorizations past their deadline as expired.
+func (s *WalletService) ExpireStalePreAuths(ctx context.Context) (int64, error) {
+	return s.wallets.ExpireStalePreAuths(ctx)
+}
+
+// CreateCheckoutSession creates a checkout order initiated by an external product service.
+// If idempotencyKey is provided and a pending order exists with that key, returns it.
+func (s *WalletService) CreateCheckoutSession(ctx context.Context, accountID int64, amountCNY float64, method, sourceService, idempotencyKey string, ttl time.Duration) (*entity.PaymentOrder, error) {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "wallet.create_checkout_session")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int64("account.id", accountID),
+		attribute.Float64("amount.cny", amountCNY),
+		attribute.String("payment.method", method),
+		attribute.String("source.service", sourceService),
+	)
+
+	if amountCNY <= 0 {
+		return nil, fmt.Errorf("amount must be positive")
+	}
+
+	// Idempotency: if key provided, check for existing pending order.
+	if idempotencyKey != "" {
+		existing, err := s.wallets.GetPendingOrderByIdempotencyKey(ctx, idempotencyKey)
+		if err != nil {
+			return nil, fmt.Errorf("idempotency check: %w", err)
+		}
+		if existing != nil {
+			slog.Info("wallet/checkout: returning existing order for idempotency key",
+				"order_no", existing.OrderNo, "idempotency_key", idempotencyKey)
+			return existing, nil
+		}
+	}
+
+	if ttl == 0 {
+		ttl = 30 * time.Minute
+	}
+	expiresAt := time.Now().UTC().Add(ttl)
+
+	o := &entity.PaymentOrder{
+		AccountID:      accountID,
+		OrderNo:        generateOrderNo(accountID),
+		OrderType:      "topup",
+		AmountCNY:      amountCNY,
+		Currency:       "CNY",
+		PaymentMethod:  method,
+		Status:         entity.OrderStatusPending,
+		SourceService:  sourceService,
+		IdempotencyKey: idempotencyKey,
+		ExpiresAt:      &expiresAt,
+	}
+	if err := s.wallets.CreatePaymentOrder(ctx, o); err != nil {
+		return nil, fmt.Errorf("create payment order: %w", err)
+	}
+	slog.Info("wallet/checkout: order created",
+		"order_no", o.OrderNo, "account_id", accountID, "amount_cny", amountCNY,
+		"method", method, "source", sourceService, "expires_at", expiresAt)
+	return o, nil
+}
+
+// GetCheckoutStatus returns the current status of a checkout order.
+// Does NOT require account_id ownership check — internal API trusts the caller.
+func (s *WalletService) GetCheckoutStatus(ctx context.Context, orderNo string) (*entity.PaymentOrder, error) {
+	o, err := s.wallets.GetPaymentOrderByNo(ctx, orderNo)
+	if err != nil {
+		return nil, err
+	}
+	if o == nil {
+		return nil, fmt.Errorf("order %s not found", orderNo)
+	}
+	return o, nil
+}
+
+// PreAuthorize freezes an amount on the wallet for later settlement.
+func (s *WalletService) PreAuthorize(ctx context.Context, accountID int64, amount float64, productID, referenceID, description string, ttl time.Duration) (*entity.WalletPreAuthorization, error) {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "wallet.pre_authorize")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int64("account.id", accountID),
+		attribute.Float64("amount", amount),
+		attribute.String("product.id", productID),
+	)
+
+	if amount <= 0 {
+		return nil, fmt.Errorf("amount must be positive")
+	}
+	if ttl == 0 {
+		ttl = 10 * time.Minute
+	}
+
+	pa := &entity.WalletPreAuthorization{
+		AccountID:   accountID,
+		Amount:      amount,
+		ProductID:   productID,
+		ReferenceID: referenceID,
+		Description: description,
+		ExpiresAt:   time.Now().UTC().Add(ttl),
+	}
+	if err := s.wallets.CreatePreAuth(ctx, pa); err != nil {
+		slog.Warn("wallet/pre-authorize: failed", "account_id", accountID, "amount", amount, "product_id", productID, "err", err)
+		return nil, err
+	}
+	slog.Info("wallet/pre-authorize", "id", pa.ID, "account_id", accountID, "amount", amount, "product_id", productID, "expires_at", pa.ExpiresAt)
+	metrics.RecordWalletOperation("pre_authorize", "success")
+	return pa, nil
+}
+
+// SettlePreAuth charges the actual amount and releases the hold.
+func (s *WalletService) SettlePreAuth(ctx context.Context, preAuthID int64, actualAmount float64) (*entity.WalletPreAuthorization, error) {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "wallet.settle_pre_auth")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int64("preauth.id", preAuthID),
+		attribute.Float64("actual_amount", actualAmount),
+	)
+
+	if actualAmount < 0 {
+		return nil, fmt.Errorf("actual amount must be non-negative")
+	}
+	pa, err := s.wallets.SettlePreAuth(ctx, preAuthID, actualAmount)
+	if err != nil {
+		slog.Warn("wallet/settle-pre-auth: failed", "preauth_id", preAuthID, "actual_amount", actualAmount, "err", err)
+		return nil, err
+	}
+	slog.Info("wallet/settle-pre-auth", "id", pa.ID, "account_id", pa.AccountID, "held", pa.Amount, "actual", actualAmount)
+	metrics.RecordWalletOperation("settle_pre_auth", "success")
+	metrics.RecordWalletAmount("settle_pre_auth", actualAmount)
+	return pa, nil
+}
+
+// ReleasePreAuth cancels a pre-auth hold, unfreezing the amount.
+func (s *WalletService) ReleasePreAuth(ctx context.Context, preAuthID int64) (*entity.WalletPreAuthorization, error) {
+	ctx, span := tracing.Tracer("lurus-platform").Start(ctx, "wallet.release_pre_auth")
+	defer span.End()
+	span.SetAttributes(attribute.Int64("preauth.id", preAuthID))
+
+	pa, err := s.wallets.ReleasePreAuth(ctx, preAuthID)
+	if err != nil {
+		slog.Warn("wallet/release-pre-auth: failed", "preauth_id", preAuthID, "err", err)
+		return nil, err
+	}
+	slog.Info("wallet/release-pre-auth", "id", pa.ID, "account_id", pa.AccountID, "amount", pa.Amount)
+	metrics.RecordWalletOperation("release_pre_auth", "success")
+	return pa, nil
 }
 
 // MarkOrderPaid atomically marks an order as paid and credits the wallet.
