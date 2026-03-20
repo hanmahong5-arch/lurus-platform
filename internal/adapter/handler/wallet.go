@@ -88,18 +88,30 @@ func (h *WalletHandler) Redeem(c *gin.Context) {
 		return
 	}
 	if err := h.wallets.Redeem(c.Request.Context(), accountID, req.Code); err != nil {
-		msg := "Invalid or expired redemption code"
-		if strings.Contains(err.Error(), "usage limit") {
-			msg = "This code has reached its usage limit"
-		} else if strings.Contains(err.Error(), "expired") {
-			msg = "This code has expired"
-		} else if strings.Contains(err.Error(), "invalid") {
-			msg = "Invalid redemption code"
+		errMsg := err.Error()
+		switch {
+		case strings.Contains(errMsg, "usage limit"):
+			respondRichError(c, http.StatusBadRequest, ErrorBody{
+				Code:    "code_exhausted",
+				Message: "This redemption code has reached its usage limit",
+				Fields:  map[string]string{"code": "This code can no longer be used"},
+			})
+		case strings.Contains(errMsg, "expired"):
+			respondRichError(c, http.StatusBadRequest, ErrorBody{
+				Code:    "code_expired",
+				Message: "This redemption code has expired",
+				Fields:  map[string]string{"code": "This code has expired and is no longer valid"},
+			})
+		default:
+			respondRichError(c, http.StatusBadRequest, ErrorBody{
+				Code:    "invalid_code",
+				Message: "Invalid redemption code",
+				Fields:  map[string]string{"code": "Please check the code and try again"},
+			})
 		}
-		respondBadRequest(c, msg)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"redeemed": true})
+	c.JSON(http.StatusOK, gin.H{"redeemed": true, "message": "Code redeemed successfully"})
 }
 
 // TopupInfo returns available payment methods for topup.
@@ -244,8 +256,13 @@ func (h *WalletHandler) AdminAdjustWallet(c *gin.Context) {
 	}
 	if err != nil {
 		if strings.Contains(err.Error(), "insufficient") {
-			respondError(c, http.StatusPaymentRequired, ErrCodeInsufficientBalance,
-				"Insufficient wallet balance for this adjustment")
+			respondRichError(c, http.StatusPaymentRequired, ErrorBody{
+				Code:    ErrCodeInsufficientBalance,
+				Message: "Insufficient wallet balance for this adjustment",
+				Actions: []ErrorAction{
+					{Type: "link", Label: "Top up wallet", URL: "/wallet/topup"},
+				},
+			})
 			return
 		}
 		respondInternalError(c, "wallet.admin_adjust", err)

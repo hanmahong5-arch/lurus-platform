@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 )
 
 // ── Unified error response ──────────────────────────────────────────────────
@@ -75,17 +77,93 @@ func requireAccountID(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
-// handleBindError sends a user-friendly validation error without exposing
-// internal struct field names or JSON unmarshaling details.
+// handleBindError parses Gin validation errors and sends field-level feedback.
+//
+// For validator.ValidationErrors (struct tag validation), it extracts each failing
+// field name and maps the validation tag to a human-readable message, so the
+// frontend can highlight the specific input that needs attention.
+//
+// For JSON syntax errors, it returns a generic message without leaking internal
+// struct field names or unmarshaling details.
 func handleBindError(c *gin.Context, err error) {
+	// Try to extract field-level validation errors from go-playground/validator.
+	var ve validator.ValidationErrors
+	if errors.As(err, &ve) {
+		fields := make(map[string]string, len(ve))
+		for _, fe := range ve {
+			// fe.Field() is the Go struct field name; convert to JSON field name
+			// using the json tag convention (lowercase first letter or json tag).
+			fieldName := toJSONFieldName(fe.Field())
+			fields[fieldName] = validationTagToMessage(fe.Tag(), fe.Param(), fieldName)
+		}
+		respondValidationError(c, "Please fix the issues below", fields)
+		return
+	}
+
+	// JSON parse error — don't expose internals.
 	msg := "Invalid request body"
-	// Extract the most relevant part of binding validation errors.
-	if strings.Contains(err.Error(), "required") {
-		msg = "Missing required fields"
-	} else if strings.Contains(err.Error(), "cannot unmarshal") {
+	errStr := err.Error()
+	if strings.Contains(errStr, "cannot unmarshal") {
 		msg = "Invalid field type in request body"
+	} else if strings.Contains(errStr, "request body too large") {
+		respondError(c, http.StatusRequestEntityTooLarge, "payload_too_large",
+			"Request body is too large")
+		return
 	}
 	respondBadRequest(c, msg)
+}
+
+// toJSONFieldName converts a Go struct field name (e.g. "AmountCNY") to its
+// likely JSON counterpart (e.g. "amount_cny") using simple heuristics.
+// For most Gin bindings, the json tag is already lowercase/snake_case.
+func toJSONFieldName(goField string) string {
+	// Simple camelCase → snake_case conversion.
+	var result strings.Builder
+	for i, r := range goField {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				result.WriteByte('_')
+			}
+			result.WriteRune(r + 32) // toLower
+		} else {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
+}
+
+// validationTagToMessage maps go-playground/validator tags to user-friendly messages.
+func validationTagToMessage(tag, param, field string) string {
+	switch tag {
+	case "required":
+		return "This field is required"
+	case "email":
+		return "Please enter a valid email address"
+	case "min":
+		return "Must be at least " + param + " characters"
+	case "max":
+		return "Must be at most " + param + " characters"
+	case "gt":
+		return "Must be greater than " + param
+	case "gte":
+		return "Must be at least " + param
+	case "lt":
+		return "Must be less than " + param
+	case "lte":
+		return "Must be at most " + param
+	case "oneof":
+		return "Must be one of: " + param
+	case "url":
+		return "Please enter a valid URL"
+	case "uuid":
+		return "Must be a valid UUID"
+	case "numeric":
+		return "Must be a number"
+	case "alphanum":
+		return "Must contain only letters and numbers"
+	default:
+		return "Invalid value"
+	}
 }
 
 // parsePathInt64 parses a URL path parameter as int64.

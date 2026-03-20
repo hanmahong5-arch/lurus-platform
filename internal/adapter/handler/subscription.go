@@ -106,8 +106,14 @@ func (h *SubscriptionHandler) Checkout(c *gin.Context) {
 				entity.TxTypeSubscription,
 				"订阅 "+req.ProductID+" 套餐",
 				"subscription", "", req.ProductID); err != nil {
-				respondError(c, http.StatusPaymentRequired, ErrCodeInsufficientBalance,
-					"Insufficient wallet balance for this subscription")
+				respondRichError(c, http.StatusPaymentRequired, ErrorBody{
+					Code:    ErrCodeInsufficientBalance,
+					Message: "Insufficient wallet balance for this subscription",
+					Actions: []ErrorAction{
+						{Type: "link", Label: "Top up wallet first", URL: "/wallet/topup"},
+						{Type: "link", Label: "Try another payment method", URL: ""},
+					},
+				})
 				return
 			}
 		}
