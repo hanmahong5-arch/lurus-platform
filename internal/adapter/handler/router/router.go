@@ -42,10 +42,19 @@ type Deps struct {
 // Build constructs and returns the root Gin engine.
 func Build(deps Deps) *gin.Engine {
 	r := gin.New()
-	r.Use(slogctx.Middleware()) // Assign request_id early for log correlation.
+	r.Use(slogctx.Middleware())                                      // Assign request_id early for log correlation.
 	r.Use(gin.Logger())
-	r.Use(gin.Recovery())
-	r.Use(cors.Default())
+	r.Use(gin.Recovery())                                            // Catch panics, return 500 instead of crash.
+	r.Use(handler.MaxBodySize(handler.DefaultMaxRequestBodyBytes))   // Reject >2 MB request bodies (413).
+	r.Use(handler.RequestTimeout(handler.DefaultRequestTimeout))     // Cancel stuck requests after 30s (504).
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"https://admin.lurus.cn", "https://identity.lurus.cn", "https://auth.lurus.cn", "https://lucrum.lurus.cn", "https://www.lurus.cn"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "X-Request-ID", "X-Idempotency-Key"},
+		ExposeHeaders:    []string{"X-Request-ID", "Retry-After"},
+		AllowCredentials: true,
+		MaxAge:           12 * 3600, // 12 hours preflight cache
+	}))
 
 	// Apply caller-provided middleware (Prometheus metrics, OTel tracing) before routes.
 	for _, mw := range deps.ExtraMiddleware {
