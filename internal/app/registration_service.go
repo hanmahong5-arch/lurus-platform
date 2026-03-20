@@ -107,6 +107,30 @@ func (s *RegistrationService) SetOnReferralSignupHook(fn ReferralSignupHookFunc)
 	s.onReferralSignup = fn
 }
 
+// CheckUsernameAvailable reports whether a username is not yet taken.
+// Returns (true, nil) if available, (false, nil) if taken.
+func (s *RegistrationService) CheckUsernameAvailable(ctx context.Context, username string) (bool, error) {
+	existing, err := s.accounts.GetByUsername(ctx, username)
+	if err != nil {
+		return false, fmt.Errorf("check username: %w", err)
+	}
+	return existing == nil, nil
+}
+
+// CheckEmailAvailable reports whether an email is not yet registered.
+// Returns an error if the email format is invalid.
+func (s *RegistrationService) CheckEmailAvailable(ctx context.Context, email string) (bool, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if _, err := mail.ParseAddress(email); err != nil {
+		return false, fmt.Errorf("invalid email format")
+	}
+	existing, err := s.accounts.GetByEmail(ctx, email)
+	if err != nil {
+		return false, fmt.Errorf("check email: %w", err)
+	}
+	return existing == nil, nil
+}
+
 // Register creates a new user account with username + password.
 func (s *RegistrationService) Register(ctx context.Context, req RegisterRequest) (*RegistrationResult, error) {
 	// Validate username.

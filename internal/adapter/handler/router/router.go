@@ -86,6 +86,9 @@ func Build(deps Deps) *gin.Engine {
 		r.POST("/api/v1/auth/forgot-password", deps.Registration.ForgotPassword)
 		r.POST("/api/v1/auth/reset-password", deps.Registration.ResetPassword)
 		r.POST("/api/v1/auth/send-sms", deps.Registration.SendSMSCode)
+		// Pre-submit validation (inline form feedback before the user submits).
+		r.POST("/api/v1/auth/check-username", deps.Registration.CheckUsername)
+		r.POST("/api/v1/auth/check-email", deps.Registration.CheckEmail)
 	}
 
 	// WeChat OAuth2 adapter — exposes a standard OAuth2 server wrapping WeChat's proprietary flow.
