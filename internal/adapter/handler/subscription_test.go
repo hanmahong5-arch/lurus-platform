@@ -105,8 +105,8 @@ func TestSubHandler_Checkout_PlanNotFound_Wallet(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404", w.Code)
 	}
 }
 
@@ -125,8 +125,8 @@ func TestSubHandler_Checkout_PlanNotFound_External(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404", w.Code)
 	}
 }
 
@@ -194,8 +194,8 @@ func TestSubHandler_CancelSubscription_NoActive(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	// Cancel on non-existent subscription → error from service
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404; body=%s", w.Code, w.Body.String())
 	}
 }
 

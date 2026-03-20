@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -41,7 +42,7 @@ func (h *SubscriptionHandler) ListSubscriptions(c *gin.Context) {
 	}
 	list, err := h.subs.ListByAccount(c.Request.Context(), accountID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list subscriptions"})
+		respondInternalError(c, "subscription.list", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"subscriptions": list})
@@ -57,11 +58,11 @@ func (h *SubscriptionHandler) GetSubscription(c *gin.Context) {
 	productID := c.Param("product_id")
 	sub, err := h.subs.GetActive(c.Request.Context(), accountID, productID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
+		respondInternalError(c, "subscription.get_active", err)
 		return
 	}
 	if sub == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "no active subscription"})
+		respondNotFound(c, "Active subscription")
 		return
 	}
 	c.JSON(http.StatusOK, sub)
@@ -82,7 +83,7 @@ func (h *SubscriptionHandler) Checkout(c *gin.Context) {
 		ReturnURL     string `json:"return_url"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -91,27 +92,30 @@ func (h *SubscriptionHandler) Checkout(c *gin.Context) {
 		returnURL = "/subscriptions"
 	}
 
-	// Wallet payment: debit balance and activate immediately
+	ctx := c.Request.Context()
+
+	// Wallet payment: debit balance and activate immediately.
 	if req.PaymentMethod == "wallet" {
-		plan, err := h.plans.GetPlanByID(c.Request.Context(), req.PlanID)
+		plan, err := h.plans.GetPlanByID(ctx, req.PlanID)
 		if err != nil || plan == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "plan not found"})
+			respondNotFound(c, "Plan")
 			return
 		}
 		if plan.PriceCNY > 0 {
-			if _, err := h.wallets.Debit(c.Request.Context(), accountID, plan.PriceCNY,
+			if _, err := h.wallets.Debit(ctx, accountID, plan.PriceCNY,
 				entity.TxTypeSubscription,
 				"订阅 "+req.ProductID+" 套餐",
 				"subscription", "", req.ProductID); err != nil {
-				c.JSON(http.StatusPaymentRequired, gin.H{"error": err.Error()})
+				respondError(c, http.StatusPaymentRequired, ErrCodeInsufficientBalance,
+					"Insufficient wallet balance for this subscription")
 				return
 			}
 		}
-		sub, err := h.subs.Activate(c.Request.Context(), accountID, req.ProductID, req.PlanID, req.PaymentMethod, "")
+		sub, err := h.subs.Activate(ctx, accountID, req.ProductID, req.PlanID, req.PaymentMethod, "")
 		if err != nil {
 			// Compensate: refund already-debited amount if activation fails.
 			if plan.PriceCNY > 0 {
-				_, creditErr := h.wallets.Credit(c.Request.Context(), accountID, plan.PriceCNY,
+				_, creditErr := h.wallets.Credit(ctx, accountID, plan.PriceCNY,
 					"subscription_payment_refund",
 					"Subscription activation failed, auto-refund",
 					"subscription", "", req.ProductID)
@@ -121,17 +125,17 @@ func (h *SubscriptionHandler) Checkout(c *gin.Context) {
 						"activate_err", err, "credit_err", creditErr)
 				}
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondInternalError(c, "subscription.activate", err)
 			return
 		}
 		c.JSON(http.StatusCreated, gin.H{"subscription": sub})
 		return
 	}
 
-	// External payment: create order and return checkout URL
-	plan, err := h.plans.GetPlanByID(c.Request.Context(), req.PlanID)
+	// External payment: create order and return checkout URL.
+	plan, err := h.plans.GetPlanByID(ctx, req.PlanID)
 	if err != nil || plan == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "plan not found"})
+		respondNotFound(c, "Plan")
 		return
 	}
 
@@ -145,20 +149,27 @@ func (h *SubscriptionHandler) Checkout(c *gin.Context) {
 		PaymentMethod: req.PaymentMethod,
 		Status:        entity.OrderStatusPending,
 	}
-	// OrderNo is set inside CreateSubscriptionOrder
-	if err := h.wallets.CreateSubscriptionOrder(c.Request.Context(), order); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "create order failed"})
+	if err := h.wallets.CreateSubscriptionOrder(ctx, order); err != nil {
+		respondInternalError(c, "subscription.create_order", err)
 		return
 	}
 
-	payURL, externalID, err := h.resolveCheckout(c.Request.Context(), order, returnURL)
+	payURL, externalID, err := h.resolveCheckout(ctx, order, returnURL)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		var pe *providerError
+		if errors.As(err, &pe) {
+			respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, pe.Error())
+			return
+		}
+		respondInternalError(c, "subscription.checkout", err)
 		return
 	}
 	if externalID != "" {
 		order.ExternalID = externalID
-		_ = h.wallets.UpdatePaymentOrder(c.Request.Context(), order)
+		if err := h.wallets.UpdatePaymentOrder(ctx, order); err != nil {
+			slog.Warn("subscription.checkout: failed to save external_id (non-fatal)",
+				"order_no", order.OrderNo, "external_id", externalID, "err", err)
+		}
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
@@ -176,7 +187,9 @@ func (h *SubscriptionHandler) CancelSubscription(c *gin.Context) {
 	}
 	productID := c.Param("product_id")
 	if err := h.subs.Cancel(c.Request.Context(), accountID, productID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		classifyBusinessError(c, "subscription.cancel", err, map[string]errorMapping{
+			"no active": {http.StatusNotFound, "No active subscription found for this product"},
+		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"cancelled": true})

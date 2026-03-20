@@ -1,9 +1,9 @@
 package handler
 
 import (
-	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
@@ -31,15 +31,16 @@ func (h *InvoiceHandler) GenerateInvoice(c *gin.Context) {
 		OrderNo string `json:"order_no" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
 	inv, err := h.invoices.Generate(c.Request.Context(), accountID, req.OrderNo)
 	if err != nil {
-		slog.Warn("invoice/generate: failed",
-			"account_id", accountID, "order_no", req.OrderNo, "err", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		classifyBusinessError(c, "invoice.generate", err, map[string]errorMapping{
+			"not found":        {http.StatusNotFound, "Order not found or does not belong to your account"},
+			"only be generated": {http.StatusBadRequest, "Invoices can only be generated for paid orders"},
+		})
 		return
 	}
 	c.JSON(http.StatusOK, inv)
@@ -52,12 +53,11 @@ func (h *InvoiceHandler) ListInvoices(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, pageSize := mustPageParams(c)
+	page, pageSize := parsePagination(c)
 
 	list, total, err := h.invoices.ListByAccount(c.Request.Context(), accountID, page, pageSize)
 	if err != nil {
-		slog.Error("invoice/list: failed", "account_id", accountID, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list invoices"})
+		respondInternalError(c, "invoice.list", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
@@ -75,7 +75,7 @@ func (h *InvoiceHandler) GetInvoice(c *gin.Context) {
 
 	inv, err := h.invoices.GetByNo(c.Request.Context(), accountID, invoiceNo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "invoice not found"})
+		respondNotFound(c, "Invoice")
 		return
 	}
 	c.JSON(http.StatusOK, inv)
@@ -89,31 +89,40 @@ func (h *InvoiceHandler) AdminList(c *gin.Context) {
 	if raw := c.Query("account_id"); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account_id"})
+			respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, "Invalid account_id parameter")
 			return
 		}
 		filterAccountID = id
 	}
-	page, pageSize := mustPageParams(c)
+	page, pageSize := parsePagination(c)
 
 	list, total, err := h.invoices.AdminList(c.Request.Context(), filterAccountID, page, pageSize)
 	if err != nil {
-		slog.Error("invoice/admin-list: failed", "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list invoices"})
+		respondInternalError(c, "invoice.admin_list", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
 }
 
-// mustPageParams reads and normalises page/page_size query params.
-func mustPageParams(c *gin.Context) (page, pageSize int) {
-	page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ = strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if page < 1 {
-		page = 1
+// ── Error classification helper ─────────────────────────────────────────────
+
+// errorMapping maps a business error keyword to an HTTP status and user message.
+type errorMapping struct {
+	status  int
+	message string
+}
+
+// classifyBusinessError inspects err.Error() for known business keywords and
+// sends the appropriate HTTP response. Falls back to 500 for unknown errors.
+// This bridges the gap between app-layer fmt.Errorf strings and proper HTTP responses
+// without requiring app-layer changes.
+func classifyBusinessError(c *gin.Context, handler string, err error, mappings map[string]errorMapping) {
+	errMsg := err.Error()
+	for keyword, m := range mappings {
+		if strings.Contains(errMsg, keyword) {
+			respondError(c, m.status, ErrCodeInvalidRequest, m.message)
+			return
+		}
 	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-	return
+	respondInternalError(c, handler, err)
 }

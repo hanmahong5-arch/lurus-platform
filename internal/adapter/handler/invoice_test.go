@@ -69,8 +69,8 @@ func TestInvoiceHandler_GenerateInvoice_OrderNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/invoices", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 

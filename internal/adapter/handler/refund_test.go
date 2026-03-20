@@ -169,8 +169,8 @@ func TestRefundHandler_AdminApprove_RefundNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/refunds/REF-NOTFOUND/approve", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404; body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -204,8 +204,8 @@ func TestRefundHandler_AdminReject_RefundNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/refunds/REF-NOTFOUND/reject", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404; body: %s", w.Code, w.Body.String())
 	}
 }
 

@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -30,15 +29,18 @@ func (h *RefundHandler) RequestRefund(c *gin.Context) {
 		Reason  string `json:"reason"   binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
 	r, err := h.refunds.RequestRefund(c.Request.Context(), accountID, req.OrderNo, req.Reason)
 	if err != nil {
-		slog.Warn("refund/request: failed",
-			"account_id", accountID, "order_no", req.OrderNo, "err", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		classifyBusinessError(c, "refund.request", err, map[string]errorMapping{
+			"not found":            {http.StatusNotFound, "Order not found or does not belong to your account"},
+			"requires a paid":      {http.StatusBadRequest, "Refunds can only be requested for paid orders"},
+			"window":               {http.StatusBadRequest, "The refund window for this order has expired"},
+			"already in progress":  {http.StatusConflict, "A refund is already in progress for this order"},
+		})
 		return
 	}
 	c.JSON(http.StatusCreated, r)
@@ -51,12 +53,11 @@ func (h *RefundHandler) ListRefunds(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, pageSize := mustPageParams(c)
+	page, pageSize := parsePagination(c)
 
 	list, total, err := h.refunds.ListByAccount(c.Request.Context(), accountID, page, pageSize)
 	if err != nil {
-		slog.Error("refund/list: failed", "account_id", accountID, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list refunds"})
+		respondInternalError(c, "refund.list", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
@@ -74,7 +75,7 @@ func (h *RefundHandler) GetRefund(c *gin.Context) {
 
 	r, err := h.refunds.GetByNo(c.Request.Context(), accountID, refundNo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "refund not found"})
+		respondNotFound(c, "Refund")
 		return
 	}
 	c.JSON(http.StatusOK, r)
@@ -89,13 +90,15 @@ func (h *RefundHandler) AdminApprove(c *gin.Context) {
 		ReviewNote string `json:"review_note"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
 	if err := h.refunds.Approve(c.Request.Context(), refundNo, req.ReviewerID, req.ReviewNote); err != nil {
-		slog.Warn("refund/admin-approve: failed", "refund_no", refundNo, "err", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		classifyBusinessError(c, "refund.approve", err, map[string]errorMapping{
+			"not found":   {http.StatusNotFound, "Refund not found"},
+			"not pending": {http.StatusConflict, "Refund is no longer in pending state"},
+		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"approved": true})
@@ -110,13 +113,15 @@ func (h *RefundHandler) AdminReject(c *gin.Context) {
 		ReviewNote string `json:"review_note"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
 	if err := h.refunds.Reject(c.Request.Context(), refundNo, req.ReviewerID, req.ReviewNote); err != nil {
-		slog.Warn("refund/admin-reject: failed", "refund_no", refundNo, "err", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		classifyBusinessError(c, "refund.reject", err, map[string]errorMapping{
+			"not found":   {http.StatusNotFound, "Refund not found"},
+			"not pending": {http.StatusConflict, "Refund is no longer in pending state"},
+		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"rejected": true})
