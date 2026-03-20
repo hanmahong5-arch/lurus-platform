@@ -30,7 +30,7 @@ func TestInternalHandler_GetAccountByZitadelSub(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/by-zitadel-sub/:sub", h.GetAccountByZitadelSub)
+	r.GET("/internal/v1/accounts/by-zitadel-sub/:sub", withAllScopes(), h.GetAccountByZitadelSub)
 
 	tests := []struct {
 		name   string
@@ -74,7 +74,7 @@ func TestInternalHandler_UpsertAccount(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.POST("/internal/v1/accounts/upsert", h.UpsertAccount)
+	r.POST("/internal/v1/accounts/upsert", withAllScopes(), h.UpsertAccount)
 
 	tests := []struct {
 		name   string
@@ -125,7 +125,7 @@ func TestInternalHandler_GetEntitlements(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/:id/entitlements/:product_id", h.GetEntitlements)
+	r.GET("/internal/v1/accounts/:id/entitlements/:product_id", withAllScopes(), h.GetEntitlements)
 
 	tests := []struct {
 		name      string
@@ -169,7 +169,7 @@ func TestInternalHandler_GetSubscription(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/:id/subscription/:product_id", h.GetSubscription)
+	r.GET("/internal/v1/accounts/:id/subscription/:product_id", withAllScopes(), h.GetSubscription)
 
 	tests := []struct {
 		name   string
@@ -205,7 +205,7 @@ func TestInternalHandler_ReportUsage(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.POST("/internal/v1/usage/report", h.ReportUsage)
+	r.POST("/internal/v1/usage/report", withAllScopes(), h.ReportUsage)
 
 	tests := []struct {
 		name   string
@@ -249,7 +249,7 @@ func TestInternalHandler_DebitWallet(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.POST("/internal/v1/accounts/:id/wallet/debit", h.DebitWallet)
+	r.POST("/internal/v1/accounts/:id/wallet/debit", withAllScopes(), h.DebitWallet)
 
 	tests := []struct {
 		name   string
@@ -338,7 +338,7 @@ func TestInternalHandler_CreditWallet(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.POST("/internal/v1/accounts/:id/wallet/credit", h.CreditWallet)
+	r.POST("/internal/v1/accounts/:id/wallet/credit", withAllScopes(), h.CreditWallet)
 
 	tests := []struct {
 		name   string
@@ -416,7 +416,7 @@ func TestInternalHandler_GetAccountByOAuth(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/by-oauth/:provider/:provider_id", h.GetAccountByOAuth)
+	r.GET("/internal/v1/accounts/by-oauth/:provider/:provider_id", withAllScopes(), h.GetAccountByOAuth)
 
 	tests := []struct {
 		name   string
@@ -454,7 +454,7 @@ func TestInternalHandler_GetAccountOverview(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/:id/overview", h.GetAccountOverview)
+	r.GET("/internal/v1/accounts/:id/overview", withAllScopes(), h.GetAccountOverview)
 
 	t.Run("ok", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -506,7 +506,7 @@ func TestInternalHandler_UpsertAccount_WithReferrer(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.POST("/internal/v1/accounts/upsert", h.UpsertAccount)
+	r.POST("/internal/v1/accounts/upsert", withAllScopes(), h.UpsertAccount)
 
 	t.Run("with_valid_referrer_aff_code", func(t *testing.T) {
 		body, _ := json.Marshal(map[string]string{
@@ -577,7 +577,7 @@ func TestInternalHandler_GetAccountByEmail_NotFound(t *testing.T) {
 	h := makeInternalHandler(as)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/by-email/:email", h.GetAccountByEmail)
+	r.GET("/internal/v1/accounts/by-email/:email", withAllScopes(), h.GetAccountByEmail)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/by-email/unknown@example.com", nil)
@@ -596,7 +596,7 @@ func TestInternalHandler_GetAccountByPhone_Found(t *testing.T) {
 	h := makeInternalHandler(as)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/by-phone/:phone", h.GetAccountByPhone)
+	r.GET("/internal/v1/accounts/by-phone/:phone", withAllScopes(), h.GetAccountByPhone)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/by-phone/+8613800138000", nil)
@@ -613,7 +613,7 @@ func TestInternalHandler_GetAccountByPhone_NotFound(t *testing.T) {
 	h := makeInternalHandler(as)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/by-phone/:phone", h.GetAccountByPhone)
+	r.GET("/internal/v1/accounts/by-phone/:phone", withAllScopes(), h.GetAccountByPhone)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/by-phone/+10000000000", nil)
@@ -630,7 +630,7 @@ func TestInternalHandler_GetWalletBalance_Success(t *testing.T) {
 	h := makeInternalHandler(as)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/:id/wallet/balance", h.GetWalletBalance)
+	r.GET("/internal/v1/accounts/:id/wallet/balance", withAllScopes(), h.GetWalletBalance)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/1/wallet/balance", nil)
@@ -655,7 +655,7 @@ func TestInternalHandler_GetWalletBalance_BadID(t *testing.T) {
 	h := makeInternalHandler(as)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/:id/wallet/balance", h.GetWalletBalance)
+	r.GET("/internal/v1/accounts/:id/wallet/balance", withAllScopes(), h.GetWalletBalance)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/not-a-number/wallet/balance", nil)
@@ -672,7 +672,7 @@ func TestInternalHandler_ValidateSession_NoSecret(t *testing.T) {
 	h := makeInternalHandlerWithSecret(as, "") // empty secret → disabled
 
 	r := testRouter()
-	r.POST("/internal/v1/accounts/validate-session", h.ValidateSession)
+	r.POST("/internal/v1/accounts/validate-session", withAllScopes(), h.ValidateSession)
 
 	body, _ := json.Marshal(map[string]string{"token": "sometoken"})
 	w := httptest.NewRecorder()
@@ -692,7 +692,7 @@ func TestInternalHandler_ValidateSession_InvalidToken(t *testing.T) {
 	h := makeInternalHandlerWithSecret(as, secret)
 
 	r := testRouter()
-	r.POST("/internal/v1/accounts/validate-session", h.ValidateSession)
+	r.POST("/internal/v1/accounts/validate-session", withAllScopes(), h.ValidateSession)
 
 	body, _ := json.Marshal(map[string]string{"token": "not-a-valid-token"})
 	w := httptest.NewRecorder()
@@ -712,7 +712,7 @@ func TestInternalHandler_ValidateSession_MissingToken(t *testing.T) {
 	h := makeInternalHandlerWithSecret(as, secret)
 
 	r := testRouter()
-	r.POST("/internal/v1/accounts/validate-session", h.ValidateSession)
+	r.POST("/internal/v1/accounts/validate-session", withAllScopes(), h.ValidateSession)
 
 	body, _ := json.Marshal(map[string]string{}) // missing token field
 	w := httptest.NewRecorder()
@@ -733,7 +733,7 @@ func TestInternalHandler_GetEntitlements_Error(t *testing.T) {
 		makeVIPService(), nil, makeWalletService(), makeReferralService(), "",
 	)
 	r := testRouter()
-	r.GET("/internal/v1/accounts/:id/entitlements/:product_id", h.GetEntitlements)
+	r.GET("/internal/v1/accounts/:id/entitlements/:product_id", withAllScopes(), h.GetEntitlements)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/1/entitlements/lurus_api", nil)
@@ -751,7 +751,7 @@ func TestInternalHandler_GetSubscription_Error(t *testing.T) {
 		makeVIPService(), nil, makeWalletService(), makeReferralService(), "",
 	)
 	r := testRouter()
-	r.GET("/internal/v1/accounts/:id/subscription/:product_id", h.GetSubscription)
+	r.GET("/internal/v1/accounts/:id/subscription/:product_id", withAllScopes(), h.GetSubscription)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/1/subscription/lurus_api", nil)
@@ -773,7 +773,7 @@ func TestInternalHandler_GetSubscription_Found(t *testing.T) {
 		makeVIPService(), nil, makeWalletService(), makeReferralService(), "",
 	)
 	r := testRouter()
-	r.GET("/internal/v1/accounts/:id/subscription/:product_id", h.GetSubscription)
+	r.GET("/internal/v1/accounts/:id/subscription/:product_id", withAllScopes(), h.GetSubscription)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/1/subscription/lurus_api", nil)
@@ -799,7 +799,7 @@ func TestInternalHandler_GetAccountByEmail_Found(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/by-email/:email", h.GetAccountByEmail)
+	r.GET("/internal/v1/accounts/by-email/:email", withAllScopes(), h.GetAccountByEmail)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/by-email/found@x.com", nil)
@@ -825,7 +825,7 @@ func TestInternalHandler_GetAccountByEmail_Error(t *testing.T) {
 	)
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/by-email/:email", h.GetAccountByEmail)
+	r.GET("/internal/v1/accounts/by-email/:email", withAllScopes(), h.GetAccountByEmail)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/by-email/err@x.com", nil)
@@ -849,7 +849,7 @@ func TestInternalHandler_ValidateSession_Success(t *testing.T) {
 	}
 
 	r := testRouter()
-	r.POST("/internal/v1/accounts/validate-session", h.ValidateSession)
+	r.POST("/internal/v1/accounts/validate-session", withAllScopes(), h.ValidateSession)
 
 	body, _ := json.Marshal(map[string]string{"token": token})
 	w := httptest.NewRecorder()
@@ -874,7 +874,7 @@ func TestInternalHandler_ValidateSession_AccountNotFound(t *testing.T) {
 	}
 
 	r := testRouter()
-	r.POST("/internal/v1/accounts/validate-session", h.ValidateSession)
+	r.POST("/internal/v1/accounts/validate-session", withAllScopes(), h.ValidateSession)
 
 	body, _ := json.Marshal(map[string]string{"token": token})
 	w := httptest.NewRecorder()
@@ -892,7 +892,7 @@ func TestInternalHandler_GetAccountByOAuth_Error(t *testing.T) {
 	h := NewInternalHandler(acctSvc, makeSubService(), makeEntitlementService(), makeVIPService(), nil, makeWalletService(), makeReferralService(), "")
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/by-oauth/:provider/:provider_id", h.GetAccountByOAuth)
+	r.GET("/internal/v1/accounts/by-oauth/:provider/:provider_id", withAllScopes(), h.GetAccountByOAuth)
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/by-oauth/wechat/wx-err", nil)
 	w := httptest.NewRecorder()
@@ -910,7 +910,7 @@ func TestInternalHandler_GetAccountByOAuth_Found(t *testing.T) {
 	h := NewInternalHandler(acctSvc, makeSubService(), makeEntitlementService(), makeVIPService(), nil, makeWalletService(), makeReferralService(), "")
 
 	r := testRouter()
-	r.GET("/internal/v1/accounts/by-oauth/:provider/:provider_id", h.GetAccountByOAuth)
+	r.GET("/internal/v1/accounts/by-oauth/:provider/:provider_id", withAllScopes(), h.GetAccountByOAuth)
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/accounts/by-oauth/wechat/wx-found", nil)
 	w := httptest.NewRecorder()

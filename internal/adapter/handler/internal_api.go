@@ -74,6 +74,9 @@ func (h *InternalHandler) WithPaymentProviders(epay *payment.EpayProvider, strip
 // GetAccountByZitadelSub looks up an account by Zitadel OIDC sub.
 // GET /internal/v1/accounts/by-zitadel-sub/:sub
 func (h *InternalHandler) GetAccountByZitadelSub(c *gin.Context) {
+	if !requireScope(c, "account:read") {
+		return
+	}
 	sub := c.Param("sub")
 	a, err := h.accounts.GetByZitadelSub(c.Request.Context(), sub)
 	if err != nil {
@@ -90,6 +93,9 @@ func (h *InternalHandler) GetAccountByZitadelSub(c *gin.Context) {
 // GetAccountByID looks up an account by its internal numeric ID.
 // GET /internal/v1/accounts/:id
 func (h *InternalHandler) GetAccountByID(c *gin.Context) {
+	if !requireScope(c, "account:read") {
+		return
+	}
 	id, ok := parsePathInt64(c, "id", "Account ID")
 	if !ok {
 		return
@@ -110,6 +116,9 @@ func (h *InternalHandler) GetAccountByID(c *gin.Context) {
 // Supports optional referrer_aff_code to link the account to a referrer on first creation.
 // POST /internal/v1/accounts/upsert
 func (h *InternalHandler) UpsertAccount(c *gin.Context) {
+	if !requireScope(c, "account:write") {
+		return
+	}
 	var req struct {
 		ZitadelSub      string `json:"zitadel_sub"       binding:"required"`
 		Email           string `json:"email"             binding:"required"`
@@ -147,6 +156,9 @@ func (h *InternalHandler) UpsertAccount(c *gin.Context) {
 // GetEntitlements returns entitlements for an account+product (Redis-cached).
 // GET /internal/v1/accounts/:id/entitlements/:product_id
 func (h *InternalHandler) GetEntitlements(c *gin.Context) {
+	if !requireScope(c, "entitlement") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
@@ -167,6 +179,9 @@ func (h *InternalHandler) GetEntitlements(c *gin.Context) {
 // GetSubscription returns the active subscription for an account+product.
 // GET /internal/v1/accounts/:id/subscription/:product_id
 func (h *InternalHandler) GetSubscription(c *gin.Context) {
+	if !requireScope(c, "entitlement") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
@@ -188,6 +203,9 @@ func (h *InternalHandler) GetSubscription(c *gin.Context) {
 // GetAccountByOAuth looks up an account by OAuth provider and provider_id.
 // GET /internal/v1/accounts/by-oauth/:provider/:provider_id
 func (h *InternalHandler) GetAccountByOAuth(c *gin.Context) {
+	if !requireScope(c, "account:read") {
+		return
+	}
 	provider := c.Param("provider")
 	providerID := c.Param("provider_id")
 	a, err := h.accounts.GetByOAuthBinding(c.Request.Context(), provider, providerID)
@@ -205,6 +223,9 @@ func (h *InternalHandler) GetAccountByOAuth(c *gin.Context) {
 // GetAccountOverview returns the aggregated overview for a given account ID.
 // GET /internal/v1/accounts/:id/overview?product_id=<pid>
 func (h *InternalHandler) GetAccountOverview(c *gin.Context) {
+	if !requireScope(c, "account:read") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
@@ -222,6 +243,9 @@ func (h *InternalHandler) GetAccountOverview(c *gin.Context) {
 // ReportUsage receives LLM usage reports from lurus-api for VIP accumulation.
 // POST /internal/v1/usage/report
 func (h *InternalHandler) ReportUsage(c *gin.Context) {
+	if !requireScope(c, "wallet:read") {
+		return
+	}
 	var req struct {
 		AccountID int64   `json:"account_id" binding:"required"`
 		AmountCNY float64 `json:"amount_cny" binding:"required"`
@@ -237,6 +261,9 @@ func (h *InternalHandler) ReportUsage(c *gin.Context) {
 // DebitWallet deducts LB from an account wallet (e.g. AI quota overage).
 // POST /internal/v1/accounts/:id/wallet/debit
 func (h *InternalHandler) DebitWallet(c *gin.Context) {
+	if !requireScope(c, "wallet:debit") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
@@ -264,6 +291,9 @@ func (h *InternalHandler) DebitWallet(c *gin.Context) {
 // GetAccountByEmail looks up an account by email address.
 // GET /internal/v1/accounts/by-email/:email
 func (h *InternalHandler) GetAccountByEmail(c *gin.Context) {
+	if !requireScope(c, "account:read") {
+		return
+	}
 	email := c.Param("email")
 	a, err := h.accounts.GetByEmail(c.Request.Context(), email)
 	if err != nil {
@@ -280,6 +310,9 @@ func (h *InternalHandler) GetAccountByEmail(c *gin.Context) {
 // GetAccountByPhone looks up an account by phone number.
 // GET /internal/v1/accounts/by-phone/:phone
 func (h *InternalHandler) GetAccountByPhone(c *gin.Context) {
+	if !requireScope(c, "account:read") {
+		return
+	}
 	phone := c.Param("phone")
 	a, err := h.accounts.GetByPhone(c.Request.Context(), phone)
 	if err != nil {
@@ -296,6 +329,9 @@ func (h *InternalHandler) GetAccountByPhone(c *gin.Context) {
 // GetWalletBalance returns the wallet balance for an account (quick lookup).
 // GET /internal/v1/accounts/:id/wallet/balance
 func (h *InternalHandler) GetWalletBalance(c *gin.Context) {
+	if !requireScope(c, "wallet:read") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
@@ -312,6 +348,9 @@ func (h *InternalHandler) GetWalletBalance(c *gin.Context) {
 // ValidateSession validates a lurus session token and returns the associated account.
 // POST /internal/v1/accounts/validate-session
 func (h *InternalHandler) ValidateSession(c *gin.Context) {
+	if !requireScope(c, "account:read") {
+		return
+	}
 	var req struct {
 		Token string `json:"token" binding:"required"`
 	}
@@ -339,6 +378,9 @@ func (h *InternalHandler) ValidateSession(c *gin.Context) {
 // GetBillingSummary returns an aggregated billing overview for an account.
 // GET /internal/v1/accounts/:id/billing-summary
 func (h *InternalHandler) GetBillingSummary(c *gin.Context) {
+	if !requireScope(c, "wallet:read") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
@@ -381,6 +423,9 @@ func (h *InternalHandler) CreditWallet(c *gin.Context) {
 // CreateCheckout creates a checkout session for a cross-service topup.
 // POST /internal/v1/checkout/create
 func (h *InternalHandler) CreateCheckout(c *gin.Context) {
+	if !requireScope(c, "checkout") {
+		return
+	}
 	var req struct {
 		AccountID      int64   `json:"account_id"      binding:"required"`
 		AmountCNY      float64 `json:"amount_cny"      binding:"required,gt=0"`
@@ -448,6 +493,9 @@ func (h *InternalHandler) CreateCheckout(c *gin.Context) {
 // GetCheckoutStatus returns the status of a checkout order.
 // GET /internal/v1/checkout/:order_no/status
 func (h *InternalHandler) GetCheckoutStatus(c *gin.Context) {
+	if !requireScope(c, "checkout") {
+		return
+	}
 	orderNo := c.Param("order_no")
 	order, err := h.wallet.GetCheckoutStatus(c.Request.Context(), orderNo)
 	if err != nil {
@@ -467,6 +515,9 @@ func (h *InternalHandler) GetCheckoutStatus(c *gin.Context) {
 // GetPaymentMethods returns the list of available payment methods.
 // GET /internal/v1/payment-methods
 func (h *InternalHandler) GetPaymentMethods(c *gin.Context) {
+	if !requireScope(c, "checkout") {
+		return
+	}
 	methods := make([]gin.H, 0, 4)
 	if h.epay != nil {
 		methods = append(methods,
@@ -486,6 +537,9 @@ func (h *InternalHandler) GetPaymentMethods(c *gin.Context) {
 // PreAuthorize creates a pre-authorization hold on a wallet.
 // POST /internal/v1/accounts/:id/wallet/pre-authorize
 func (h *InternalHandler) PreAuthorize(c *gin.Context) {
+	if !requireScope(c, "wallet:debit") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
@@ -524,6 +578,9 @@ func (h *InternalHandler) PreAuthorize(c *gin.Context) {
 // SettlePreAuth settles a pre-authorization with the actual charge amount.
 // POST /internal/v1/wallet/pre-auth/:id/settle
 func (h *InternalHandler) SettlePreAuth(c *gin.Context) {
+	if !requireScope(c, "wallet:debit") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid preauth id"})
@@ -554,6 +611,9 @@ func (h *InternalHandler) SettlePreAuth(c *gin.Context) {
 // ReleasePreAuth releases a pre-authorization, unfreezing the hold.
 // POST /internal/v1/wallet/pre-auth/:id/release
 func (h *InternalHandler) ReleasePreAuth(c *gin.Context) {
+	if !requireScope(c, "wallet:debit") {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid preauth id"})
@@ -578,6 +638,9 @@ func (h *InternalHandler) ReleasePreAuth(c *gin.Context) {
 //
 // POST /internal/v1/accounts/:id/currency/exchange
 func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
+	if !requireScope(c, "wallet:debit") {
+		return
+	}
 	if h.lurusAPI == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "currency exchange not configured"})
 		return
@@ -682,6 +745,9 @@ func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
 // GetCurrencyInfo returns the three-tier currency system configuration from lurus-api.
 // GET /internal/v1/currency/info
 func (h *InternalHandler) GetCurrencyInfo(c *gin.Context) {
+	if !requireScope(c, "wallet:read") {
+		return
+	}
 	if h.lurusAPI == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "currency service not configured"})
 		return

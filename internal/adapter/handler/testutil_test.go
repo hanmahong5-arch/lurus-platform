@@ -614,6 +614,24 @@ func withAccountID(id int64) gin.HandlerFunc {
 	}
 }
 
+// withServiceScopes returns middleware that injects service identity for internal API tests.
+func withServiceScopes(scopes ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set("service_id", "test-service")
+		c.Set("service_scopes", scopes)
+		c.Set("service_legacy", false)
+		c.Next()
+	}
+}
+
+// withAllScopes injects all scopes — convenience for tests that don't test authorization.
+func withAllScopes() gin.HandlerFunc {
+	return withServiceScopes(
+		"account:read", "account:write", "wallet:read", "wallet:debit",
+		"wallet:credit", "entitlement", "checkout",
+	)
+}
+
 // ---------- error-injection stores for handler tests ----------
 
 // errWalletH overrides wallet store methods to return errors, enabling handler error-path tests.
