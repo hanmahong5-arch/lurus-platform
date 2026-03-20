@@ -3,9 +3,8 @@ package handler
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
-	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
@@ -46,10 +45,13 @@ func NewWalletHandler(
 // GetWallet returns the current user's wallet balance and VIP info.
 // GET /api/v1/wallet
 func (h *WalletHandler) GetWallet(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	wallet, err := h.wallets.GetWallet(c.Request.Context(), accountID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "wallet lookup failed"})
+		respondInternalError(c, "wallet.get", err)
 		return
 	}
 	c.JSON(http.StatusOK, wallet)
@@ -58,18 +60,14 @@ func (h *WalletHandler) GetWallet(c *gin.Context) {
 // ListTransactions returns paginated wallet transaction history.
 // GET /api/v1/wallet/transactions
 func (h *WalletHandler) ListTransactions(c *gin.Context) {
-	accountID := mustAccountID(c)
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if page < 1 {
-		page = 1
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
 	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
+	page, pageSize := parsePagination(c)
 	list, total, err := h.wallets.ListTransactions(c.Request.Context(), accountID, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list transactions"})
+		respondInternalError(c, "wallet.list_transactions", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
@@ -78,16 +76,27 @@ func (h *WalletHandler) ListTransactions(c *gin.Context) {
 // Redeem applies a redemption code to the user's wallet.
 // POST /api/v1/wallet/redeem
 func (h *WalletHandler) Redeem(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	var req struct {
 		Code string `json:"code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	if err := h.wallets.Redeem(c.Request.Context(), accountID, req.Code); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		msg := "Invalid or expired redemption code"
+		if strings.Contains(err.Error(), "usage limit") {
+			msg = "This code has reached its usage limit"
+		} else if strings.Contains(err.Error(), "expired") {
+			msg = "This code has expired"
+		} else if strings.Contains(err.Error(), "invalid") {
+			msg = "Invalid redemption code"
+		}
+		respondBadRequest(c, msg)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"redeemed": true})
@@ -115,37 +124,39 @@ func (h *WalletHandler) TopupInfo(c *gin.Context) {
 // CreateTopup creates a payment order and returns the checkout URL.
 // POST /api/v1/wallet/topup
 func (h *WalletHandler) CreateTopup(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	var req struct {
 		AmountCNY     float64 `json:"amount_cny"     binding:"required,gt=0"`
 		PaymentMethod string  `json:"payment_method" binding:"required"`
 		ReturnURL     string  `json:"return_url"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
-	// Validate topup amount bounds.
 	if req.AmountCNY < minTopupCNY {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_cny must be at least 1.00"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"Minimum topup amount is 1.00 CNY")
 		return
 	}
 	if req.AmountCNY > maxTopupCNY {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_cny exceeds maximum allowed per transaction"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"Maximum topup amount is 100,000 CNY per transaction")
 		return
 	}
-
-	// Validate payment method against known providers.
 	if !validPaymentMethods[req.PaymentMethod] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported payment method"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"Unsupported payment method")
 		return
 	}
 
 	order, err := h.wallets.CreateTopup(c.Request.Context(), accountID, req.AmountCNY, req.PaymentMethod)
 	if err != nil {
-		slog.Error("wallet/create-topup: create order failed", "account_id", accountID, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create payment order"})
+		respondInternalError(c, "wallet.create_topup", err)
 		return
 	}
 
@@ -156,14 +167,12 @@ func (h *WalletHandler) CreateTopup(c *gin.Context) {
 
 	payURL, externalID, err := h.resolveCheckout(c.Request.Context(), order, returnURL)
 	if err != nil {
-		// providerError is a user-visible error (provider disabled/misconfigured).
 		var pe *providerError
 		if errors.As(err, &pe) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": pe.Error()})
+			respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, pe.Error())
 			return
 		}
-		slog.Error("wallet/create-topup: checkout failed", "account_id", accountID, "order_no", order.OrderNo, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "payment checkout failed"})
+		respondInternalError(c, "wallet.checkout", err)
 		return
 	}
 
@@ -181,18 +190,14 @@ func (h *WalletHandler) CreateTopup(c *gin.Context) {
 // ListOrders returns paginated payment orders for the current user.
 // GET /api/v1/wallet/orders
 func (h *WalletHandler) ListOrders(c *gin.Context) {
-	accountID := mustAccountID(c)
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if page < 1 {
-		page = 1
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
 	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
+	page, pageSize := parsePagination(c)
 	list, total, err := h.wallets.ListOrders(c.Request.Context(), accountID, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list orders"})
+		respondInternalError(c, "wallet.list_orders", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
@@ -201,14 +206,14 @@ func (h *WalletHandler) ListOrders(c *gin.Context) {
 // GetOrder returns a specific payment order by order number.
 // GET /api/v1/wallet/orders/:order_no
 func (h *WalletHandler) GetOrder(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	orderNo := c.Param("order_no")
 	order, err := h.wallets.GetOrderByNo(c.Request.Context(), accountID, orderNo)
 	if err != nil {
-		// Return 404 for both not-found and ownership mismatch (prevents enumeration).
-		// Internal errors are logged but never surfaced to the caller.
-		slog.Warn("wallet/get-order: order not found or not owned", "account_id", accountID, "order_no", orderNo, "err", err)
-		c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
+		respondNotFound(c, "Order")
 		return
 	}
 	c.JSON(http.StatusOK, order)
@@ -217,9 +222,8 @@ func (h *WalletHandler) GetOrder(c *gin.Context) {
 // AdminAdjustWallet allows admin to manually credit/debit a wallet.
 // POST /admin/v1/accounts/:id/wallet/adjust
 func (h *WalletHandler) AdminAdjustWallet(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -227,26 +231,30 @@ func (h *WalletHandler) AdminAdjustWallet(c *gin.Context) {
 		Description string  `json:"description" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
 	ctx := c.Request.Context()
+	var err error
 	if req.Amount > 0 {
 		_, err = h.wallets.Credit(ctx, id, req.Amount, "admin_credit", req.Description, "admin", "admin_adjust", "")
 	} else if req.Amount < 0 {
 		_, err = h.wallets.Debit(ctx, id, -req.Amount, "admin_debit", req.Description, "admin", "admin_adjust", "")
 	}
 	if err != nil {
-		// "insufficient balance" is a user-meaningful error; DB errors must not leak.
-		slog.Error("wallet/admin-adjust: adjust failed", "account_id", id, "amount", req.Amount, "err", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "wallet adjustment failed"})
+		if strings.Contains(err.Error(), "insufficient") {
+			respondError(c, http.StatusPaymentRequired, ErrCodeInsufficientBalance,
+				"Insufficient wallet balance for this adjustment")
+			return
+		}
+		respondInternalError(c, "wallet.admin_adjust", err)
 		return
 	}
 
 	wallet, err := h.wallets.GetWallet(ctx, id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "adjustment failed"})
+		respondInternalError(c, "wallet.admin_adjust.get", err)
 		return
 	}
 	c.JSON(http.StatusOK, wallet)
@@ -282,5 +290,5 @@ func errProviderDisabled(name string) error {
 type providerError struct{ name string }
 
 func (e *providerError) Error() string {
-	return "payment provider not available: " + e.name
+	return "Payment provider not available: " + e.name
 }

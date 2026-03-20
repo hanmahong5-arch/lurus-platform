@@ -32,7 +32,10 @@ func NewAccountHandler(
 // GetMe returns the authenticated user's account summary.
 // GET /api/v1/account/me
 func (h *AccountHandler) GetMe(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	a, err := h.accounts.GetByID(c.Request.Context(), accountID)
 	if err != nil || a == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
@@ -50,7 +53,10 @@ func (h *AccountHandler) GetMe(c *gin.Context) {
 // UpdateMe updates the authenticated user's profile.
 // PUT /api/v1/account/me
 func (h *AccountHandler) UpdateMe(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	a, err := h.accounts.GetByID(c.Request.Context(), accountID)
 	if err != nil || a == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
@@ -88,7 +94,10 @@ func (h *AccountHandler) UpdateMe(c *gin.Context) {
 // GetServices returns the list of products the user has active subscriptions for.
 // GET /api/v1/account/me/services
 func (h *AccountHandler) GetServices(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	subs, err := h.subs.ListByAccount(c.Request.Context(), accountID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list services"})
@@ -181,7 +190,10 @@ func (h *AccountHandler) AdminGrantEntitlement(c *gin.Context) {
 // GetMeReferral returns the authenticated user's referral code and stats.
 // GET /api/v1/account/me/referral
 func (h *AccountHandler) GetMeReferral(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	a, err := h.accounts.GetByID(c.Request.Context(), accountID)
 	if err != nil || a == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
@@ -208,7 +220,10 @@ func (h *AccountHandler) GetMeReferral(c *gin.Context) {
 // GetMeOverview returns the authenticated user's aggregated account overview.
 // GET /api/v1/account/me/overview?product_id=<pid>
 func (h *AccountHandler) GetMeOverview(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	productID := c.Query("product_id")
 	ov, err := h.overview.Get(c.Request.Context(), accountID, productID)
 	if err != nil {

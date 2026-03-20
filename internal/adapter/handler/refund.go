@@ -21,7 +21,10 @@ func NewRefundHandler(refunds *app.RefundService) *RefundHandler {
 // RequestRefund creates a refund request for a paid order.
 // POST /api/v1/refunds
 func (h *RefundHandler) RequestRefund(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	var req struct {
 		OrderNo string `json:"order_no" binding:"required"`
 		Reason  string `json:"reason"   binding:"required"`
@@ -44,7 +47,10 @@ func (h *RefundHandler) RequestRefund(c *gin.Context) {
 // ListRefunds returns paginated refunds for the current user.
 // GET /api/v1/refunds
 func (h *RefundHandler) ListRefunds(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	page, pageSize := mustPageParams(c)
 
 	list, total, err := h.refunds.ListByAccount(c.Request.Context(), accountID, page, pageSize)
@@ -60,7 +66,10 @@ func (h *RefundHandler) ListRefunds(c *gin.Context) {
 // IDOR is enforced: only the owning account may retrieve the refund.
 // GET /api/v1/refunds/:refund_no
 func (h *RefundHandler) GetRefund(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	refundNo := c.Param("refund_no")
 
 	r, err := h.refunds.GetByNo(c.Request.Context(), accountID, refundNo)

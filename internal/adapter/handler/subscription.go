@@ -35,7 +35,10 @@ func NewSubscriptionHandler(
 // ListSubscriptions returns all subscriptions for the current user.
 // GET /api/v1/subscriptions
 func (h *SubscriptionHandler) ListSubscriptions(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	list, err := h.subs.ListByAccount(c.Request.Context(), accountID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list subscriptions"})
@@ -47,7 +50,10 @@ func (h *SubscriptionHandler) ListSubscriptions(c *gin.Context) {
 // GetSubscription returns the active subscription for a specific product.
 // GET /api/v1/subscriptions/:product_id
 func (h *SubscriptionHandler) GetSubscription(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	productID := c.Param("product_id")
 	sub, err := h.subs.GetActive(c.Request.Context(), accountID, productID)
 	if err != nil {
@@ -65,7 +71,10 @@ func (h *SubscriptionHandler) GetSubscription(c *gin.Context) {
 // POST /api/v1/subscriptions/checkout
 // Body: { product_id, plan_id, payment_method, return_url }
 func (h *SubscriptionHandler) Checkout(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	var req struct {
 		ProductID     string `json:"product_id"     binding:"required"`
 		PlanID        int64  `json:"plan_id"        binding:"required"`
@@ -161,7 +170,10 @@ func (h *SubscriptionHandler) Checkout(c *gin.Context) {
 // CancelSubscription disables auto-renew.
 // POST /api/v1/subscriptions/:product_id/cancel
 func (h *SubscriptionHandler) CancelSubscription(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	productID := c.Param("product_id")
 	if err := h.subs.Cancel(c.Request.Context(), accountID, productID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

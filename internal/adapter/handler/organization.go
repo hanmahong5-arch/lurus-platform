@@ -20,7 +20,10 @@ func NewOrganizationHandler(svc *app.OrganizationService) *OrganizationHandler {
 // Create registers a new organization owned by the authenticated user.
 // POST /api/v1/organizations
 func (h *OrganizationHandler) Create(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	var req struct {
 		Name string `json:"name" binding:"required"`
 		Slug string `json:"slug" binding:"required"`
@@ -40,7 +43,10 @@ func (h *OrganizationHandler) Create(c *gin.Context) {
 // ListMine returns all organizations the authenticated user belongs to.
 // GET /api/v1/organizations
 func (h *OrganizationHandler) ListMine(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	orgs, err := h.svc.ListMine(c.Request.Context(), accountID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list organizations"})
@@ -52,7 +58,10 @@ func (h *OrganizationHandler) ListMine(c *gin.Context) {
 // Get returns a single organization. The caller must be a member.
 // GET /api/v1/organizations/:id
 func (h *OrganizationHandler) Get(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
@@ -73,7 +82,10 @@ func (h *OrganizationHandler) Get(c *gin.Context) {
 // AddMember adds a user to the organization. Caller must be owner or admin.
 // POST /api/v1/organizations/:id/members
 func (h *OrganizationHandler) AddMember(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
@@ -101,7 +113,10 @@ func (h *OrganizationHandler) AddMember(c *gin.Context) {
 // RemoveMember removes a user from the organization. Caller must be owner or admin.
 // DELETE /api/v1/organizations/:id/members/:uid
 func (h *OrganizationHandler) RemoveMember(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
@@ -138,7 +153,10 @@ func (h *OrganizationHandler) ListAPIKeys(c *gin.Context) {
 // CreateAPIKey generates a new org API key. The raw key is returned only once.
 // POST /api/v1/organizations/:id/api-keys
 func (h *OrganizationHandler) CreateAPIKey(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
@@ -162,7 +180,10 @@ func (h *OrganizationHandler) CreateAPIKey(c *gin.Context) {
 // RevokeAPIKey revokes an org API key. Caller must be owner or admin.
 // DELETE /api/v1/organizations/:id/api-keys/:kid
 func (h *OrganizationHandler) RevokeAPIKey(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})

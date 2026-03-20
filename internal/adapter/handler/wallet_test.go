@@ -142,19 +142,19 @@ func TestWalletHandler_CreateTopup_Validation(t *testing.T) {
 			"amount_below_min",
 			map[string]interface{}{"amount_cny": 0.5, "payment_method": "stripe"},
 			http.StatusBadRequest,
-			"at least 1.00",
+			"Minimum topup",
 		},
 		{
 			"amount_above_max",
 			map[string]interface{}{"amount_cny": 200000.0, "payment_method": "stripe"},
 			http.StatusBadRequest,
-			"exceeds maximum",
+			"Maximum topup",
 		},
 		{
 			"invalid_payment_method",
 			map[string]interface{}{"amount_cny": 50.0, "payment_method": "bitcoin"},
 			http.StatusBadRequest,
-			"unsupported payment method",
+			"Unsupported",
 		},
 		{
 			"provider_disabled",
@@ -179,9 +179,13 @@ func TestWalletHandler_CreateTopup_Validation(t *testing.T) {
 			if tt.errMsg != "" {
 				var resp map[string]interface{}
 				json.Unmarshal(w.Body.Bytes(), &resp)
-				errStr, _ := resp["error"].(string)
-				if !containsStr(errStr, tt.errMsg) {
-					t.Errorf("error = %q, want containing %q", errStr, tt.errMsg)
+				// Check "message" field (new unified format) or "error" field (legacy).
+				msg, _ := resp["message"].(string)
+				if msg == "" {
+					msg, _ = resp["error"].(string)
+				}
+				if !containsStr(msg, tt.errMsg) {
+					t.Errorf("message = %q, want containing %q (body: %s)", msg, tt.errMsg, w.Body.String())
 				}
 			}
 		})
@@ -377,14 +381,14 @@ func TestWalletHandler_AdminAdjustWallet_NegativeAmount(t *testing.T) {
 	r := testRouter()
 	r.POST("/admin/v1/accounts/:id/wallet/adjust", h.AdminAdjustWallet)
 
-	// amount=-50 on a zero-balance wallet → Debit fails (insufficient balance) → 400
+	// amount=-50 on a zero-balance wallet → Debit fails (insufficient balance) → 402 Payment Required.
 	body, _ := json.Marshal(map[string]interface{}{"amount": -50.0, "description": "refund"})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/accounts/1/wallet/adjust", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusPaymentRequired {
+		t.Errorf("status = %d, want 402; body: %s", w.Code, w.Body.String())
 	}
 }
 

@@ -23,7 +23,10 @@ func NewInvoiceHandler(invoices *app.InvoiceService) *InvoiceHandler {
 // Idempotent: calling multiple times with the same order_no returns the same invoice.
 // POST /api/v1/invoices
 func (h *InvoiceHandler) GenerateInvoice(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	var req struct {
 		OrderNo string `json:"order_no" binding:"required"`
 	}
@@ -45,7 +48,10 @@ func (h *InvoiceHandler) GenerateInvoice(c *gin.Context) {
 // ListInvoices returns paginated invoices for the current user.
 // GET /api/v1/invoices
 func (h *InvoiceHandler) ListInvoices(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	page, pageSize := mustPageParams(c)
 
 	list, total, err := h.invoices.ListByAccount(c.Request.Context(), accountID, page, pageSize)
@@ -61,7 +67,10 @@ func (h *InvoiceHandler) ListInvoices(c *gin.Context) {
 // IDOR is enforced: only the owning account may retrieve the invoice.
 // GET /api/v1/invoices/:invoice_no
 func (h *InvoiceHandler) GetInvoice(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	invoiceNo := c.Param("invoice_no")
 
 	inv, err := h.invoices.GetByNo(c.Request.Context(), accountID, invoiceNo)

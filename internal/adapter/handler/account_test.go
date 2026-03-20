@@ -36,14 +36,14 @@ func TestAccountHandler_GetMe(t *testing.T) {
 		}
 	})
 
-	t.Run("missing_account_id_returns_404", func(t *testing.T) {
+	t.Run("missing_account_id_returns_401", func(t *testing.T) {
 		r2 := testRouter()
-		r2.GET("/api/v1/account/me", withAccountID(0), h.GetMe) // 0 = no account
+		r2.GET("/api/v1/account/me", withAccountID(0), h.GetMe) // 0 = unauthenticated
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/account/me", nil)
 		r2.ServeHTTP(w, req)
-		if w.Code != http.StatusNotFound {
-			t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
 		}
 	})
 }

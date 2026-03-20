@@ -21,7 +21,10 @@ func NewCheckinHandler(checkin *app.CheckinService) *CheckinHandler {
 // GetStatus returns the current check-in status for the authenticated user.
 // GET /api/v1/checkin/status
 func (h *CheckinHandler) GetStatus(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	status, err := h.checkin.GetStatus(c.Request.Context(), accountID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get checkin status"})
@@ -33,7 +36,10 @@ func (h *CheckinHandler) GetStatus(c *gin.Context) {
 // DoCheckin performs a daily check-in for the authenticated user.
 // POST /api/v1/checkin
 func (h *CheckinHandler) DoCheckin(c *gin.Context) {
-	accountID := mustAccountID(c)
+	accountID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
 	result, err := h.checkin.DoCheckin(c.Request.Context(), accountID)
 	if err != nil {
 		if strings.Contains(err.Error(), "already checked in") {
