@@ -1,0 +1,1705 @@
+openapi: 3.1.0
+info:
+  title: Lurus Platform API
+  description: |
+    Enterprise Identity, Billing & Communication Platform.
+    Provides unified account, VIP, wallet, subscription, and entitlement management.
+
+    **Auth modes:**
+    - Internal (`/internal/v1/*`): `Authorization: Bearer $INTERNAL_API_KEY`
+    - Public (`/api/v1/*`): Zitadel JWT or lurus session token
+    - Admin (`/admin/v1/*`): Zitadel JWT with admin role
+  version: 1.0.0
+  contact:
+    name: Lurus Platform Team
+
+servers:
+  - url: http://platform-core.lurus-platform.svc:18104
+    description: In-cluster (K8s service)
+  - url: https://identity.lurus.cn
+    description: Public (via Traefik IngressRoute)
+
+tags:
+  - name: health
+    description: Health check
+  - name: internal-account
+    description: Service-to-service account operations
+  - name: internal-billing
+    description: Service-to-service billing operations
+  - name: internal-checkout
+    description: Cross-service checkout flow
+  - name: internal-wallet
+    description: Service-to-service wallet operations
+  - name: internal-org
+    description: Service-to-service organization operations
+  - name: public-account
+    description: User-facing account endpoints
+  - name: public-wallet
+    description: User-facing wallet & topup
+  - name: public-subscription
+    description: Subscription management
+  - name: public-product
+    description: Product & plan catalog
+  - name: public-invoice
+    description: Invoice management
+  - name: public-refund
+    description: Refund management
+  - name: public-checkin
+    description: Daily check-in
+  - name: public-org
+    description: Organization management
+  - name: admin-account
+    description: Admin account management
+  - name: admin-product
+    description: Admin product/plan management
+  - name: admin-ops
+    description: Admin operations (redemption codes, reports)
+  - name: admin-settings
+    description: Admin platform settings
+  - name: webhook
+    description: Payment provider webhooks
+
+# ─────────────────────────────────────────────
+# Security Schemes
+# ─────────────────────────────────────────────
+security: []
+
+components:
+  securitySchemes:
+    InternalApiKey:
+      type: http
+      scheme: bearer
+      description: INTERNAL_API_KEY for service-to-service calls
+    ZitadelJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Zitadel OIDC JWT token
+    AdminJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Zitadel JWT with admin role
+
+  # ─────────────────────────────────────────
+  # Reusable Schemas
+  # ─────────────────────────────────────────
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    PaginatedResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+          format: int64
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    Account:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        lurus_id:
+          type: string
+        zitadel_sub:
+          type: string
+        email:
+          type: string
+          format: email
+        email_verified:
+          type: boolean
+        phone:
+          type: string
+        phone_verified:
+          type: boolean
+        display_name:
+          type: string
+        avatar_url:
+          type: string
+          format: uri
+        status:
+          type: integer
+          description: "1=active, 2=suspended, 3=deleted"
+        locale:
+          type: string
+        aff_code:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AccountOverview:
+      type: object
+      properties:
+        account:
+          $ref: '#/components/schemas/AccountSummary'
+        vip:
+          $ref: '#/components/schemas/VIPSummary'
+        wallet:
+          $ref: '#/components/schemas/WalletSummary'
+        subscription:
+          $ref: '#/components/schemas/SubscriptionSummary'
+        topup_url:
+          type: string
+
+    AccountSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        lurus_id:
+          type: string
+        display_name:
+          type: string
+        avatar_url:
+          type: string
+
+    VIPSummary:
+      type: object
+      properties:
+        level:
+          type: integer
+        level_name:
+          type: string
+        level_en:
+          type: string
+        points:
+          type: integer
+          format: int64
+        level_expires_at:
+          type: string
+          format: date-time
+
+    WalletSummary:
+      type: object
+      properties:
+        balance:
+          type: number
+          format: double
+        frozen:
+          type: number
+          format: double
+        discount_rate:
+          type: number
+          format: double
+        discount_tier:
+          type: string
+
+    SubscriptionSummary:
+      type: object
+      properties:
+        product_id:
+          type: string
+        plan_code:
+          type: string
+        status:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        auto_renew:
+          type: boolean
+
+    Entitlements:
+      type: object
+      additionalProperties:
+        type: string
+      description: Map of entitlement key to value
+
+    WalletOperationResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        balance_after:
+          type: number
+          format: double
+
+    BillingSummary:
+      type: object
+      properties:
+        balance:
+          type: number
+          format: double
+        frozen:
+          type: number
+          format: double
+        pre_auths:
+          type: integer
+        pending_orders:
+          type: integer
+
+    CheckoutRequest:
+      type: object
+      required: [account_id, amount_cny, payment_method, source_service]
+      properties:
+        account_id:
+          type: integer
+          format: int64
+        amount_cny:
+          type: number
+          format: double
+        payment_method:
+          type: string
+        source_service:
+          type: string
+        idempotency_key:
+          type: string
+        return_url:
+          type: string
+        ttl_seconds:
+          type: integer
+
+    CheckoutResponse:
+      type: object
+      properties:
+        order_no:
+          type: string
+        pay_url:
+          type: string
+        status:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    PreAuthRequest:
+      type: object
+      required: [amount, product_id]
+      properties:
+        amount:
+          type: number
+          format: double
+        product_id:
+          type: string
+        reference_id:
+          type: string
+        description:
+          type: string
+        ttl_seconds:
+          type: integer
+
+    PreAuthResponse:
+      type: object
+      properties:
+        preauth_id:
+          type: string
+        amount:
+          type: number
+          format: double
+        expires_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+
+    ProductPlan:
+      type: object
+      properties:
+        id:
+          type: string
+        product_id:
+          type: string
+        name:
+          type: string
+        plan_code:
+          type: string
+        price_cny:
+          type: number
+          format: double
+        duration_days:
+          type: integer
+
+    Subscription:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        account_id:
+          type: integer
+          format: int64
+        product_id:
+          type: string
+        plan_code:
+          type: string
+        status:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        auto_renew:
+          type: boolean
+
+    Invoice:
+      type: object
+      properties:
+        invoice_no:
+          type: string
+        order_no:
+          type: string
+        amount:
+          type: number
+          format: double
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Refund:
+      type: object
+      properties:
+        refund_no:
+          type: string
+        order_no:
+          type: string
+        amount:
+          type: number
+          format: double
+        reason:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Organization:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        slug:
+          type: string
+        status:
+          type: string
+
+# ─────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────
+paths:
+  # ── Health ──
+  /health:
+    get:
+      tags: [health]
+      operationId: healthCheck
+      summary: Health check
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: lurus-platform
+
+  # ─────────────────────────────────────────
+  # Internal API — Service-to-Service
+  # ─────────────────────────────────────────
+
+  /internal/v1/accounts/by-zitadel-sub/{sub}:
+    get:
+      tags: [internal-account]
+      operationId: getAccountByZitadelSub
+      summary: Lookup account by Zitadel OIDC sub claim
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: sub
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /internal/v1/accounts/by-email/{email}:
+    get:
+      tags: [internal-account]
+      operationId: getAccountByEmail
+      summary: Lookup account by email
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: email
+          in: path
+          required: true
+          schema:
+            type: string
+            format: email
+      responses:
+        '200':
+          description: Account found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          description: Account not found
+
+  /internal/v1/accounts/by-phone/{phone}:
+    get:
+      tags: [internal-account]
+      operationId: getAccountByPhone
+      summary: Lookup account by phone
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: phone
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          description: Account not found
+
+  /internal/v1/accounts/by-oauth/{provider}/{provider_id}:
+    get:
+      tags: [internal-account]
+      operationId: getAccountByOAuth
+      summary: Lookup account by OAuth binding (e.g. WeChat openid)
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          description: Account not found
+
+  /internal/v1/accounts/upsert:
+    post:
+      tags: [internal-account]
+      operationId: upsertAccount
+      summary: Create or update account from OIDC login
+      security:
+        - InternalApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [zitadel_sub, email]
+              properties:
+                zitadel_sub:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                display_name:
+                  type: string
+                avatar_url:
+                  type: string
+                referrer_aff_code:
+                  type: string
+      responses:
+        '200':
+          description: Account upserted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+
+  /internal/v1/accounts/validate-session:
+    post:
+      tags: [internal-account]
+      operationId: validateSession
+      summary: Validate a session token
+      security:
+        - InternalApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        '200':
+          description: Session valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          description: Invalid session
+
+  /internal/v1/accounts/{id}/overview:
+    get:
+      tags: [internal-account]
+      operationId: getAccountOverviewInternal
+      summary: Aggregated account overview (account + VIP + wallet + subscription)
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: product_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountOverview'
+
+  /internal/v1/accounts/{id}/entitlements/{product_id}:
+    get:
+      tags: [internal-billing]
+      operationId: getEntitlements
+      summary: Get product entitlements for an account (Redis-cached)
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: product_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Entitlements map
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Entitlements'
+
+  /internal/v1/accounts/{id}/subscription/{product_id}:
+    get:
+      tags: [internal-billing]
+      operationId: getSubscriptionInternal
+      summary: Get active subscription for a product
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: product_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Active subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '404':
+          description: No active subscription
+
+  /internal/v1/usage/report:
+    post:
+      tags: [internal-billing]
+      operationId: reportUsage
+      summary: Report LLM usage for VIP accumulation
+      security:
+        - InternalApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id, amount_cny]
+              properties:
+                account_id:
+                  type: integer
+                  format: int64
+                amount_cny:
+                  type: number
+                  format: double
+      responses:
+        '200':
+          description: Usage accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted:
+                    type: boolean
+
+  /internal/v1/accounts/{id}/wallet/balance:
+    get:
+      tags: [internal-wallet]
+      operationId: getWalletBalance
+      summary: Quick wallet balance lookup
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Balance info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  balance:
+                    type: number
+                    format: double
+                  frozen:
+                    type: number
+                    format: double
+
+  /internal/v1/accounts/{id}/wallet/debit:
+    post:
+      tags: [internal-wallet]
+      operationId: walletDebit
+      summary: Debit (deduct) from account wallet
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, type]
+              properties:
+                amount:
+                  type: number
+                  format: double
+                type:
+                  type: string
+                  description: Transaction type
+                product_id:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '200':
+          description: Debit result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletOperationResult'
+
+  /internal/v1/accounts/{id}/billing-summary:
+    get:
+      tags: [internal-billing]
+      operationId: getBillingSummary
+      summary: Billing aggregation (balance, frozen, pre-auths, pending orders)
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Billing summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingSummary'
+
+  /internal/v1/checkout/create:
+    post:
+      tags: [internal-checkout]
+      operationId: createCheckout
+      summary: Create cross-service checkout order
+      security:
+        - InternalApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+      responses:
+        '200':
+          description: Checkout created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutResponse'
+
+  /internal/v1/checkout/{order_no}/status:
+    get:
+      tags: [internal-checkout]
+      operationId: getCheckoutStatus
+      summary: Query checkout order status
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Checkout status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order_no:
+                    type: string
+                  status:
+                    type: string
+                  amount_cny:
+                    type: number
+                    format: double
+                  pay_url:
+                    type: string
+                  paid_at:
+                    type: string
+                    format: date-time
+                  expires_at:
+                    type: string
+                    format: date-time
+
+  /internal/v1/payment-methods:
+    get:
+      tags: [internal-checkout]
+      operationId: getPaymentMethods
+      summary: List available payment methods
+      security:
+        - InternalApiKey: []
+      responses:
+        '200':
+          description: Payment methods
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  payment_methods:
+                    type: array
+                    items:
+                      type: object
+
+  /internal/v1/accounts/{id}/wallet/pre-authorize:
+    post:
+      tags: [internal-wallet]
+      operationId: walletPreAuthorize
+      summary: Create pre-authorization hold on wallet
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreAuthRequest'
+      responses:
+        '200':
+          description: Pre-auth created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreAuthResponse'
+
+  /internal/v1/wallet/pre-auth/{id}/settle:
+    post:
+      tags: [internal-wallet]
+      operationId: settlePreAuth
+      summary: Settle a pre-authorization (capture actual amount)
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actual_amount]
+              properties:
+                actual_amount:
+                  type: number
+                  format: double
+      responses:
+        '200':
+          description: Pre-auth settled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preauth_id:
+                    type: string
+                  status:
+                    type: string
+                  held_amount:
+                    type: number
+                    format: double
+                  actual_amount:
+                    type: number
+                    format: double
+                  settled_at:
+                    type: string
+                    format: date-time
+
+  /internal/v1/wallet/pre-auth/{id}/release:
+    post:
+      tags: [internal-wallet]
+      operationId: releasePreAuth
+      summary: Release a pre-authorization hold
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pre-auth released
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preauth_id:
+                    type: string
+                  status:
+                    type: string
+                  amount:
+                    type: number
+                    format: double
+
+  /internal/v1/orgs/resolve-api-key:
+    post:
+      tags: [internal-org]
+      operationId: resolveOrgApiKey
+      summary: Resolve organization by API key
+      security:
+        - InternalApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [api_key]
+              properties:
+                api_key:
+                  type: string
+      responses:
+        '200':
+          description: Organization resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '404':
+          description: API key not found
+
+  # ─────────────────────────────────────────
+  # Public API — User-Facing
+  # ─────────────────────────────────────────
+
+  /api/v1/account/me:
+    get:
+      tags: [public-account]
+      operationId: getMe
+      summary: Get current user profile
+      security:
+        - ZitadelJWT: []
+      responses:
+        '200':
+          description: User profile with VIP and subscriptions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account:
+                    $ref: '#/components/schemas/Account'
+                  vip:
+                    $ref: '#/components/schemas/VIPSummary'
+                  subscriptions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Subscription'
+    put:
+      tags: [public-account]
+      operationId: updateMe
+      summary: Update current user profile
+      security:
+        - ZitadelJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                avatar_url:
+                  type: string
+                locale:
+                  type: string
+      responses:
+        '200':
+          description: Updated account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+
+  /api/v1/account/me/overview:
+    get:
+      tags: [public-account]
+      operationId: getMyOverview
+      summary: Aggregated overview for current user
+      security:
+        - ZitadelJWT: []
+      parameters:
+        - name: product_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountOverview'
+
+  /api/v1/account/me/referral:
+    get:
+      tags: [public-account]
+      operationId: getMyReferral
+      summary: Get referral code and stats
+      security:
+        - ZitadelJWT: []
+      responses:
+        '200':
+          description: Referral info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  aff_code:
+                    type: string
+                  referral_url:
+                    type: string
+                  stats:
+                    type: object
+
+  /api/v1/products:
+    get:
+      tags: [public-product]
+      operationId: listProducts
+      summary: List all active products
+      security:
+        - ZitadelJWT: []
+      responses:
+        '200':
+          description: Product list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  products:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Product'
+
+  /api/v1/products/{id}/plans:
+    get:
+      tags: [public-product]
+      operationId: listPlansForProduct
+      summary: List plans for a product
+      security:
+        - ZitadelJWT: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Plan list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProductPlan'
+
+  /api/v1/subscriptions:
+    get:
+      tags: [public-subscription]
+      operationId: listMySubscriptions
+      summary: List all subscriptions for current user
+      security:
+        - ZitadelJWT: []
+      responses:
+        '200':
+          description: Subscription list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subscriptions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Subscription'
+
+  /api/v1/subscriptions/checkout:
+    post:
+      tags: [public-subscription]
+      operationId: checkoutSubscription
+      summary: Subscribe to a product plan
+      security:
+        - ZitadelJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [product_id, plan_id, payment_method]
+              properties:
+                product_id:
+                  type: string
+                plan_id:
+                  type: string
+                payment_method:
+                  type: string
+                return_url:
+                  type: string
+      responses:
+        '200':
+          description: Subscription activated (wallet) or payment order created (external)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subscription:
+                    $ref: '#/components/schemas/Subscription'
+                  order_no:
+                    type: string
+                  pay_url:
+                    type: string
+
+  /api/v1/wallet:
+    get:
+      tags: [public-wallet]
+      operationId: getMyWallet
+      summary: Get current user wallet info
+      security:
+        - ZitadelJWT: []
+      responses:
+        '200':
+          description: Wallet info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletSummary'
+
+  /api/v1/wallet/topup:
+    post:
+      tags: [public-wallet]
+      operationId: createTopup
+      summary: Create wallet topup order
+      security:
+        - ZitadelJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_cny, payment_method]
+              properties:
+                amount_cny:
+                  type: number
+                  format: double
+                payment_method:
+                  type: string
+                return_url:
+                  type: string
+      responses:
+        '200':
+          description: Topup order created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order_no:
+                    type: string
+                  pay_url:
+                    type: string
+
+  /api/v1/wallet/redeem:
+    post:
+      tags: [public-wallet]
+      operationId: redeemCode
+      summary: Redeem a gift/promo code
+      security:
+        - ZitadelJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+      responses:
+        '200':
+          description: Code redeemed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  redeemed:
+                    type: boolean
+
+  /api/v1/checkin/status:
+    get:
+      tags: [public-checkin]
+      operationId: getCheckinStatus
+      summary: Get daily check-in status
+      security:
+        - ZitadelJWT: []
+      responses:
+        '200':
+          description: Check-in status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checked_in:
+                    type: boolean
+                  streak:
+                    type: integer
+                  reward:
+                    type: number
+                    format: double
+
+  /api/v1/checkin:
+    post:
+      tags: [public-checkin]
+      operationId: performCheckin
+      summary: Perform daily check-in
+      security:
+        - ZitadelJWT: []
+      responses:
+        '200':
+          description: Check-in successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  reward:
+                    type: number
+                    format: double
+
+  # ─────────────────────────────────────────
+  # Admin API
+  # ─────────────────────────────────────────
+
+  /admin/v1/accounts:
+    get:
+      tags: [admin-account]
+      operationId: listAccounts
+      summary: Paginated account list with search
+      security:
+        - AdminJWT: []
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Account list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Account'
+
+  /admin/v1/accounts/{id}:
+    get:
+      tags: [admin-account]
+      operationId: getAccountAdmin
+      summary: Full account details
+      security:
+        - AdminJWT: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Full account info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account:
+                    $ref: '#/components/schemas/Account'
+                  vip:
+                    $ref: '#/components/schemas/VIPSummary'
+                  subscriptions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Subscription'
+
+  /admin/v1/accounts/{id}/wallet/adjust:
+    post:
+      tags: [admin-account]
+      operationId: adjustWallet
+      summary: Admin wallet balance adjustment
+      security:
+        - AdminJWT: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, type]
+              properties:
+                amount:
+                  type: number
+                  format: double
+                type:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '200':
+          description: Adjustment applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /admin/v1/accounts/{id}/grant:
+    post:
+      tags: [admin-account]
+      operationId: grantEntitlement
+      summary: Grant entitlement to account
+      security:
+        - AdminJWT: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [product_id, key, value]
+              properties:
+                product_id:
+                  type: string
+                key:
+                  type: string
+                value:
+                  type: string
+      responses:
+        '200':
+          description: Entitlement granted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  granted:
+                    type: boolean
+
+  /admin/v1/redemption-codes/batch:
+    post:
+      tags: [admin-ops]
+      operationId: batchRedemptionCodes
+      summary: Batch generate redemption codes
+      security:
+        - AdminJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [count, product_id, plan_code, duration_days]
+              properties:
+                count:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                product_id:
+                  type: string
+                plan_code:
+                  type: string
+                duration_days:
+                  type: integer
+                notes:
+                  type: string
+                expires_at:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Codes generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  codes:
+                    type: array
+                    items:
+                      type: string
+
+  /admin/v1/reports/financial:
+    get:
+      tags: [admin-ops]
+      operationId: getFinancialReport
+      summary: Financial reconciliation report
+      security:
+        - AdminJWT: []
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [day, month]
+            default: day
+      responses:
+        '200':
+          description: Financial report
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /admin/v1/settings:
+    get:
+      tags: [admin-settings]
+      operationId: getSettings
+      summary: List all platform settings
+      security:
+        - AdminJWT: []
+      responses:
+        '200':
+          description: Settings list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                        value:
+                          type: string
+                        is_secret:
+                          type: boolean
+                        updated_by:
+                          type: string
+                        updated_at:
+                          type: string
+                          format: date-time
+    put:
+      tags: [admin-settings]
+      operationId: updateSettings
+      summary: Batch update platform settings
+      security:
+        - AdminJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings]
+              properties:
+                settings:
+                  type: array
+                  items:
+                    type: object
+                    required: [key, value]
+                    properties:
+                      key:
+                        type: string
+                      value:
+                        type: string
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    type: integer
+
+  # ─────────────────────────────────────────
+  # Webhooks
+  # ─────────────────────────────────────────
+
+  /webhook/epay:
+    get:
+      tags: [webhook]
+      operationId: epayWebhook
+      summary: Epay payment callback
+      parameters:
+        - name: out_trade_no
+          in: query
+          schema:
+            type: string
+        - name: trade_status
+          in: query
+          schema:
+            type: string
+        - name: sign
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Processed
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: success
+
+  /webhook/stripe:
+    post:
+      tags: [webhook]
+      operationId: stripeWebhook
+      summary: Stripe payment webhook (signature-verified)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received:
+                    type: boolean
+
+  /webhook/creem:
+    post:
+      tags: [webhook]
+      operationId: creemWebhook
+      summary: Creem payment webhook (signature-verified)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Received
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received:
+                    type: boolean
