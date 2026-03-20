@@ -89,6 +89,10 @@ type Config struct {
 	// SMS
 	SMSProvider string // SMS_PROVIDER ("tencent" or "aliyun"; empty = noop)
 
+	// Lurus API (currency exchange)
+	LurusAPIInternalURL string // LURUS_API_INTERNAL_URL (e.g. http://lurus-api.lurus-system.svc:8850)
+	LurusAPIInternalKey string // LURUS_API_INTERNAL_KEY (bearer key for /internal/* on lurus-api)
+
 	// OpenTelemetry tracing
 	OtelEndpoint    string // OTEL_EXPORTER_OTLP_ENDPOINT (empty = noop)
 	OtelServiceName string // OTEL_SERVICE_NAME (default: lurus-platform)
@@ -144,6 +148,8 @@ func Load() (*Config, error) {
 		NewAPIInternalURL:      getEnv("NEWAPI_INTERNAL_URL", ""),
 		NewAPIAdminAccessToken: getEnv("NEWAPI_ADMIN_ACCESS_TOKEN", ""),
 		NewAPIAdminUserID:      getEnv("NEWAPI_ADMIN_USER_ID", ""),
+		LurusAPIInternalURL: getEnv("LURUS_API_INTERNAL_URL", "http://lurus-api.lurus-system.svc:8850"),
+		LurusAPIInternalKey: getEnv("LURUS_API_INTERNAL_KEY", ""),
 		SMSProvider:         getEnv("SMS_PROVIDER", ""),
 		OtelEndpoint:        getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OtelServiceName:     getEnv("OTEL_SERVICE_NAME", "lurus-platform"),

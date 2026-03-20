@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/lurusapi"
 )
 
 // validateSessionTokenFn is a package-level reference to auth.ValidateSessionToken
@@ -29,6 +32,7 @@ type InternalHandler struct {
 	epay          *payment.EpayProvider
 	stripe        *payment.StripeProvider
 	creem         *payment.CreemProvider
+	lurusAPI      *lurusapi.Client
 }
 
 func NewInternalHandler(
@@ -51,6 +55,12 @@ func NewInternalHandler(
 		referral:      referral,
 		sessionSecret: sessionSecret,
 	}
+}
+
+// WithLurusAPI sets the lurus-api client for currency exchange.
+func (h *InternalHandler) WithLurusAPI(c *lurusapi.Client) *InternalHandler {
+	h.lurusAPI = c
+	return h
 }
 
 // WithPaymentProviders sets payment providers for checkout resolution.
@@ -541,6 +551,129 @@ func (h *InternalHandler) ReleasePreAuth(c *gin.Context) {
 		"status":     pa.Status,
 		"amount":     pa.Amount,
 	})
+}
+
+// ExchangeLucToLut converts platform credits (LuCoin/LUC) to API credits (Lute/LUT).
+// Two-phase operation: (1) debit wallet, (2) call lurus-api to credit Lute.
+// If phase 2 fails, phase 1 is rolled back (wallet credit).
+//
+// POST /internal/v1/accounts/:id/currency/exchange
+func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
+	if h.lurusAPI == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "currency exchange not configured"})
+		return
+	}
+
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+		return
+	}
+
+	var req struct {
+		Amount         float64 `json:"amount"          binding:"required,gt=0"` // LUC amount
+		LurusUserID    int     `json:"lurus_user_id"   binding:"required"`      // User ID in lurus-api
+		IdempotencyKey string  `json:"idempotency_key" binding:"required"`      // Dedup key
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.Amount > 100000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount exceeds maximum (100,000 LUC)"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Get VIP level for bonus calculation
+	vipLevel := 0
+	vipInfo, err := h.vip.Get(ctx, accountID)
+	if err == nil && vipInfo != nil {
+		vipLevel = int(vipInfo.Level)
+	}
+
+	// Phase 1: Debit wallet (LUC)
+	refID := "cex:" + req.IdempotencyKey
+	debitTx, err := h.wallet.Debit(ctx, accountID, req.Amount,
+		entity.TxTypeCurrencyExchange,
+		fmt.Sprintf("Exchange %.4f LUC to Lute (user=%d)", req.Amount, req.LurusUserID),
+		"currency_exchange", refID, "lurus_api")
+	if err != nil {
+		slog.WarnContext(ctx, "currency exchange: wallet debit failed",
+			"account_id", accountID, "amount", req.Amount, "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":      "insufficient_balance",
+			"error_code": "INSUFFICIENT_BALANCE",
+			"message":    "Not enough LuCoin balance for this exchange",
+		})
+		return
+	}
+
+	// Phase 2: Call lurus-api to credit Lute
+	exchangeResp, err := h.lurusAPI.ExchangeLucToLut(ctx, &lurusapi.ExchangeRequest{
+		UserID:          req.LurusUserID,
+		LucAmount:       req.Amount,
+		VIPLevel:        vipLevel,
+		ReferenceID:     fmt.Sprintf("platform-tx-%d", debitTx.ID),
+		PlatformOrderNo: refID,
+		Note:            fmt.Sprintf("Platform account %d exchange", accountID),
+	})
+	if err != nil {
+		// Rollback: credit back the debited amount
+		slog.ErrorContext(ctx, "currency exchange: lurus-api call failed, rolling back wallet debit",
+			"account_id", accountID, "debit_tx_id", debitTx.ID, "error", err)
+		_, rollbackErr := h.wallet.Credit(ctx, accountID, req.Amount,
+			entity.TxTypeRefund,
+			fmt.Sprintf("Rollback currency exchange (debit_tx=%d): %s", debitTx.ID, err.Error()),
+			"currency_exchange_rollback", refID, "lurus_api")
+		if rollbackErr != nil {
+			slog.ErrorContext(ctx, "currency exchange: CRITICAL rollback failed",
+				"account_id", accountID, "debit_tx_id", debitTx.ID, "rollback_error", rollbackErr)
+		}
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":      "exchange_failed",
+			"error_code": "EXCHANGE_FAILED",
+			"message":    "Failed to credit Lute to API account. Wallet has been refunded.",
+		})
+		return
+	}
+
+	slog.InfoContext(ctx, "currency exchange completed",
+		"account_id", accountID, "luc_amount", req.Amount,
+		"lut_amount", exchangeResp.LutAmount, "vip_level", vipLevel)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"exchange_id":     exchangeResp.ExchangeID,
+			"luc_amount":      req.Amount,
+			"lut_amount":      exchangeResp.LutAmount,
+			"exchange_rate":   exchangeResp.ExchangeRate,
+			"vip_level":       vipLevel,
+			"vip_bonus":       exchangeResp.VIPBonus,
+			"wallet_balance":  debitTx.BalanceAfter,
+			"lut_balance":     exchangeResp.UserBalance,
+			"lut_balance_cn":  exchangeResp.BalanceCN,
+		},
+	})
+}
+
+// GetCurrencyInfo returns the three-tier currency system configuration from lurus-api.
+// GET /internal/v1/currency/info
+func (h *InternalHandler) GetCurrencyInfo(c *gin.Context) {
+	if h.lurusAPI == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "currency service not configured"})
+		return
+	}
+
+	info, err := h.lurusAPI.GetCurrencyInfo(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch currency info: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": info})
 }
 
 // resolveCheckout routes the order to the correct payment provider.

@@ -41,6 +41,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tracing"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/lurusapi"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/zitadel"
 	lurustemporal "github.com/hanmahong5-arch/lurus-platform/internal/temporal"
 	"github.com/hanmahong5-arch/lurus-platform/internal/temporal/activities"
@@ -257,8 +258,10 @@ func run(ctx context.Context, cfg *config.Config) error {
 	subH := handler.NewSubscriptionHandler(subSvc, productSvc, walletSvc, epayProvider, stripeProvider, creemProvider)
 	walletH := handler.NewWalletHandler(walletSvc, epayProvider, stripeProvider, creemProvider)
 	productH := handler.NewProductHandler(productSvc)
+	lurusAPIClient := lurusapi.NewClient(cfg.LurusAPIInternalURL, cfg.LurusAPIInternalKey)
 	internalH := handler.NewInternalHandler(accountSvc, subSvc, entSvc, vipSvc, overviewSvc, walletSvc, referralSvc, cfg.SessionSecret).
-		WithPaymentProviders(epayProvider, stripeProvider, creemProvider)
+		WithPaymentProviders(epayProvider, stripeProvider, creemProvider).
+		WithLurusAPI(lurusAPIClient)
 	webhookH := handler.NewWebhookHandler(walletSvc, subSvc, epayProvider, stripeProvider, creemProvider, webhookDeduper)
 	invoiceH := handler.NewInvoiceHandler(invoiceSvc)
 	refundH := handler.NewRefundHandler(refundSvc)

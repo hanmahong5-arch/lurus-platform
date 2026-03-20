@@ -191,6 +191,9 @@ func Build(deps Deps) *gin.Engine {
 		internal.POST("/accounts/validate-session", deps.Internal.ValidateSession)
 		// Lookup by third-party OAuth binding (e.g. wechat openid)
 		internal.GET("/accounts/by-oauth/:provider/:provider_id", deps.Internal.GetAccountByOAuth)
+		// Currency exchange (LUC → LUT)
+		internal.POST("/accounts/:id/currency/exchange", deps.Internal.ExchangeLucToLut)
+		internal.GET("/currency/info", deps.Internal.GetCurrencyInfo)
 		// Resolve org API key to organization (used by lurus-api and other services)
 		internal.POST("/orgs/resolve-api-key", deps.Organizations.ResolveAPIKey)
 	}

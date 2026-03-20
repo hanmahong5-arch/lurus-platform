@@ -46,8 +46,9 @@ const (
 	TxTypeReferralReward   = "referral_reward"
 	TxTypeRedemption       = "redemption"
 	TxTypeCheckinReward    = "checkin_reward"
-	TxTypePreAuthSettle    = "preauth_settle"  // actual charge after pre-auth
-	TxTypePreAuthRelease   = "preauth_release" // refund of unused frozen amount
+	TxTypePreAuthSettle    = "preauth_settle"    // actual charge after pre-auth
+	TxTypePreAuthRelease   = "preauth_release"   // refund of unused frozen amount
+	TxTypeCurrencyExchange = "currency_exchange"  // LUC -> LUT one-way conversion
 )
 
 // PaymentOrder records an external payment intent and its lifecycle.
