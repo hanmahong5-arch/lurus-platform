@@ -182,12 +182,46 @@ default:
 
 ---
 
+## Service API Keys (Scoped Permissions)
+
+Each product gets its own API key with specific permissions. Request one from your admin:
+
+```bash
+# Admin creates a key for your service
+curl -X POST https://admin.lurus.cn/admin/v1/service-keys \
+  -H "Authorization: Bearer <admin-jwt>" \
+  -d '{
+    "service_name": "your-product",
+    "description": "Production key for your-product",
+    "scopes": ["account:read", "entitlement", "wallet:debit", "checkout"],
+    "rate_limit_rpm": 500
+  }'
+# Response includes the raw key (shown ONCE):
+# { "key": "sk-your-product-a1b2c3d4e5f6...", ... }
+```
+
+### Available Scopes
+
+| Scope | Allows |
+|-------|--------|
+| `account:read` | Look up users (by ID, email, phone, Zitadel sub) |
+| `account:write` | Create/update accounts (Zitadel webhook) |
+| `wallet:read` | Check balance, billing summary |
+| `wallet:debit` | Charge users, pre-authorize, settle, release |
+| `wallet:credit` | Add funds (admin operations only) |
+| `entitlement` | Check permissions and subscriptions |
+| `checkout` | Create payment sessions, check status |
+
+**Principle of least privilege**: request only the scopes you need. A service that only checks permissions needs `account:read` + `entitlement` — nothing more.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Example |
 |----------|----------|---------|
 | `IDENTITY_SERVICE_URL` | Yes | `http://platform-core.lurus-platform.svc:18104` |
-| `INTERNAL_API_KEY` | Yes | (get from ops team) |
+| `INTERNAL_API_KEY` | Yes | Your scoped service key (`sk-...`) |
 | `NATS_ADDR` | Optional | `nats://nats.messaging.svc:4222` |
 
 ---
