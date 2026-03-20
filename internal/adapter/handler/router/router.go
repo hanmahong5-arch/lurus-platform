@@ -177,6 +177,7 @@ func Build(deps Deps) *gin.Engine {
 	internal.Use(internalKeyAuth(deps.InternalKey))
 	{
 		internal.GET("/accounts/by-zitadel-sub/:sub", deps.Internal.GetAccountByZitadelSub)
+		internal.GET("/accounts/by-id/:id", deps.Internal.GetAccountByID)
 		internal.POST("/accounts/upsert", deps.Internal.UpsertAccount)
 		internal.GET("/accounts/:id/entitlements/:product_id", deps.Internal.GetEntitlements)
 		internal.GET("/accounts/:id/subscription/:product_id", deps.Internal.GetSubscription)

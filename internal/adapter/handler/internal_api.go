@@ -87,6 +87,25 @@ func (h *InternalHandler) GetAccountByZitadelSub(c *gin.Context) {
 	c.JSON(http.StatusOK, a)
 }
 
+// GetAccountByID looks up an account by its internal numeric ID.
+// GET /internal/v1/accounts/:id
+func (h *InternalHandler) GetAccountByID(c *gin.Context) {
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
+		return
+	}
+	a, err := h.accounts.GetByID(c.Request.Context(), id)
+	if err != nil {
+		respondInternalError(c, "internal.get_account_by_id", err)
+		return
+	}
+	if a == nil {
+		respondNotFound(c, "Account")
+		return
+	}
+	c.JSON(http.StatusOK, a)
+}
+
 // UpsertAccount creates or updates an account from a Zitadel webhook payload.
 // Supports optional referrer_aff_code to link the account to a referrer on first creation.
 // POST /internal/v1/accounts/upsert
