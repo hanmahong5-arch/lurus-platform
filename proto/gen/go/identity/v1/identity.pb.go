@@ -110,3 +110,35 @@ type WalletOperationResponse struct {
 	Success      bool    `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	BalanceAfter float64 `protobuf:"fixed64,2,opt,name=balance_after,json=balanceAfter,proto3" json:"balance_after,omitempty"`
 }
+
+type WalletPreAuthorizeRequest struct {
+	AccountId   int64   `protobuf:"varint,1,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	Amount      float64 `protobuf:"fixed64,2,opt,name=amount,proto3" json:"amount,omitempty"`
+	ProductId   string  `protobuf:"bytes,3,opt,name=product_id,json=productId,proto3" json:"product_id,omitempty"`
+	ReferenceId string  `protobuf:"bytes,4,opt,name=reference_id,json=referenceId,proto3" json:"reference_id,omitempty"`
+	Description string  `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
+	TtlSeconds  int32   `protobuf:"varint,6,opt,name=ttl_seconds,json=ttlSeconds,proto3" json:"ttl_seconds,omitempty"`
+}
+
+type WalletPreAuthorizeResponse struct {
+	PreauthId int64                  `protobuf:"varint,1,opt,name=preauth_id,json=preauthId,proto3" json:"preauth_id,omitempty"`
+	Amount    float64                `protobuf:"fixed64,2,opt,name=amount,proto3" json:"amount,omitempty"`
+	Status    string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
+	ExpiresAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+}
+
+type WalletSettlePreAuthRequest struct {
+	PreauthId    int64   `protobuf:"varint,1,opt,name=preauth_id,json=preauthId,proto3" json:"preauth_id,omitempty"`
+	ActualAmount float64 `protobuf:"fixed64,2,opt,name=actual_amount,json=actualAmount,proto3" json:"actual_amount,omitempty"`
+}
+
+type WalletReleasePreAuthRequest struct {
+	PreauthId int64 `protobuf:"varint,1,opt,name=preauth_id,json=preauthId,proto3" json:"preauth_id,omitempty"`
+}
+
+type WalletPreAuthStatusResponse struct {
+	PreauthId    int64   `protobuf:"varint,1,opt,name=preauth_id,json=preauthId,proto3" json:"preauth_id,omitempty"`
+	Status       string  `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	HeldAmount   float64 `protobuf:"fixed64,3,opt,name=held_amount,json=heldAmount,proto3" json:"held_amount,omitempty"`
+	ActualAmount float64 `protobuf:"fixed64,4,opt,name=actual_amount,json=actualAmount,proto3" json:"actual_amount,omitempty"`
+}

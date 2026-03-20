@@ -29,6 +29,15 @@ service IdentityService {
 
   // WalletCredit adds LB to an account wallet.
   rpc WalletCredit(WalletOperationRequest) returns (WalletOperationResponse);
+
+  // WalletPreAuthorize freezes an estimated amount in the wallet before LLM relay.
+  rpc WalletPreAuthorize(WalletPreAuthorizeRequest) returns (WalletPreAuthorizeResponse);
+
+  // WalletSettlePreAuth settles a pre-authorization with the actual consumed amount.
+  rpc WalletSettlePreAuth(WalletSettlePreAuthRequest) returns (WalletPreAuthStatusResponse);
+
+  // WalletReleasePreAuth cancels a pre-authorization and unfreezes the held amount.
+  rpc WalletReleasePreAuth(WalletReleasePreAuthRequest) returns (WalletPreAuthStatusResponse);
 }
 
 // Account represents a unified Lurus user identity.
@@ -133,4 +142,36 @@ message WalletOperationRequest {
 message WalletOperationResponse {
   bool success = 1;
   double balance_after = 2;
+}
+
+message WalletPreAuthorizeRequest {
+  int64 account_id = 1;
+  double amount = 2;
+  string product_id = 3;
+  string reference_id = 4;   // optional idempotency key
+  string description = 5;
+  int32 ttl_seconds = 6;     // 0 = default (600s)
+}
+
+message WalletPreAuthorizeResponse {
+  int64 preauth_id = 1;
+  double amount = 2;
+  string status = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message WalletSettlePreAuthRequest {
+  int64 preauth_id = 1;
+  double actual_amount = 2;
+}
+
+message WalletReleasePreAuthRequest {
+  int64 preauth_id = 1;
+}
+
+message WalletPreAuthStatusResponse {
+  int64 preauth_id = 1;
+  string status = 2;
+  double held_amount = 3;
+  double actual_amount = 4;
 }

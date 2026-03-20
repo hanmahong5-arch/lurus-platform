@@ -20,6 +20,9 @@ type IdentityServiceClient interface {
 	ReportUsage(ctx context.Context, in *ReportUsageRequest, opts ...grpc.CallOption) (*ReportUsageResponse, error)
 	WalletDebit(ctx context.Context, in *WalletOperationRequest, opts ...grpc.CallOption) (*WalletOperationResponse, error)
 	WalletCredit(ctx context.Context, in *WalletOperationRequest, opts ...grpc.CallOption) (*WalletOperationResponse, error)
+	WalletPreAuthorize(ctx context.Context, in *WalletPreAuthorizeRequest, opts ...grpc.CallOption) (*WalletPreAuthorizeResponse, error)
+	WalletSettlePreAuth(ctx context.Context, in *WalletSettlePreAuthRequest, opts ...grpc.CallOption) (*WalletPreAuthStatusResponse, error)
+	WalletReleasePreAuth(ctx context.Context, in *WalletReleasePreAuthRequest, opts ...grpc.CallOption) (*WalletPreAuthStatusResponse, error)
 }
 
 type identityServiceClient struct {
@@ -75,6 +78,24 @@ func (c *identityServiceClient) WalletCredit(ctx context.Context, in *WalletOper
 	return out, err
 }
 
+func (c *identityServiceClient) WalletPreAuthorize(ctx context.Context, in *WalletPreAuthorizeRequest, opts ...grpc.CallOption) (*WalletPreAuthorizeResponse, error) {
+	out := new(WalletPreAuthorizeResponse)
+	err := c.cc.Invoke(ctx, identityServiceName+"WalletPreAuthorize", in, out, opts...)
+	return out, err
+}
+
+func (c *identityServiceClient) WalletSettlePreAuth(ctx context.Context, in *WalletSettlePreAuthRequest, opts ...grpc.CallOption) (*WalletPreAuthStatusResponse, error) {
+	out := new(WalletPreAuthStatusResponse)
+	err := c.cc.Invoke(ctx, identityServiceName+"WalletSettlePreAuth", in, out, opts...)
+	return out, err
+}
+
+func (c *identityServiceClient) WalletReleasePreAuth(ctx context.Context, in *WalletReleasePreAuthRequest, opts ...grpc.CallOption) (*WalletPreAuthStatusResponse, error) {
+	out := new(WalletPreAuthStatusResponse)
+	err := c.cc.Invoke(ctx, identityServiceName+"WalletReleasePreAuth", in, out, opts...)
+	return out, err
+}
+
 // IdentityServiceServer is the server API for IdentityService.
 type IdentityServiceServer interface {
 	GetAccountByZitadelSub(context.Context, *GetAccountByZitadelSubRequest) (*Account, error)
@@ -84,6 +105,9 @@ type IdentityServiceServer interface {
 	ReportUsage(context.Context, *ReportUsageRequest) (*ReportUsageResponse, error)
 	WalletDebit(context.Context, *WalletOperationRequest) (*WalletOperationResponse, error)
 	WalletCredit(context.Context, *WalletOperationRequest) (*WalletOperationResponse, error)
+	WalletPreAuthorize(context.Context, *WalletPreAuthorizeRequest) (*WalletPreAuthorizeResponse, error)
+	WalletSettlePreAuth(context.Context, *WalletSettlePreAuthRequest) (*WalletPreAuthStatusResponse, error)
+	WalletReleasePreAuth(context.Context, *WalletReleasePreAuthRequest) (*WalletPreAuthStatusResponse, error)
 	mustEmbedUnimplementedIdentityServiceServer()
 }
 
@@ -111,6 +135,15 @@ func (UnimplementedIdentityServiceServer) WalletDebit(context.Context, *WalletOp
 func (UnimplementedIdentityServiceServer) WalletCredit(context.Context, *WalletOperationRequest) (*WalletOperationResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method WalletCredit not implemented")
 }
+func (UnimplementedIdentityServiceServer) WalletPreAuthorize(context.Context, *WalletPreAuthorizeRequest) (*WalletPreAuthorizeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WalletPreAuthorize not implemented")
+}
+func (UnimplementedIdentityServiceServer) WalletSettlePreAuth(context.Context, *WalletSettlePreAuthRequest) (*WalletPreAuthStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WalletSettlePreAuth not implemented")
+}
+func (UnimplementedIdentityServiceServer) WalletReleasePreAuth(context.Context, *WalletReleasePreAuthRequest) (*WalletPreAuthStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WalletReleasePreAuth not implemented")
+}
 func (UnimplementedIdentityServiceServer) mustEmbedUnimplementedIdentityServiceServer() {}
 
 // UnsafeIdentityServiceServer may be embedded to opt out of forward compatibility.
@@ -131,6 +164,9 @@ func RegisterIdentityServiceServer(s grpc.ServiceRegistrar, srv IdentityServiceS
 			{MethodName: "ReportUsage", Handler: _IdentityService_ReportUsage_Handler},
 			{MethodName: "WalletDebit", Handler: _IdentityService_WalletDebit_Handler},
 			{MethodName: "WalletCredit", Handler: _IdentityService_WalletCredit_Handler},
+			{MethodName: "WalletPreAuthorize", Handler: _IdentityService_WalletPreAuthorize_Handler},
+			{MethodName: "WalletSettlePreAuth", Handler: _IdentityService_WalletSettlePreAuth_Handler},
+			{MethodName: "WalletReleasePreAuth", Handler: _IdentityService_WalletReleasePreAuth_Handler},
 		},
 		Streams:  []grpc.StreamDesc{},
 		Metadata: "identity/v1/identity.proto",
@@ -233,5 +269,47 @@ func _IdentityService_WalletCredit_Handler(srv any, ctx context.Context, dec fun
 	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: identityServiceName + "WalletCredit"}
 	return interceptor(ctx, in, info, func(ctx context.Context, req any) (any, error) {
 		return srv.(IdentityServiceServer).WalletCredit(ctx, req.(*WalletOperationRequest))
+	})
+}
+
+func _IdentityService_WalletPreAuthorize_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	in := new(WalletPreAuthorizeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).WalletPreAuthorize(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: identityServiceName + "WalletPreAuthorize"}
+	return interceptor(ctx, in, info, func(ctx context.Context, req any) (any, error) {
+		return srv.(IdentityServiceServer).WalletPreAuthorize(ctx, req.(*WalletPreAuthorizeRequest))
+	})
+}
+
+func _IdentityService_WalletSettlePreAuth_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	in := new(WalletSettlePreAuthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).WalletSettlePreAuth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: identityServiceName + "WalletSettlePreAuth"}
+	return interceptor(ctx, in, info, func(ctx context.Context, req any) (any, error) {
+		return srv.(IdentityServiceServer).WalletSettlePreAuth(ctx, req.(*WalletSettlePreAuthRequest))
+	})
+}
+
+func _IdentityService_WalletReleasePreAuth_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	in := new(WalletReleasePreAuthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IdentityServiceServer).WalletReleasePreAuth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: identityServiceName + "WalletReleasePreAuth"}
+	return interceptor(ctx, in, info, func(ctx context.Context, req any) (any, error) {
+		return srv.(IdentityServiceServer).WalletReleasePreAuth(ctx, req.(*WalletReleasePreAuthRequest))
 	})
 }

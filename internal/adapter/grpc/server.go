@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -177,6 +178,61 @@ func (s *Server) WalletCredit(ctx context.Context, req *identityv1.WalletOperati
 	}
 	slog.Info("grpc/wallet-credit", "account_id", req.AccountId, "amount", req.Amount, "type", req.Type, "balance_after", tx.BalanceAfter)
 	return &identityv1.WalletOperationResponse{Success: true, BalanceAfter: tx.BalanceAfter}, nil
+}
+
+// WalletPreAuthorize implements IdentityServiceServer.
+func (s *Server) WalletPreAuthorize(ctx context.Context, req *identityv1.WalletPreAuthorizeRequest) (*identityv1.WalletPreAuthorizeResponse, error) {
+	ttl := time.Duration(req.TtlSeconds) * time.Second
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	pa, err := s.wallet.PreAuthorize(ctx, req.AccountId, req.Amount, req.ProductId, req.ReferenceId, req.Description, ttl)
+	if err != nil {
+		slog.Warn("grpc/wallet-preauthorize: failed", "account_id", req.AccountId, "amount", req.Amount, "err", err)
+		return nil, status.Errorf(codes.InvalidArgument, "pre-authorize failed: %v", err)
+	}
+	slog.Info("grpc/wallet-preauthorize", "account_id", req.AccountId, "preauth_id", pa.ID, "amount", req.Amount)
+	return &identityv1.WalletPreAuthorizeResponse{
+		PreauthId: pa.ID,
+		Amount:    pa.Amount,
+		Status:    pa.Status,
+		ExpiresAt: timestamppb.New(pa.ExpiresAt),
+	}, nil
+}
+
+// WalletSettlePreAuth implements IdentityServiceServer.
+func (s *Server) WalletSettlePreAuth(ctx context.Context, req *identityv1.WalletSettlePreAuthRequest) (*identityv1.WalletPreAuthStatusResponse, error) {
+	pa, err := s.wallet.SettlePreAuth(ctx, req.PreauthId, req.ActualAmount)
+	if err != nil {
+		slog.Warn("grpc/wallet-settle: failed", "preauth_id", req.PreauthId, "actual_amount", req.ActualAmount, "err", err)
+		return nil, status.Errorf(codes.Internal, "settle failed: %v", err)
+	}
+	actualAmount := 0.0
+	if pa.ActualAmount != nil {
+		actualAmount = *pa.ActualAmount
+	}
+	slog.Info("grpc/wallet-settle", "preauth_id", pa.ID, "status", pa.Status, "actual_amount", actualAmount)
+	return &identityv1.WalletPreAuthStatusResponse{
+		PreauthId:    pa.ID,
+		Status:       pa.Status,
+		HeldAmount:   pa.Amount,
+		ActualAmount: actualAmount,
+	}, nil
+}
+
+// WalletReleasePreAuth implements IdentityServiceServer.
+func (s *Server) WalletReleasePreAuth(ctx context.Context, req *identityv1.WalletReleasePreAuthRequest) (*identityv1.WalletPreAuthStatusResponse, error) {
+	pa, err := s.wallet.ReleasePreAuth(ctx, req.PreauthId)
+	if err != nil {
+		slog.Warn("grpc/wallet-release: failed", "preauth_id", req.PreauthId, "err", err)
+		return nil, status.Errorf(codes.Internal, "release failed: %v", err)
+	}
+	slog.Info("grpc/wallet-release", "preauth_id", pa.ID, "status", pa.Status)
+	return &identityv1.WalletPreAuthStatusResponse{
+		PreauthId:  pa.ID,
+		Status:     pa.Status,
+		HeldAmount: pa.Amount,
+	}, nil
 }
 
 // accountToProto converts a domain Account to a proto Account.

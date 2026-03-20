@@ -79,6 +79,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&entity.AccountVIP{}, &entity.VIPLevelConfig{},
 		&entity.Invoice{}, &entity.Refund{},
 		&entity.ReferralRewardEvent{},
+		&entity.WalletPreAuthorization{},
+		&entity.Organization{}, &entity.OrgMember{},
+		&entity.OrgAPIKey{}, &entity.OrgWallet{},
+		&entity.Checkin{},
 	}
 	for _, m := range models {
 		stmt := &gorm.Statement{DB: db}
