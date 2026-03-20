@@ -48,12 +48,12 @@ func (h *ReportHandler) FinancialReport(c *gin.Context) {
 
 	from, err := parseDateParam(c.Query("from"), defaultFrom)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date: " + err.Error()})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, "Invalid from date format, use YYYY-MM-DD")
 		return
 	}
 	to, err := parseDateParam(c.Query("to"), defaultTo)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date: " + err.Error()})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, "Invalid to date format, use YYYY-MM-DD")
 		return
 	}
 	if to.Before(from) {
@@ -94,7 +94,7 @@ func (h *ReportHandler) FinancialReport(c *gin.Context) {
 	if err := h.db.WithContext(c.Request.Context()).
 		Raw(rawSQL, from, toExclusive).
 		Scan(&rows).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "query failed: " + err.Error()})
+		respondInternalError(c, "admin.report", err)
 		return
 	}
 	if rows == nil {

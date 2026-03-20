@@ -55,7 +55,7 @@ func (h *AdminConfigHandler) UpdateSettings(c *gin.Context) {
 		} `json:"settings" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -83,7 +83,7 @@ func (h *AdminConfigHandler) UploadQRCode(c *gin.Context) {
 		ImageBase64 string `json:"image_base64" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 

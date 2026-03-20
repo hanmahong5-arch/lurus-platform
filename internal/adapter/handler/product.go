@@ -46,11 +46,11 @@ func (h *ProductHandler) ListPlans(c *gin.Context) {
 func (h *ProductHandler) AdminCreateProduct(c *gin.Context) {
 	var p entity.Product
 	if err := c.ShouldBindJSON(&p); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	if err := h.products.CreateProduct(c.Request.Context(), &p); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, "handler", err)
 		return
 	}
 	c.JSON(http.StatusCreated, p)
@@ -66,11 +66,11 @@ func (h *ProductHandler) AdminUpdateProduct(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(p); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	if err := h.products.UpdateProduct(c.Request.Context(), p); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, "handler", err)
 		return
 	}
 	c.JSON(http.StatusOK, p)
@@ -82,12 +82,12 @@ func (h *ProductHandler) AdminCreatePlan(c *gin.Context) {
 	productID := c.Param("id")
 	var plan entity.ProductPlan
 	if err := c.ShouldBindJSON(&plan); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	plan.ProductID = productID
 	if err := h.products.CreatePlan(c.Request.Context(), &plan); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, "handler", err)
 		return
 	}
 	c.JSON(http.StatusCreated, plan)
@@ -107,11 +107,11 @@ func (h *ProductHandler) AdminUpdatePlan(c *gin.Context) {
 		return
 	}
 	if err := c.ShouldBindJSON(plan); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	if err := h.products.UpdatePlan(c.Request.Context(), plan); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, "handler", err)
 		return
 	}
 	c.JSON(http.StatusOK, plan)

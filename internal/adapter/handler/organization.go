@@ -29,12 +29,12 @@ func (h *OrganizationHandler) Create(c *gin.Context) {
 		Slug string `json:"slug" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	org, err := h.svc.Create(c.Request.Context(), req.Name, req.Slug, accountID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, "Invalid request")
 		return
 	}
 	c.JSON(http.StatusCreated, org)
@@ -69,7 +69,7 @@ func (h *OrganizationHandler) Get(c *gin.Context) {
 	}
 	org, err := h.svc.Get(c.Request.Context(), id, accountID)
 	if err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		respondError(c, http.StatusForbidden, ErrCodeForbidden, "Permission denied")
 		return
 	}
 	if org == nil {
@@ -96,7 +96,7 @@ func (h *OrganizationHandler) AddMember(c *gin.Context) {
 		Role      string `json:"role"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	role := req.Role
@@ -104,7 +104,7 @@ func (h *OrganizationHandler) AddMember(c *gin.Context) {
 		role = "member"
 	}
 	if err := h.svc.AddMember(c.Request.Context(), orgID, accountID, req.AccountID, role); err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		respondError(c, http.StatusForbidden, ErrCodeForbidden, "Permission denied")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -128,7 +128,7 @@ func (h *OrganizationHandler) RemoveMember(c *gin.Context) {
 		return
 	}
 	if err := h.svc.RemoveMember(c.Request.Context(), orgID, accountID, targetID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, "Invalid request")
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -166,12 +166,12 @@ func (h *OrganizationHandler) CreateAPIKey(c *gin.Context) {
 		Name string `json:"name" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	rawKey, key, err := h.svc.CreateAPIKey(c.Request.Context(), orgID, accountID, req.Name)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, "Invalid request")
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"raw_key": rawKey, "key": key})
@@ -195,7 +195,7 @@ func (h *OrganizationHandler) RevokeAPIKey(c *gin.Context) {
 		return
 	}
 	if err := h.svc.RevokeAPIKey(c.Request.Context(), orgID, accountID, keyID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, "Invalid request")
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -225,7 +225,7 @@ func (h *OrganizationHandler) ResolveAPIKey(c *gin.Context) {
 		RawKey string `json:"raw_key" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	org, err := h.svc.ResolveAPIKey(c.Request.Context(), req.RawKey)
@@ -267,7 +267,7 @@ func (h *OrganizationHandler) AdminUpdateStatus(c *gin.Context) {
 		Status string `json:"status" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	if req.Status != "active" && req.Status != "suspended" {
@@ -275,7 +275,7 @@ func (h *OrganizationHandler) AdminUpdateStatus(c *gin.Context) {
 		return
 	}
 	if err := h.svc.UpdateStatus(c.Request.Context(), id, req.Status); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, "Invalid request")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

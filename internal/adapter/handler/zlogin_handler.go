@@ -101,7 +101,7 @@ func (h *ZLoginHandler) SubmitPassword(c *gin.Context) {
 		Password      string `json:"password"         binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -130,7 +130,7 @@ func (h *ZLoginHandler) LinkWechatAndComplete(c *gin.Context) {
 		LurusToken    string `json:"lurus_token"      binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -186,7 +186,7 @@ func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
 		Password   string `json:"password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 

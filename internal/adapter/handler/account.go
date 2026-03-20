@@ -69,7 +69,7 @@ func (h *AccountHandler) UpdateMe(c *gin.Context) {
 		Locale      string `json:"locale"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	if req.DisplayName != "" {
@@ -172,7 +172,7 @@ func (h *AccountHandler) AdminGrantEntitlement(c *gin.Context) {
 		Value     string `json:"value"      binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	e := &entity.AccountEntitlement{

@@ -41,7 +41,7 @@ func NewAdminOpsHandler(referrals *app.ReferralService) *AdminOpsHandler {
 func (h *AdminOpsHandler) BatchGenerateCodes(c *gin.Context) {
 	var req batchCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -74,7 +74,7 @@ func (h *AdminOpsHandler) BatchGenerateCodes(c *gin.Context) {
 		req.Count,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate codes: " + err.Error()})
+		respondInternalError(c, "admin.generate_codes", err)
 		return
 	}
 

@@ -99,13 +99,13 @@ func (h *InternalHandler) UpsertAccount(c *gin.Context) {
 		ReferrerAffCode string `json:"referrer_aff_code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	ctx := c.Request.Context()
 	a, err := h.accounts.UpsertByZitadelSub(ctx, req.ZitadelSub, req.Email, req.DisplayName, req.AvatarURL)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, "handler", err)
 		return
 	}
 
@@ -208,7 +208,7 @@ func (h *InternalHandler) ReportUsage(c *gin.Context) {
 		AmountCNY float64 `json:"amount_cny" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	_ = h.vip.RecalculateFromWallet(c.Request.Context(), req.AccountID)
@@ -230,7 +230,7 @@ func (h *InternalHandler) DebitWallet(c *gin.Context) {
 		Description string  `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	tx, err := h.wallet.Debit(c.Request.Context(), id, req.Amount, req.Type, req.Description, "internal_debit", "", req.ProductID)
@@ -297,7 +297,7 @@ func (h *InternalHandler) ValidateSession(c *gin.Context) {
 		Token string `json:"token" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	if h.sessionSecret == "" {
@@ -348,7 +348,7 @@ func (h *InternalHandler) CreditWallet(c *gin.Context) {
 		Description string  `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 	tx, err := h.wallet.Credit(c.Request.Context(), id, req.Amount, req.Type, req.Description, "internal_credit", "", req.ProductID)
@@ -372,7 +372,7 @@ func (h *InternalHandler) CreateCheckout(c *gin.Context) {
 		TTLSeconds     int     `json:"ttl_seconds"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -408,7 +408,7 @@ func (h *InternalHandler) CreateCheckout(c *gin.Context) {
 	}
 	payURL, externalID, err := h.resolveCheckout(c, order, returnURL)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, "Invalid request")
 		return
 	}
 
@@ -480,7 +480,7 @@ func (h *InternalHandler) PreAuthorize(c *gin.Context) {
 		TTLSeconds  int     `json:"ttl_seconds"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -491,7 +491,7 @@ func (h *InternalHandler) PreAuthorize(c *gin.Context) {
 
 	pa, err := h.wallet.PreAuthorize(c.Request.Context(), id, req.Amount, req.ProductID, req.ReferenceID, req.Description, ttl)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, "Invalid request")
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{
@@ -514,13 +514,13 @@ func (h *InternalHandler) SettlePreAuth(c *gin.Context) {
 		ActualAmount float64 `json:"actual_amount" binding:"required,gte=0"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
 	pa, err := h.wallet.SettlePreAuth(c.Request.Context(), id, req.ActualAmount)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, "Invalid request")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -543,7 +543,7 @@ func (h *InternalHandler) ReleasePreAuth(c *gin.Context) {
 
 	pa, err := h.wallet.ReleasePreAuth(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, "Invalid request")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -576,7 +576,7 @@ func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
 		IdempotencyKey string  `json:"idempotency_key" binding:"required"`      // Dedup key
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -670,7 +670,7 @@ func (h *InternalHandler) GetCurrencyInfo(c *gin.Context) {
 
 	info, err := h.lurusAPI.GetCurrencyInfo(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch currency info: " + err.Error()})
+		respondInternalError(c, "currency.info", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": info})

@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -32,7 +31,7 @@ func (h *RegistrationHandler) Register(c *gin.Context) {
 		AffCode  string `json:"aff_code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -47,20 +46,19 @@ func (h *RegistrationHandler) Register(c *gin.Context) {
 		switch {
 		case contains(err.Error(), "username is required"),
 			contains(err.Error(), "username must be"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, "Username must be 3-32 alphanumeric characters or a valid phone number")
 		case contains(err.Error(), "invalid email"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid email format"})
+			respondBadRequest(c, "Invalid email address format")
 		case contains(err.Error(), "invalid phone"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid phone number format"})
+			respondBadRequest(c, "Invalid phone number format")
 		case contains(err.Error(), "password must be at least"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, "Password must be at least 8 characters")
 		case contains(err.Error(), "already taken"),
 			contains(err.Error(), "already registered"),
 			contains(err.Error(), "already exists in Zitadel"):
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			respondError(c, http.StatusConflict, ErrCodeConflict, "This username, email, or phone is already registered")
 		default:
-			slog.Error("registration failed", "err", err, "username", req.Username)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "registration failed"})
+			respondInternalError(c, "registration.register", err)
 		}
 		return
 	}
@@ -79,7 +77,7 @@ func (h *RegistrationHandler) ForgotPassword(c *gin.Context) {
 		Identifier string `json:"identifier" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -108,20 +106,20 @@ func (h *RegistrationHandler) ResetPassword(c *gin.Context) {
 		NewPassword string `json:"new_password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
 	if err := h.registration.ResetPassword(c.Request.Context(), req.Identifier, req.Code, req.NewPassword); err != nil {
 		switch {
 		case contains(err.Error(), "password must be at least"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, "Password must be at least 8 characters")
 		case contains(err.Error(), "no pending reset"),
 			contains(err.Error(), "expired"),
 			contains(err.Error(), "invalid verification"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or expired reset code"})
+			respondBadRequest(c, "Invalid or expired reset code")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "password reset failed"})
+			respondInternalError(c, "registration.reset_password", err)
 		}
 		return
 	}
@@ -136,7 +134,7 @@ func (h *RegistrationHandler) SendSMSCode(c *gin.Context) {
 		Identifier string `json:"identifier" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -162,18 +160,18 @@ func (h *RegistrationHandler) SendPhoneCode(c *gin.Context) {
 		Phone string `json:"phone" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
 	if err := h.registration.SendPhoneVerificationCode(c.Request.Context(), accountID.(int64), req.Phone); err != nil {
 		switch {
 		case contains(err.Error(), "invalid phone"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, "Invalid phone number format")
 		case contains(err.Error(), "already registered"):
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			respondError(c, http.StatusConflict, ErrCodeConflict, "This phone number is already registered")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send verification code"})
+			respondInternalError(c, "registration.send_phone_code", err)
 		}
 		return
 	}
@@ -195,18 +193,19 @@ func (h *RegistrationHandler) VerifyPhone(c *gin.Context) {
 		Code  string `json:"code"  binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
 	if err := h.registration.VerifyAndBindPhone(c.Request.Context(), accountID.(int64), req.Phone, req.Code); err != nil {
 		switch {
-		case contains(err.Error(), "invalid phone"),
-			contains(err.Error(), "invalid verification"),
+		case contains(err.Error(), "invalid phone"):
+			respondBadRequest(c, "Invalid phone number format")
+		case contains(err.Error(), "invalid verification"),
 			contains(err.Error(), "no pending"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c, "Invalid or expired verification code")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "phone verification failed"})
+			respondInternalError(c, "registration.verify_phone", err)
 		}
 		return
 	}
