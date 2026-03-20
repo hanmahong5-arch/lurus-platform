@@ -33,9 +33,10 @@ type Deps struct {
 	Registration  *handler.RegistrationHandler      // nil when registration is not configured
 	Checkin       *handler.CheckinHandler           // daily check-in
 	Organizations *handler.OrganizationHandler      // organization management
-	NewAPIProxy   *handler.NewAPIProxyHandler       // nil when newapi proxy is not configured
-	InternalKey   string                            // legacy INTERNAL_API_KEY (fallback during migration)
-	ServiceKeys   *app.ServiceKeyStore              // scoped service key resolver (nil = legacy-only mode)
+	NewAPIProxy     *handler.NewAPIProxyHandler       // nil when newapi proxy is not configured
+	ServiceKeyAdmin *handler.AdminServiceKeyHandler  // nil when service key management not wired
+	InternalKey     string                            // legacy INTERNAL_API_KEY (fallback during migration)
+	ServiceKeys     *app.ServiceKeyStore              // scoped service key resolver (nil = legacy-only mode)
 	JWT           *auth.JWTMiddleware
 	RateLimit     *ratelimit.Limiter
 	ExtraMiddleware []gin.HandlerFunc               // metrics, tracing, etc. (applied before routes)
@@ -258,6 +259,13 @@ func Build(deps Deps) *gin.Engine {
 		// Admin Organizations
 		admin.GET("/organizations", deps.Organizations.AdminList)
 		admin.PATCH("/organizations/:id", deps.Organizations.AdminUpdateStatus)
+
+		// Service API Key management
+		if deps.ServiceKeyAdmin != nil {
+			admin.POST("/service-keys", deps.ServiceKeyAdmin.CreateServiceKey)
+			admin.GET("/service-keys", deps.ServiceKeyAdmin.ListServiceKeys)
+			admin.DELETE("/service-keys/:id", deps.ServiceKeyAdmin.RevokeServiceKey)
+		}
 	}
 
 	// NewAPI admin proxy — reverse-proxies /proxy/newapi/* to the LLM gateway.
