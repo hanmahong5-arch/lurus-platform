@@ -2,12 +2,13 @@
 package router
 
 import (
-	"crypto/subtle"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/handler"
+	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
@@ -33,7 +34,8 @@ type Deps struct {
 	Checkin       *handler.CheckinHandler           // daily check-in
 	Organizations *handler.OrganizationHandler      // organization management
 	NewAPIProxy   *handler.NewAPIProxyHandler       // nil when newapi proxy is not configured
-	InternalKey   string                            // secret for /internal/* bearer auth
+	InternalKey   string                            // legacy INTERNAL_API_KEY (fallback during migration)
+	ServiceKeys   *app.ServiceKeyStore              // scoped service key resolver (nil = legacy-only mode)
 	JWT           *auth.JWTMiddleware
 	RateLimit     *ratelimit.Limiter
 	ExtraMiddleware []gin.HandlerFunc               // metrics, tracing, etc. (applied before routes)
@@ -172,9 +174,16 @@ func Build(deps Deps) *gin.Engine {
 		v1.GET("/organizations/:id/wallet", deps.Organizations.GetWallet)
 	}
 
-	// Internal service-to-service API — bearer token auth
+	// Internal service-to-service API — scoped bearer token auth.
+	// If ServiceKeys store is provided, uses per-service scoped keys.
+	// Falls back to legacy INTERNAL_API_KEY for backward compatibility.
+	keyStore := deps.ServiceKeys
+	if keyStore == nil {
+		// Legacy-only mode: create a store with just the fallback key.
+		keyStore = app.NewServiceKeyStore(nil, deps.InternalKey)
+	}
 	internal := r.Group("/internal/v1")
-	internal.Use(internalKeyAuth(deps.InternalKey))
+	internal.Use(internalKeyAuth(keyStore))
 	{
 		internal.GET("/accounts/by-zitadel-sub/:sub", deps.Internal.GetAccountByZitadelSub)
 		internal.GET("/accounts/by-id/:id", deps.Internal.GetAccountByID)
@@ -272,17 +281,47 @@ func Build(deps Deps) *gin.Engine {
 	return r
 }
 
-// internalKeyAuth validates the shared internal service API key.
-// Uses constant-time comparison to prevent timing side-channel attacks.
-func internalKeyAuth(key string) gin.HandlerFunc {
-	expected := "Bearer " + key
+// internalKeyAuth resolves the bearer token to a service identity with scoped permissions.
+// If a ServiceKeyStore is provided, it checks against the database-backed key store.
+// Falls back to the legacy shared INTERNAL_API_KEY for backward compatibility.
+//
+// After authentication, the following context values are set:
+//   - "service_id"     (string) — the service name (e.g. "lurus-api")
+//   - "service_scopes" ([]string) — the allowed scopes
+//   - "service_legacy" (bool) — true if using the old shared key
+func internalKeyAuth(keyStore *app.ServiceKeyStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		bearer := c.GetHeader("Authorization")
-		// constant-time compare prevents timing attacks that could reveal key length or value
-		if subtle.ConstantTimeCompare([]byte(bearer), []byte(expected)) != 1 {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid internal key"})
+		if len(bearer) <= 7 || bearer[:7] != "Bearer " {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "unauthorized", "message": "Missing or malformed Authorization header",
+			})
 			return
 		}
+		rawToken := bearer[7:]
+
+		result := keyStore.Resolve(rawToken)
+		if result == nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "unauthorized", "message": "Invalid service API key",
+			})
+			return
+		}
+
+		// Set context for downstream handlers and audit logging.
+		c.Set("service_id", result.ServiceName)
+		c.Set("service_scopes", result.Scopes)
+		c.Set("service_legacy", result.IsLegacy)
+
+		// Audit log: who called what.
+		slog.Info("internal_api_call",
+			"service", result.ServiceName,
+			"method", c.Request.Method,
+			"path", c.Request.URL.Path,
+			"legacy", result.IsLegacy,
+			"request_id", c.GetString("request_id"),
+		)
+
 		c.Next()
 	}
 }

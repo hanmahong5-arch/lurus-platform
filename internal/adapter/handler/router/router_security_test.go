@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/handler"
+	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	lurusauth "github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 )
 
@@ -21,7 +22,9 @@ func buildTestRouter(key string) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	internal := r.Group("/internal/v1")
-	internal.Use(internalKeyAuth(key))
+	// Create a legacy-only ServiceKeyStore for testing.
+	keyStore := app.NewServiceKeyStore(nil, key)
+	internal.Use(internalKeyAuth(keyStore))
 	internal.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -120,8 +123,8 @@ func TestInternalKeyAuth_ResponseBody(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	body := w.Body.String()
-	if !strings.Contains(body, "invalid internal key") {
-		t.Errorf("response body should contain 'invalid internal key', got: %s", body)
+	if !strings.Contains(body, "unauthorized") {
+		t.Errorf("response body should contain 'unauthorized', got: %s", body)
 	}
 }
 

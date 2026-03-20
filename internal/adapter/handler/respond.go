@@ -58,6 +58,33 @@ func respondInternalError(c *gin.Context, context string, err error) {
 	respondError(c, http.StatusInternalServerError, ErrCodeInternal, "An internal error occurred")
 }
 
+// ── Service scope helpers (internal API authorization) ───────────────────────
+
+// requireScope checks if the calling service has the required scope.
+// Returns false and sends a 403 Forbidden response if the scope is missing.
+// Use in internal API handlers to enforce per-endpoint permissions.
+func requireScope(c *gin.Context, scope string) bool {
+	scopes, _ := c.Get("service_scopes")
+	if scopeList, ok := scopes.([]string); ok {
+		for _, s := range scopeList {
+			if s == scope {
+				return true
+			}
+		}
+	}
+	serviceID, _ := c.Get("service_id")
+	slog.Warn("scope denied",
+		"service", serviceID,
+		"required_scope", scope,
+		"path", c.Request.URL.Path,
+		"request_id", c.GetString("request_id"),
+	)
+	respondError(c, http.StatusForbidden, ErrCodeForbidden,
+		"This service key does not have the required permission: "+scope)
+	c.Abort()
+	return false
+}
+
 // ── Request helpers ─────────────────────────────────────────────────────────
 
 // requireAccountID extracts the authenticated account ID from the Gin context.
