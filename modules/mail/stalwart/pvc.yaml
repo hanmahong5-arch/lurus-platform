@@ -8,7 +8,8 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: local-path
+  storageClassName: ""
+  volumeName: stalwart-data-pv
   resources:
     requests:
       storage: 20Gi
