@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: roundcube
+  namespace: mail
+  labels:
+    app: roundcube
+    app.kubernetes.io/name: roundcube
+    app.kubernetes.io/component: webmail
+    app.kubernetes.io/part-of: lurus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: roundcube
+  template:
+    metadata:
+      labels:
+        app: roundcube
+        app.kubernetes.io/name: roundcube
+    spec:
+      containers:
+        - name: roundcube
+          image: roundcube/roundcubemail:1.6
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          envFrom:
+            - configMapRef:
+                name: roundcube-config
+          volumeMounts:
+            - name: main-config
+              mountPath: /var/www/html/config/config.inc.php
+              subPath: config.inc.php
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: main-config
+          configMap:
+            name: roundcube-main-config

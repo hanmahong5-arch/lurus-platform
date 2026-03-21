@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: roundcube
+  namespace: mail
+  labels:
+    app: roundcube
+spec:
+  selector:
+    app: roundcube
+  ports:
+    - port: 80
+      targetPort: http
+      name: http
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: roundcube
+  namespace: mail
+  labels:
+    app: roundcube
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`mail.lurus.cn`)
+      kind: Rule
+      services:
+        - name: roundcube
+          port: 80
+  tls:
+    secretName: lurus-cn-wildcard-tls

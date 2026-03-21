@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: roundcube-config
+  namespace: mail
+  labels:
+    app: roundcube
+data:
+  ROUNDCUBEMAIL_DB_TYPE: sqlite
+  ROUNDCUBEMAIL_DEFAULT_HOST: "ssl://stalwart.mail.svc"
+  ROUNDCUBEMAIL_DEFAULT_PORT: "993"
+  ROUNDCUBEMAIL_SMTP_SERVER: "ssl://stalwart.mail.svc"
+  ROUNDCUBEMAIL_SMTP_PORT: "465"
+  ROUNDCUBEMAIL_PLUGINS: archive,zipdownload,managesieve
+  ROUNDCUBEMAIL_SKIN: elastic
+  ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE: 25M
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: roundcube-main-config
+  namespace: mail
+  labels:
+    app: roundcube
+data:
+  config.inc.php: |
+    <?php
+    $config["plugins"] = [];
+    $config["log_driver"] = "stdout";
+    $config["zipdownload_selection"] = true;
+    $config["des_key"] = "Lurus2026MailDesKey32bytesOK!";
+    $config["enable_spellcheck"] = true;
+    $config["spellcheck_engine"] = "pspell";
+    include(__DIR__ . "/config.docker.inc.php");
+
+    // SSL options for internal K8s self-signed cert
+    $config["imap_conn_options"] = [
+        "ssl" => [
+            "verify_peer" => false,
+            "verify_peer_name" => false,
+            "allow_self_signed" => true,
+        ],
+    ];
+    $config["smtp_conn_options"] = [
+        "ssl" => [
+            "verify_peer" => false,
+            "verify_peer_name" => false,
+            "allow_self_signed" => true,
+        ],
+    ];
