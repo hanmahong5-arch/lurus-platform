@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/name: platform-core
     app.kubernetes.io/part-of: lurus-platform
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: platform-core
