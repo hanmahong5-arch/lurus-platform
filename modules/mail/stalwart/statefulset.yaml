@@ -16,7 +16,9 @@ spec:
       labels:
         app: stalwart
     spec:
-      # Schedule on master node for public IP access
+      # Prevent K8s service env vars (STALWART_PORT_*, STALWART_SERVICE_*)
+      # from colliding with Stalwart's env-var config override system.
+      enableServiceLinks: false
       nodeSelector:
         node-role.kubernetes.io/master: "true"
       tolerations:
@@ -25,7 +27,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: stalwart
-          image: stalwartlabs/mail-server:latest
+          image: stalwartlabs/mail-server:v0.11.8
           ports:
             - containerPort: 25
               name: smtp
@@ -47,25 +49,16 @@ spec:
                 secretKeyRef:
                   name: stalwart-secrets
                   key: STALWART_ADMIN_PASSWORD
-            - name: SENDCLOUD_USER
-              valueFrom:
-                secretKeyRef:
-                  name: stalwart-secrets
-                  key: SENDCLOUD_USER
-                  optional: true
-            - name: SENDCLOUD_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: stalwart-secrets
-                  key: SENDCLOUD_PASS
-                  optional: true
           volumeMounts:
-            - name: stalwart-data
-              mountPath: /opt/stalwart-mail/data
-            - name: stalwart-config
-              mountPath: /opt/stalwart-mail/etc/config.toml
-              subPath: config.toml
+            - name: data
+              mountPath: /opt/stalwart/data
+            - name: config
+              mountPath: /opt/stalwart/etc
+            - name: dkim
+              mountPath: /opt/stalwart/dkim
               readOnly: true
+            - name: tls
+              mountPath: /opt/stalwart/tls
           resources:
             requests:
               cpu: 200m
@@ -84,9 +77,15 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 30
       volumes:
-        - name: stalwart-data
+        - name: data
           persistentVolumeClaim:
             claimName: stalwart-data
-        - name: stalwart-config
+        - name: config
           configMap:
             name: stalwart-config
+        - name: dkim
+          secret:
+            secretName: stalwart-dkim
+        - name: tls
+          secret:
+            secretName: lurus-cn-wildcard-tls

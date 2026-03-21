@@ -49,16 +49,18 @@ data:
     subaddressing = true
 
     #############################################
-    # Security: Fail2Ban + Trusted Networks
-    # K8s pod/service CIDRs must be trusted to prevent
-    # cluster-internal IPs from being auto-banned.
+    # Security: Fail2Ban
+    # High rate to avoid banning cluster-internal IPs.
     #############################################
 
     [server.fail2ban]
     rate = "1000/1m"
 
-    [server.proxy]
-    trusted-networks = ["10.42.0.0/16", "10.43.0.0/16", "127.0.0.0/8"]
+    # NOTE: [server.proxy] trusted-networks removed.
+    # In K8s with ClusterIP services, connections arrive as plain TCP,
+    # NOT with PROXY protocol headers. Setting trusted-networks causes
+    # Stalwart to expect PROXY protocol from those IPs, breaking all
+    # internal IMAP/SMTP/HTTP connections.
 
     #############################################
     # SMTP Configuration
@@ -231,8 +233,6 @@ data:
     [server.listener."submission"]
     bind = ["[::]:587"]
     protocol = "smtp"
-    tls.implicit = false
-    tls.starttls = true
 
     [server.listener."submissions"]
     bind = ["[::]:465"]
@@ -242,8 +242,6 @@ data:
     [server.listener."imap"]
     bind = ["[::]:143"]
     protocol = "imap"
-    tls.implicit = false
-    tls.starttls = true
 
     [server.listener."imaps"]
     bind = ["[::]:993"]
