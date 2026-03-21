@@ -110,4 +110,4 @@ import identityv1 "github.com/hanmahong5-arch/lurus-platform/proto/gen/go/identi
 
 | Resource | Path |
 |----------|------|
-| Restructure Plan | `../plans/lurus-platform-restructure.md` |
+| Architecture | `../plans/platform-architecture-v1.md` |

@@ -209,21 +209,39 @@ export default function WalletPage() {
       <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
         <Card style={{ flex: 1 }} shadows="always">
           <Text type="secondary">可用余额</Text>
-          <div style={{ fontSize: 32, fontWeight: 700, color: '#1677ff', margin: '8px 0' }}>
-            ¥ {wallet?.balance?.toFixed(2) ?? '0.00'}
+          {(() => {
+            const bal = wallet?.balance ?? 0
+            const balColor = bal <= 0 ? '#f5222d' : bal < 10 ? '#fa8c16' : '#52c41a'
+            return (
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, margin: '8px 0' }}>
+                <span style={{ fontSize: 36, fontWeight: 700, color: balColor, lineHeight: 1 }}>
+                  {bal.toFixed(2)}
+                </span>
+                <span style={{ fontSize: 14, fontWeight: 500, color: '#8c8c8c' }}>CNY</span>
+              </div>
+            )
+          })()}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button type="primary" onClick={() => navigate('/topup')}>立即充值</Button>
+            <Button type="tertiary" onClick={() => navigate('/redeem')}>兑换码</Button>
           </div>
-          <Button type="primary" onClick={() => navigate('/topup')}>立即充值</Button>
         </Card>
         <Card style={{ flex: 1 }} shadows="always">
           <Text type="secondary">历史累计充值</Text>
-          <div style={{ fontSize: 24, fontWeight: 600, marginTop: 8 }}>
-            ¥ {wallet?.lifetime_topup?.toFixed(2) ?? '0.00'}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 8 }}>
+            <span style={{ fontSize: 28, fontWeight: 600, lineHeight: 1 }}>
+              {wallet?.lifetime_topup?.toFixed(2) ?? '0.00'}
+            </span>
+            <span style={{ fontSize: 13, color: '#8c8c8c' }}>CNY</span>
           </div>
         </Card>
         <Card style={{ flex: 1 }} shadows="always">
           <Text type="secondary">活跃订阅</Text>
-          <div style={{ fontSize: 24, fontWeight: 600, marginTop: 8 }}>
-            {subscriptions.filter(s => s.status === 'active').length} 个
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 8 }}>
+            <span style={{ fontSize: 28, fontWeight: 600, lineHeight: 1 }}>
+              {subscriptions.filter(s => s.status === 'active').length}
+            </span>
+            <span style={{ fontSize: 13, color: '#8c8c8c' }}>个</span>
           </div>
         </Card>
       </div>

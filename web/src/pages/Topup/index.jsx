@@ -256,7 +256,8 @@ export default function TopupPage() {
         <Button
           type="primary"
           size="large"
-          disabled={!method || !actualAmount || actualAmount <= 0}
+          disabled={!method || !actualAmount || actualAmount <= 0 || loading}
+          loading={loading}
           onClick={() => setConfirmVisible(true)}
         >
           确认充值 ¥{actualAmount}

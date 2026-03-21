@@ -203,9 +203,29 @@ export default function NotificationsPage() {
         </CardHeader>
         <CardContent>
           {loading ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">
-              加载中...
-            </p>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>事件类型</TableHead>
+                  <TableHead>通道</TableHead>
+                  <TableHead>标题</TableHead>
+                  <TableHead>优先级</TableHead>
+                  <TableHead>状态</TableHead>
+                  <TableHead>操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <TableRow key={i}>
+                    {Array.from({ length: 6 }).map((_, j) => (
+                      <TableCell key={j}>
+                        <div className="h-4 w-full max-w-[100px] animate-pulse rounded bg-muted" />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           ) : (
             <Table>
               <TableHeader>
