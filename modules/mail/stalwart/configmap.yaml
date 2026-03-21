@@ -167,6 +167,9 @@ data:
     [imap]
     max-request-size = 52428800
 
+    [imap.auth]
+    allow-plain-text = true
+
     [imap.timeout]
     authenticated = "30m"
     anonymous = "1m"
