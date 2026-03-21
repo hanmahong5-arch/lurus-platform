@@ -21,11 +21,12 @@ data:
 
     #############################################
     # Storage Configuration (RocksDB)
+    # Path must match the volumeMount in the Deployment.
     #############################################
 
     [store."rocksdb"]
     type = "rocksdb"
-    path = "/opt/stalwart-mail/data"
+    path = "/opt/stalwart/data"
     compression = "lz4"
 
     [storage]
@@ -48,6 +49,18 @@ data:
     subaddressing = true
 
     #############################################
+    # Security: Fail2Ban + Trusted Networks
+    # K8s pod/service CIDRs must be trusted to prevent
+    # cluster-internal IPs from being auto-banned.
+    #############################################
+
+    [server.fail2ban]
+    rate = "1000/1m"
+
+    [server.proxy]
+    trusted-networks = ["10.42.0.0/16", "10.43.0.0/16", "127.0.0.0/8"]
+
+    #############################################
     # SMTP Configuration
     #############################################
 
@@ -65,7 +78,7 @@ data:
     max-recipients = 100
 
     [queue]
-    path = "/opt/stalwart-mail/queue"
+    path = "/opt/stalwart/queue"
     hash = 64
 
     [queue.schedule]
@@ -79,25 +92,27 @@ data:
 
     #############################################
     # Security: SPF, DKIM, DMARC, ARC
+    # Set to "relaxed" for initial setup; upgrade to "strict"
+    # after DNS records (MX, SPF, DKIM, DMARC) are verified.
     #############################################
 
     [auth.spf.verify]
-    ehlo = "strict"
-    mail-from = "strict"
+    ehlo = "relaxed"
+    mail-from = "relaxed"
 
     [auth.dkim]
-    verify = "strict"
+    verify = "relaxed"
     sign = true
 
     [auth.dmarc]
-    verify = "strict"
+    verify = "relaxed"
 
     [auth.arc]
-    verify = "strict"
+    verify = "relaxed"
     seal = true
 
     [auth.iprev]
-    verify = "strict"
+    verify = "relaxed"
 
     #############################################
     # DMARC Reporting
@@ -168,7 +183,7 @@ data:
     purge-frequency = "1h"
 
     #############################################
-    # HTTP/Web Interface
+    # HTTP/Web Interface (Admin API on port 8080)
     #############################################
 
     [server.listener."http"]
@@ -192,21 +207,18 @@ data:
 
     [oauth]
     issuer = "https://auth.lurus.cn"
-    # Token introspection uses Zitadel's userinfo endpoint
-    # Stalwart validates JWT tokens signed by Zitadel
+
     [oauth.token]
     verification = "strict"
 
     #############################################
-    # TLS Configuration - ACME (Let's Encrypt)
+    # TLS Configuration
+    # Uses K8s wildcard cert mounted at /opt/stalwart/tls/
     #############################################
 
-    [certificate."acme"]
-    type = "acme"
-    domains = ["mail.lurus.cn"]
-    contact = ["admin@lurus.cn"]
-    directory = "https://acme-v02.api.letsencrypt.org/directory"
-    challenge = "tls-alpn-01"
+    [certificate."lurus-wildcard"]
+    cert = "file:///opt/stalwart/tls/tls.crt"
+    private-key = "file:///opt/stalwart/tls/tls.key"
 
     #############################################
     # Listeners

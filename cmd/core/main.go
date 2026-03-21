@@ -30,6 +30,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/repo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
+	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/cache"
@@ -159,6 +160,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	entSvc := app.NewEntitlementService(subRepo, productRepo, entCache)
 	subSvc := app.NewSubscriptionService(subRepo, productRepo, entSvc, cfg.GracePeriodDays)
 	accountSvc := app.NewAccountService(accountRepo, walletRepo, vipRepo)
+	// Note: accountSvc.SetOnAccountCreatedHook is wired after registry init (below).
 	invoiceSvc := app.NewInvoiceService(invoiceRepo, walletRepo)
 	referralSvc := app.NewReferralServiceWithCodes(accountRepo, walletRepo, walletRepo).WithStats(referralRepo).WithRewardEvents(referralRepo)
 	orgSvc := app.NewOrganizationService(orgRepo)
@@ -176,9 +178,27 @@ func run(ctx context.Context, cfg *config.Config) error {
 		notifMod.Register(registry)
 	}
 
+	// Mail module: auto-provision username@lurus.cn mailboxes in Stalwart.
+	if stalwartURL := os.Getenv("STALWART_ADMIN_URL"); stalwartURL != "" {
+		mailMod := module.NewMailModule(module.MailConfig{
+			Enabled:          true,
+			StalwartAdminURL: stalwartURL,
+			StalwartUser:     getEnvDefault("STALWART_ADMIN_USER", "admin"),
+			StalwartPassword: os.Getenv("STALWART_ADMIN_PASSWORD"),
+			DefaultQuotaMB:   1024,
+			MailDomain:       getEnvDefault("MAIL_DOMAIN", "lurus.cn"),
+		})
+		mailMod.Register(registry)
+	}
+
 	// Wire check-in hook to fire module events (notifications on streak milestones).
 	checkinSvc.SetOnCheckinHook(func(ctx context.Context, accountID int64, streak int) {
 		registry.FireCheckin(ctx, accountID, streak)
+	})
+
+	// Wire account-created hook for OIDC first-login path (UpsertByZitadelSub → new account).
+	accountSvc.SetOnAccountCreatedHook(func(ctx context.Context, account *entity.Account) {
+		registry.FireAccountCreated(ctx, account)
 	})
 
 	slog.Info("module registry initialized", "hooks", registry.HookCount())
@@ -248,6 +268,9 @@ func run(ctx context.Context, cfg *config.Config) error {
 	zitadelClient := zitadel.NewClient(cfg.ZitadelIssuer, cfg.ZitadelServiceAccountPAT)
 	registrationSvc := app.NewRegistrationService(accountRepo, walletRepo, vipRepo, referralSvc, zitadelClient, cfg.SessionSecret, emailSender, smsSender, rdb, smsCfg)
 	if registrationSvc != nil {
+		registrationSvc.SetOnAccountCreatedHook(func(ctx context.Context, account *entity.Account) {
+			registry.FireAccountCreated(ctx, account)
+		})
 		registrationSvc.SetOnReferralSignupHook(func(ctx context.Context, referrerAccountID int64, referredName string) {
 			registry.FireReferralSignup(ctx, referrerAccountID, referredName)
 		})
@@ -435,6 +458,13 @@ func run(ctx context.Context, cfg *config.Config) error {
 // in Redis (TTL 10min) to avoid a DB round-trip on every authenticated request.
 // On first login (DB miss), the account is auto-created via UpsertByZitadelSub so that
 // a valid Zitadel JWT never produces a 401 due to a missing local record.
+func getEnvDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func buildAccountLookup(rdb *redis.Client, accountSvc *app.AccountService) auth.AccountLookup {
 	const subCacheTTL = 10 * time.Minute
 

@@ -19,6 +19,7 @@ type MailConfig struct {
 	StalwartUser     string `yaml:"stalwart_admin_user"`
 	StalwartPassword string `yaml:"stalwart_admin_password"`
 	DefaultQuotaMB   int    `yaml:"default_quota_mb"`
+	MailDomain       string `yaml:"mail_domain"` // e.g. "lurus.cn" — each user gets username@domain
 }
 
 // MailModule integrates Stalwart mail server with the core account lifecycle.
@@ -32,6 +33,9 @@ func NewMailModule(cfg MailConfig) *MailModule {
 	if cfg.DefaultQuotaMB <= 0 {
 		cfg.DefaultQuotaMB = 1024
 	}
+	if cfg.MailDomain == "" {
+		cfg.MailDomain = "lurus.cn"
+	}
 	return &MailModule{
 		cfg: cfg,
 		client: &http.Client{
@@ -40,33 +44,59 @@ func NewMailModule(cfg MailConfig) *MailModule {
 	}
 }
 
+// lurusEmail derives the platform mailbox address from the account's username.
+// Every Lurus user gets username@lurus.cn (or configured domain).
+// Returns "" if the account has no usable username.
+func (m *MailModule) lurusEmail(account *entity.Account) string {
+	username := account.Username
+	if username == "" {
+		return ""
+	}
+	// Phone-number usernames are not valid email local parts.
+	if entity.IsPhoneNumber(username) {
+		return ""
+	}
+	return username + "@" + m.cfg.MailDomain
+}
+
 // OnAccountCreated provisions a mailbox in Stalwart when a new account is created.
+// Each user gets a username@lurus.cn mailbox automatically.
 func (m *MailModule) OnAccountCreated(ctx context.Context, account *entity.Account) error {
-	if account.Email == "" {
+	mailAddr := m.lurusEmail(account)
+	if mailAddr == "" {
 		return nil
 	}
-	slog.Info("mail module: provisioning mailbox", "email", account.Email)
+	slog.Info("mail module: provisioning mailbox", "email", mailAddr, "account_id", account.ID)
+
+	// Collect aliases: the platform mailbox + the user's personal email (if different).
+	emails := []string{mailAddr}
+	if account.Email != "" && account.Email != mailAddr {
+		emails = append(emails, account.Email)
+	}
+
 	return m.stalwartRequest(ctx, http.MethodPost, "/api/account", map[string]any{
-		"name":     account.Email,
+		"name":     mailAddr,
 		"type":     "individual",
 		"quota":    m.cfg.DefaultQuotaMB * 1024 * 1024,
-		"emails":   []string{account.Email},
+		"emails":   emails,
 		"password": "", // Stalwart uses OIDC auth, no local password needed
 	})
 }
 
 // OnAccountDeleted deprovisions the mailbox when an account is deleted.
 func (m *MailModule) OnAccountDeleted(ctx context.Context, account *entity.Account) error {
-	if account.Email == "" {
+	mailAddr := m.lurusEmail(account)
+	if mailAddr == "" {
 		return nil
 	}
-	slog.Info("mail module: deprovisioning mailbox", "email", account.Email)
-	return m.stalwartRequest(ctx, http.MethodDelete, "/api/account/"+account.Email, nil)
+	slog.Info("mail module: deprovisioning mailbox", "email", mailAddr, "account_id", account.ID)
+	return m.stalwartRequest(ctx, http.MethodDelete, "/api/account/"+mailAddr, nil)
 }
 
 // OnPlanChanged adjusts mailbox quota based on the new plan's mail_quota_mb feature.
 func (m *MailModule) OnPlanChanged(ctx context.Context, account *entity.Account, plan *entity.ProductPlan) error {
-	if account.Email == "" {
+	mailAddr := m.lurusEmail(account)
+	if mailAddr == "" {
 		return nil
 	}
 	quotaMB := m.cfg.DefaultQuotaMB
@@ -80,8 +110,8 @@ func (m *MailModule) OnPlanChanged(ctx context.Context, account *entity.Account,
 			}
 		}
 	}
-	slog.Info("mail module: updating quota", "email", account.Email, "quota_mb", quotaMB)
-	return m.stalwartRequest(ctx, http.MethodPatch, "/api/account/"+account.Email, map[string]any{
+	slog.Info("mail module: updating quota", "email", mailAddr, "quota_mb", quotaMB)
+	return m.stalwartRequest(ctx, http.MethodPatch, "/api/account/"+mailAddr, map[string]any{
 		"quota": quotaMB * 1024 * 1024,
 	})
 }

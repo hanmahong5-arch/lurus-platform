@@ -47,6 +47,18 @@ spec:
                 secretKeyRef:
                   name: stalwart-secrets
                   key: STALWART_ADMIN_PASSWORD
+            - name: SENDCLOUD_USER
+              valueFrom:
+                secretKeyRef:
+                  name: stalwart-secrets
+                  key: SENDCLOUD_USER
+                  optional: true
+            - name: SENDCLOUD_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: stalwart-secrets
+                  key: SENDCLOUD_PASS
+                  optional: true
           volumeMounts:
             - name: stalwart-data
               mountPath: /opt/stalwart-mail/data

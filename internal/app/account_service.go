@@ -12,13 +12,19 @@ import (
 
 // AccountService orchestrates account creation, lookup, and OAuth binding.
 type AccountService struct {
-	accounts accountStore
-	wallets  walletStore
-	vip      vipStore
+	accounts         accountStore
+	wallets          walletStore
+	vip              vipStore
+	onAccountCreated AccountCreatedHookFunc
 }
 
 func NewAccountService(accounts accountStore, wallets walletStore, vip vipStore) *AccountService {
 	return &AccountService{accounts: accounts, wallets: wallets, vip: vip}
+}
+
+// SetOnAccountCreatedHook sets the post-account-created hook (mail provisioning, etc.).
+func (s *AccountService) SetOnAccountCreatedHook(fn AccountCreatedHookFunc) {
+	s.onAccountCreated = fn
 }
 
 // UpsertByZitadelSub creates or updates the account linked to a Zitadel OIDC sub.
@@ -82,6 +88,11 @@ func (s *AccountService) UpsertByZitadelSub(ctx context.Context, sub, email, dis
 	}
 	if _, err := s.vip.GetOrCreate(ctx, a.ID); err != nil {
 		return nil, fmt.Errorf("create vip: %w", err)
+	}
+
+	// Fire account-created hooks (mail provisioning, notifications) — non-blocking.
+	if s.onAccountCreated != nil {
+		go s.onAccountCreated(ctx, a)
 	}
 
 	return a, nil

@@ -55,6 +55,9 @@ type ForgotPasswordResult struct {
 // ReferralSignupHookFunc is called after a referred user completes registration.
 type ReferralSignupHookFunc func(ctx context.Context, referrerAccountID int64, referredName string)
 
+// AccountCreatedHookFunc is called after a new account is created (triggers mail provisioning, notifications, etc.).
+type AccountCreatedHookFunc func(ctx context.Context, account *entity.Account)
+
 // RegistrationService handles user registration and password reset flows.
 type RegistrationService struct {
 	accounts          accountStore
@@ -68,6 +71,7 @@ type RegistrationService struct {
 	redis             *redis.Client
 	smsCfg            sms.SMSConfig
 	onReferralSignup  ReferralSignupHookFunc
+	onAccountCreated  AccountCreatedHookFunc
 }
 
 // NewRegistrationService creates the registration service.
@@ -105,6 +109,12 @@ func NewRegistrationService(
 // SetOnReferralSignupHook sets the post-referral-signup hook (typically wired to module.Registry.FireReferralSignup).
 func (s *RegistrationService) SetOnReferralSignupHook(fn ReferralSignupHookFunc) {
 	s.onReferralSignup = fn
+}
+
+// SetOnAccountCreatedHook sets the post-account-created hook (typically wired to module.Registry.FireAccountCreated).
+// This triggers mail provisioning, welcome notifications, etc.
+func (s *RegistrationService) SetOnAccountCreatedHook(fn AccountCreatedHookFunc) {
+	s.onAccountCreated = fn
 }
 
 // CheckUsernameAvailable reports whether a username is not yet taken.
@@ -234,6 +244,11 @@ func (s *RegistrationService) Register(ctx context.Context, req RegisterRequest)
 	}
 	if _, err := s.vip.GetOrCreate(ctx, account.ID); err != nil {
 		return nil, fmt.Errorf("register: create vip: %w", err)
+	}
+
+	// Fire account-created hooks (mail provisioning, welcome notification, etc.) — non-blocking.
+	if s.onAccountCreated != nil {
+		go s.onAccountCreated(ctx, account)
 	}
 
 	// Process referral (non-critical).
