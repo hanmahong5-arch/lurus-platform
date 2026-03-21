@@ -28,6 +28,7 @@ spec:
       containers:
         - name: stalwart
           image: stalwartlabs/stalwart:v0.15.4
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 25
               name: smtp
