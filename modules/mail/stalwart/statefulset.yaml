@@ -27,7 +27,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: stalwart
-          image: stalwartlabs/mail-server:v0.11.8
+          image: stalwartlabs/stalwart:v0.15.4
           ports:
             - containerPort: 25
               name: smtp
