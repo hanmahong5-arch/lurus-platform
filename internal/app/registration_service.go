@@ -20,7 +20,7 @@ import (
 
 const (
 	minPasswordLen      = 8
-	sessionTokenTTL     = 7 * 24 * time.Hour // 7-day session
+	sessionTokenTTL     = 30 * 24 * time.Hour // 30-day session
 	passwordResetCodeTTL = 10 * time.Minute
 	phoneVerifyCodeTTL  = 10 * time.Minute
 	resetCodeLen        = 6

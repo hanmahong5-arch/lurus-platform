@@ -85,11 +85,12 @@ func (r *WalletRepo) Debit(ctx context.Context, accountID int64, amount float64,
 			Where("account_id = ?", accountID).First(&w).Error; err != nil {
 			return fmt.Errorf("lock wallet: %w", err)
 		}
-		if w.Balance < amount {
-			return fmt.Errorf("insufficient balance: have %.4f, need %.4f", w.Balance, amount)
+		if w.Balance-w.Frozen < amount {
+			return fmt.Errorf("insufficient available balance: have %.4f (%.4f balance - %.4f frozen), need %.4f",
+				w.Balance-w.Frozen, w.Balance, w.Frozen, amount)
 		}
 		result := db.Model(&w).
-			Where("id = ? AND balance >= ?", w.ID, amount).
+			Where("id = ? AND (balance - frozen) >= ?", w.ID, amount).
 			Updates(map[string]any{
 				"balance":        gorm.Expr("balance - ?", amount),
 				"lifetime_spend": gorm.Expr("lifetime_spend + ?", amount),
@@ -98,7 +99,8 @@ func (r *WalletRepo) Debit(ctx context.Context, accountID int64, amount float64,
 			return fmt.Errorf("update wallet: %w", result.Error)
 		}
 		if result.RowsAffected == 0 {
-			return fmt.Errorf("insufficient balance: have %.4f, need %.4f", w.Balance, amount)
+			return fmt.Errorf("insufficient available balance: have %.4f (%.4f balance - %.4f frozen), need %.4f",
+				w.Balance-w.Frozen, w.Balance, w.Frozen, amount)
 		}
 		// Re-read to get DB-computed DECIMAL balance.
 		if err := db.Where("id = ?", w.ID).First(&w).Error; err != nil {

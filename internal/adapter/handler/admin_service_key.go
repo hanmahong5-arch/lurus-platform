@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
@@ -10,13 +11,20 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 )
 
+// serviceKeyAdmin defines the contract for service key admin operations.
+type serviceKeyAdmin interface {
+	Create(ctx context.Context, key *entity.ServiceAPIKey) error
+	ListAll(ctx context.Context) ([]entity.ServiceAPIKey, error)
+	Revoke(ctx context.Context, id int64) error
+}
+
 // AdminServiceKeyHandler manages service API keys via admin endpoints.
 type AdminServiceKeyHandler struct {
-	repo  *app.ServiceKeyAdminService
+	repo serviceKeyAdmin
 }
 
 // NewAdminServiceKeyHandler creates the handler.
-func NewAdminServiceKeyHandler(svc *app.ServiceKeyAdminService) *AdminServiceKeyHandler {
+func NewAdminServiceKeyHandler(svc serviceKeyAdmin) *AdminServiceKeyHandler {
 	return &AdminServiceKeyHandler{repo: svc}
 }
 

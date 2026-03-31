@@ -111,3 +111,14 @@ import identityv1 "github.com/hanmahong5-arch/lurus-platform/proto/gen/go/identi
 | Resource | Path |
 |----------|------|
 | Architecture | `../plans/platform-architecture-v1.md` |
+
+## Internal Subscription Checkout (2026-03-21)
+
+`POST /internal/v1/subscriptions/checkout` (scope: `checkout`)
+Body: `{ account_id, product_id, plan_code, billing_cycle, payment_method, return_url }`
+- Wallet: debit + activate subscription immediately
+- External: create order, return `{ order_no, pay_url }`
+
+`POST /internal/v1/accounts/:id/wallet/transactions` (scope: `wallet:read`)
+Query: `page`, `page_size`
+Response: `{ data: Transaction[], total: int }`

@@ -238,7 +238,7 @@ func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
 	}
 
 	// Step 4: Issue a lurus session token (HS256 JWT, 7-day TTL).
-	const tokenTTL = 7 * 24 * time.Hour
+	const tokenTTL = 30 * 24 * time.Hour
 	token, err := auth.IssueSessionToken(account.ID, tokenTTL, h.sessionSecret)
 	if err != nil {
 		slog.Error("direct-login: token issuance failed", "account_id", account.ID, "err", err)

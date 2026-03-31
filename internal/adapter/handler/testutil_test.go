@@ -147,17 +147,21 @@ func (m *mockAccountStore) seed(a entity.Account) *entity.Account {
 // ---------- mock wallet store ----------
 
 type mockWalletStore struct {
-	mu     sync.Mutex
-	byAcct map[int64]*entity.Wallet
-	orders map[string]*entity.PaymentOrder
-	codes  map[string]*entity.RedemptionCode
+	mu       sync.Mutex
+	byAcct   map[int64]*entity.Wallet
+	orders   map[string]*entity.PaymentOrder
+	codes    map[string]*entity.RedemptionCode
+	preAuths map[int64]*entity.WalletPreAuthorization
+	nextPAID int64
 }
 
 func newMockWalletStore() *mockWalletStore {
 	return &mockWalletStore{
-		byAcct: make(map[int64]*entity.Wallet),
-		orders: make(map[string]*entity.PaymentOrder),
-		codes:  make(map[string]*entity.RedemptionCode),
+		byAcct:   make(map[int64]*entity.Wallet),
+		orders:   make(map[string]*entity.PaymentOrder),
+		codes:    make(map[string]*entity.RedemptionCode),
+		preAuths: make(map[int64]*entity.WalletPreAuthorization),
+		nextPAID: 1,
 	}
 }
 
@@ -197,8 +201,9 @@ func (m *mockWalletStore) Debit(_ context.Context, accountID int64, amount float
 		w = &entity.Wallet{ID: accountID, AccountID: accountID}
 		m.byAcct[accountID] = w
 	}
-	if w.Balance < amount {
-		return nil, fmt.Errorf("insufficient balance: have %.4f, need %.4f", w.Balance, amount)
+	if w.Balance-w.Frozen < amount {
+		return nil, fmt.Errorf("insufficient available balance: have %.4f (%.4f balance - %.4f frozen), need %.4f",
+			w.Balance-w.Frozen, w.Balance, w.Frozen, amount)
 	}
 	w.Balance -= amount
 	return &entity.WalletTransaction{Amount: -amount, Type: txType, BalanceAfter: w.Balance}, nil
@@ -292,24 +297,80 @@ func (m *mockWalletStore) GetPendingOrderByIdempotencyKey(_ context.Context, _ s
 	return nil, nil
 }
 
-func (m *mockWalletStore) CreatePreAuth(_ context.Context, _ *entity.WalletPreAuthorization) error {
+func (m *mockWalletStore) CreatePreAuth(_ context.Context, pa *entity.WalletPreAuthorization) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pa.ID = m.nextPAID
+	m.nextPAID++
+	if pa.Status == "" {
+		pa.Status = "active"
+	}
+	cp := *pa
+	m.preAuths[pa.ID] = &cp
+	// Freeze amount on wallet.
+	w := m.byAcct[pa.AccountID]
+	if w == nil {
+		w = &entity.Wallet{ID: pa.AccountID, AccountID: pa.AccountID}
+		m.byAcct[pa.AccountID] = w
+	}
+	w.Frozen += pa.Amount
 	return nil
 }
 
-func (m *mockWalletStore) GetPreAuthByID(_ context.Context, _ int64) (*entity.WalletPreAuthorization, error) {
+func (m *mockWalletStore) GetPreAuthByID(_ context.Context, id int64) (*entity.WalletPreAuthorization, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pa, ok := m.preAuths[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *pa
+	return &cp, nil
+}
+
+func (m *mockWalletStore) GetPreAuthByReference(_ context.Context, productID, referenceID string) (*entity.WalletPreAuthorization, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, pa := range m.preAuths {
+		if pa.ProductID == productID && pa.ReferenceID == referenceID && pa.Status == "active" {
+			cp := *pa
+			return &cp, nil
+		}
+	}
 	return nil, nil
 }
 
-func (m *mockWalletStore) GetPreAuthByReference(_ context.Context, _, _ string) (*entity.WalletPreAuthorization, error) {
-	return nil, nil
+func (m *mockWalletStore) SettlePreAuth(_ context.Context, id int64, actualAmount float64) (*entity.WalletPreAuthorization, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pa, ok := m.preAuths[id]
+	if !ok {
+		return nil, fmt.Errorf("pre-auth %d not found", id)
+	}
+	if pa.Status != "active" {
+		return nil, fmt.Errorf("pre-auth %d is %s, not active", id, pa.Status)
+	}
+	pa.Status = "settled"
+	pa.ActualAmount = &actualAmount
+	now := time.Now()
+	pa.SettledAt = &now
+	cp := *pa
+	return &cp, nil
 }
 
-func (m *mockWalletStore) SettlePreAuth(_ context.Context, _ int64, _ float64) (*entity.WalletPreAuthorization, error) {
-	return nil, nil
-}
-
-func (m *mockWalletStore) ReleasePreAuth(_ context.Context, _ int64) (*entity.WalletPreAuthorization, error) {
-	return nil, nil
+func (m *mockWalletStore) ReleasePreAuth(_ context.Context, id int64) (*entity.WalletPreAuthorization, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pa, ok := m.preAuths[id]
+	if !ok {
+		return nil, fmt.Errorf("pre-auth %d not found", id)
+	}
+	if pa.Status != "active" {
+		return nil, fmt.Errorf("pre-auth %d is %s, not active", id, pa.Status)
+	}
+	pa.Status = "released"
+	cp := *pa
+	return &cp, nil
 }
 
 func (m *mockWalletStore) ExpireStalePreAuths(_ context.Context) (int64, error) {

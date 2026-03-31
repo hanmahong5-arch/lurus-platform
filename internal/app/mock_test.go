@@ -256,8 +256,9 @@ func (m *mockWalletStore) Debit(_ context.Context, accountID int64, amount float
 	if !ok {
 		return nil, fmt.Errorf("wallet not found for account %d", accountID)
 	}
-	if w.Balance < amount {
-		return nil, fmt.Errorf("insufficient balance: have %.4f, need %.4f", w.Balance, amount)
+	if w.Balance-w.Frozen < amount {
+		return nil, fmt.Errorf("insufficient available balance: have %.4f (%.4f balance - %.4f frozen), need %.4f",
+			w.Balance-w.Frozen, w.Balance, w.Frozen, amount)
 	}
 	w.Balance -= amount
 	w.LifetimeSpend += amount

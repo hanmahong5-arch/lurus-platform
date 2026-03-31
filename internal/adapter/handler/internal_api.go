@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,7 @@ type InternalHandler struct {
 	overview      *app.OverviewService
 	wallet        *app.WalletService
 	referral      *app.ReferralService
+	plans         *app.ProductService
 	sessionSecret string
 	epay          *payment.EpayProvider
 	stripe        *payment.StripeProvider
@@ -55,6 +57,12 @@ func NewInternalHandler(
 		referral:      referral,
 		sessionSecret: sessionSecret,
 	}
+}
+
+// WithProductService sets the product/plan service for subscription checkout.
+func (h *InternalHandler) WithProductService(ps *app.ProductService) *InternalHandler {
+	h.plans = ps
+	return h
 }
 
 // WithLurusAPI sets the lurus-api client for currency exchange.
@@ -759,6 +767,154 @@ func (h *InternalHandler) GetCurrencyInfo(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": info})
+}
+
+// InternalSubscriptionCheckout initiates a subscription purchase on behalf of a user.
+// Services like Lucrum and Creator call this instead of forwarding user JWTs.
+// POST /internal/v1/subscriptions/checkout
+func (h *InternalHandler) InternalSubscriptionCheckout(c *gin.Context) {
+	if !requireScope(c, "checkout") {
+		return
+	}
+	if h.plans == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "product service not configured"})
+		return
+	}
+
+	var req struct {
+		AccountID     int64  `json:"account_id"      binding:"required"`
+		ProductID     string `json:"product_id"       binding:"required"`
+		PlanCode      string `json:"plan_code"        binding:"required"`
+		BillingCycle  string `json:"billing_cycle"    binding:"required"`
+		PaymentMethod string `json:"payment_method"   binding:"required"`
+		ReturnURL     string `json:"return_url"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handleBindError(c, err)
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Resolve plan_code + billing_cycle to a concrete plan.
+	plans, err := h.plans.ListPlans(ctx, req.ProductID)
+	if err != nil {
+		respondInternalError(c, "internal.subscription_checkout.list_plans", err)
+		return
+	}
+	var matched *entity.ProductPlan
+	for i := range plans {
+		if plans[i].Code == req.PlanCode && plans[i].BillingCycle == req.BillingCycle {
+			matched = &plans[i]
+			break
+		}
+	}
+	if matched == nil {
+		respondNotFound(c, "Plan matching code="+req.PlanCode+" cycle="+req.BillingCycle)
+		return
+	}
+
+	returnURL := req.ReturnURL
+	if returnURL == "" {
+		returnURL = "/subscriptions"
+	}
+
+	// Wallet payment: debit balance and activate immediately.
+	if req.PaymentMethod == "wallet" {
+		if matched.PriceCNY > 0 {
+			if _, err := h.wallet.Debit(ctx, req.AccountID, matched.PriceCNY,
+				entity.TxTypeSubscription,
+				"订阅 "+req.ProductID+" 套餐",
+				"subscription", "", req.ProductID); err != nil {
+				respondRichError(c, http.StatusPaymentRequired, ErrorBody{
+					Code:    ErrCodeInsufficientBalance,
+					Message: "Insufficient wallet balance for this subscription",
+					Actions: []ErrorAction{
+						{Type: "link", Label: "Top up wallet first", URL: "/wallet/topup"},
+						{Type: "link", Label: "Try another payment method", URL: ""},
+					},
+				})
+				return
+			}
+		}
+		sub, err := h.subs.Activate(ctx, req.AccountID, req.ProductID, matched.ID, req.PaymentMethod, "")
+		if err != nil {
+			// Compensate: refund already-debited amount if activation fails.
+			if matched.PriceCNY > 0 {
+				_, creditErr := h.wallet.Credit(ctx, req.AccountID, matched.PriceCNY,
+					"subscription_payment_refund",
+					"Subscription activation failed, auto-refund",
+					"subscription", "", req.ProductID)
+				if creditErr != nil {
+					slog.Error("CRITICAL: internal subscription checkout compensation failed",
+						"account_id", req.AccountID, "amount", matched.PriceCNY,
+						"activate_err", err, "credit_err", creditErr)
+				}
+			}
+			respondInternalError(c, "internal.subscription_checkout.activate", err)
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"subscription": sub})
+		return
+	}
+
+	// External payment: create order and return checkout URL.
+	order := &entity.PaymentOrder{
+		AccountID:     req.AccountID,
+		OrderType:     "subscription",
+		ProductID:     req.ProductID,
+		PlanID:        &matched.ID,
+		AmountCNY:     matched.PriceCNY,
+		Currency:      "CNY",
+		PaymentMethod: req.PaymentMethod,
+		Status:        entity.OrderStatusPending,
+	}
+	if err := h.wallet.CreateSubscriptionOrder(ctx, order); err != nil {
+		respondInternalError(c, "internal.subscription_checkout.create_order", err)
+		return
+	}
+
+	payURL, externalID, err := h.resolveCheckout(c, order, returnURL)
+	if err != nil {
+		var pe *providerError
+		if errors.As(err, &pe) {
+			respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, pe.Error())
+			return
+		}
+		respondInternalError(c, "internal.subscription_checkout.resolve", err)
+		return
+	}
+	if externalID != "" {
+		order.ExternalID = externalID
+		if err := h.wallet.UpdatePaymentOrder(ctx, order); err != nil {
+			slog.Warn("internal.subscription_checkout: failed to save external_id (non-fatal)",
+				"order_no", order.OrderNo, "external_id", externalID, "err", err)
+		}
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"order_no": order.OrderNo,
+		"pay_url":  payURL,
+	})
+}
+
+// InternalListWalletTransactions returns wallet transaction history for an account.
+// POST /internal/v1/accounts/:id/wallet/transactions
+func (h *InternalHandler) InternalListWalletTransactions(c *gin.Context) {
+	if !requireScope(c, "wallet:read") {
+		return
+	}
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
+		return
+	}
+	page, pageSize := parsePagination(c)
+	list, total, err := h.wallet.ListTransactions(c.Request.Context(), id, page, pageSize)
+	if err != nil {
+		respondInternalError(c, "internal.wallet.list_transactions", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
 }
 
 // resolveCheckout routes the order to the correct payment provider.

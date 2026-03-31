@@ -284,6 +284,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	lurusAPIClient := lurusapi.NewClient(cfg.LurusAPIInternalURL, cfg.LurusAPIInternalKey)
 	internalH := handler.NewInternalHandler(accountSvc, subSvc, entSvc, vipSvc, overviewSvc, walletSvc, referralSvc, cfg.SessionSecret).
 		WithPaymentProviders(epayProvider, stripeProvider, creemProvider).
+		WithProductService(productSvc).
 		WithLurusAPI(lurusAPIClient)
 	webhookH := handler.NewWebhookHandler(walletSvc, subSvc, epayProvider, stripeProvider, creemProvider, webhookDeduper)
 	invoiceH := handler.NewInvoiceHandler(invoiceSvc)

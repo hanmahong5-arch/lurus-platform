@@ -124,8 +124,8 @@ func TestWalletRepo_Debit_InsufficientFunds(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for insufficient funds")
 	}
-	if !strings.Contains(err.Error(), "insufficient balance") {
-		t.Errorf("error = %q, want containing 'insufficient balance'", err.Error())
+	if !strings.Contains(err.Error(), "insufficient available balance") {
+		t.Errorf("error = %q, want containing 'insufficient available balance'", err.Error())
 	}
 }
 

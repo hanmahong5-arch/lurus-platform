@@ -217,6 +217,10 @@ func Build(deps Deps) *gin.Engine {
 		// Currency exchange (LUC → LUT)
 		internal.POST("/accounts/:id/currency/exchange", deps.Internal.ExchangeLucToLut)
 		internal.GET("/currency/info", deps.Internal.GetCurrencyInfo)
+		// Subscription checkout (service-to-service, e.g. Lucrum/Creator on behalf of user)
+		internal.POST("/subscriptions/checkout", deps.Internal.InternalSubscriptionCheckout)
+		// Wallet transaction history (service-to-service, e.g. Creator for transaction display)
+		internal.POST("/accounts/:id/wallet/transactions", deps.Internal.InternalListWalletTransactions)
 		// Resolve org API key to organization (used by lurus-api and other services)
 		internal.POST("/orgs/resolve-api-key", deps.Organizations.ResolveAPIKey)
 	}

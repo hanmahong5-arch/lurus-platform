@@ -281,8 +281,8 @@ func TestWalletRepo_Debit_SlightlyOverBalance(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for overdraft")
 	}
-	if !strings.Contains(err.Error(), "insufficient balance") {
-		t.Errorf("error = %q, want containing 'insufficient balance'", err.Error())
+	if !strings.Contains(err.Error(), "insufficient available balance") {
+		t.Errorf("error = %q, want containing 'insufficient available balance'", err.Error())
 	}
 }
 
