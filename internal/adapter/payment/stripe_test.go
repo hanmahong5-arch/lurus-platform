@@ -36,23 +36,42 @@ func stripeEvent(eventType, clientRefID string) []byte {
 // --- Constructor ---
 
 func TestNewStripeProvider_Disabled(t *testing.T) {
-	p := NewStripeProvider("", "")
+	p := NewStripeProvider("", "", 0)
 	if p != nil {
 		t.Error("expected nil provider when secret key empty")
 	}
 }
 
 func TestNewStripeProvider_Valid(t *testing.T) {
-	p := NewStripeProvider("sk_test_123", "whsec_test_123")
+	p := NewStripeProvider("sk_test_123", "whsec_test_123", 7.1)
 	if p == nil {
 		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestNewStripeProvider_ZeroRateFallsBackToDefault(t *testing.T) {
+	// usdRate=0 must not produce a divide-by-zero; defensive fallback kicks in.
+	p := NewStripeProvider("sk_test", "whsec", 0)
+	if p == nil {
+		t.Fatal("expected non-nil provider")
+	}
+	if p.usdRate <= 0 {
+		t.Errorf("usdRate should fall back to default positive value, got %v", p.usdRate)
+	}
+}
+
+func TestNewStripeProvider_CustomRate(t *testing.T) {
+	// A custom rate must be preserved exactly as given.
+	p := NewStripeProvider("sk_test", "whsec", 7.3)
+	if p.usdRate != 7.3 {
+		t.Errorf("usdRate = %v, want 7.3", p.usdRate)
 	}
 }
 
 // --- Name ---
 
 func TestStripeProvider_Name(t *testing.T) {
-	p := NewStripeProvider("sk_test", "whsec_test")
+	p := NewStripeProvider("sk_test", "whsec_test", 7.2)
 	if p.Name() != "stripe" {
 		t.Errorf("Name() = %q, want stripe", p.Name())
 	}
@@ -70,7 +89,7 @@ func TestStripeProvider_VerifyWebhook_EmptySecret(t *testing.T) {
 }
 
 func TestStripeProvider_VerifyWebhook_InvalidSignature(t *testing.T) {
-	p := NewStripeProvider("sk_test", "whsec_valid")
+	p := NewStripeProvider("sk_test", "whsec_valid", 7.1)
 
 	payload := stripeEvent("checkout.session.completed", "LO-001")
 	wrongSig := generateStripeSig(payload, "whsec_wrong", time.Now().Unix())
@@ -83,7 +102,7 @@ func TestStripeProvider_VerifyWebhook_InvalidSignature(t *testing.T) {
 
 func TestStripeProvider_VerifyWebhook_ValidCheckoutCompleted(t *testing.T) {
 	secret := "whsec_test_secret"
-	p := NewStripeProvider("sk_test", secret)
+	p := NewStripeProvider("sk_test", secret, 7.1)
 
 	payload := stripeEvent("checkout.session.completed", "LO-20260227-001")
 	ts := time.Now().Unix()
@@ -100,7 +119,7 @@ func TestStripeProvider_VerifyWebhook_ValidCheckoutCompleted(t *testing.T) {
 
 func TestStripeProvider_VerifyWebhook_IrrelevantEvent(t *testing.T) {
 	secret := "whsec_test_secret"
-	p := NewStripeProvider("sk_test", secret)
+	p := NewStripeProvider("sk_test", secret, 7.1)
 
 	payload := stripeEvent("payment_intent.created", "")
 	ts := time.Now().Unix()
@@ -117,7 +136,7 @@ func TestStripeProvider_VerifyWebhook_IrrelevantEvent(t *testing.T) {
 
 func TestStripeProvider_VerifyWebhook_MissingClientReferenceID(t *testing.T) {
 	secret := "whsec_test_secret"
-	p := NewStripeProvider("sk_test", secret)
+	p := NewStripeProvider("sk_test", secret, 7.1)
 
 	payload := stripeEvent("checkout.session.completed", "")
 	ts := time.Now().Unix()
@@ -131,7 +150,7 @@ func TestStripeProvider_VerifyWebhook_MissingClientReferenceID(t *testing.T) {
 
 func TestStripeProvider_VerifyWebhook_StaleTimestamp(t *testing.T) {
 	secret := "whsec_test_secret"
-	p := NewStripeProvider("sk_test", secret)
+	p := NewStripeProvider("sk_test", secret, 7.1)
 
 	payload := stripeEvent("checkout.session.completed", "LO-001")
 	staleTS := time.Now().Add(-10 * time.Minute).Unix()

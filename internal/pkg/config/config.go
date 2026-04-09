@@ -46,6 +46,7 @@ type Config struct {
 	StripeSecretKey       string
 	StripeWebhookSecret   string
 	StripeReturnURL       string
+	StripeUSDRate         float64 // STRIPE_USD_RATE (CNY→USD rate; default 7.1; update regularly or use live FX)
 	EpayPartnerID         string
 	EpayKey               string
 	EpayGatewayURL        string
@@ -143,6 +144,7 @@ func Load() (*Config, error) {
 		StripeSecretKey:     getEnv("STRIPE_SECRET_KEY", ""),
 		StripeWebhookSecret: getEnv("STRIPE_WEBHOOK_SECRET", ""),
 		StripeReturnURL:     getEnv("STRIPE_RETURN_URL", ""),
+		StripeUSDRate:       parseFloat("STRIPE_USD_RATE", 7.1),
 		EpayPartnerID:       getEnv("EPAY_PARTNER_ID", ""),
 		EpayKey:             getEnv("EPAY_KEY", ""),
 		EpayGatewayURL:      getEnv("EPAY_GATEWAY_URL", ""),
@@ -214,6 +216,18 @@ func parseInt(key string, defaultVal int) int {
 	}
 	v, err := strconv.Atoi(s)
 	if err != nil {
+		return defaultVal
+	}
+	return v
+}
+
+func parseFloat(key string, defaultVal float64) float64 {
+	s := os.Getenv(key)
+	if s == "" {
+		return defaultVal
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || v <= 0 {
 		return defaultVal
 	}
 	return v

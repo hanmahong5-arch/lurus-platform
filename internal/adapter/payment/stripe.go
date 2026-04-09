@@ -10,26 +10,25 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 )
 
-const (
-	// stripeUSDRate is the approximate CNY → USD conversion rate.
-	// In production this should come from a live FX feed; a conservative
-	// rate is used here to avoid under-charging.
-	stripeUSDRate = 7.1
-)
-
 // StripeProvider implements Provider for Stripe Checkout.
 type StripeProvider struct {
-	secretKey      string
-	webhookSecret  string
+	secretKey     string
+	webhookSecret string
+	usdRate       float64 // CNY → USD conversion rate (configured via STRIPE_USD_RATE)
 }
 
 // NewStripeProvider creates a StripeProvider.
 // Returns nil if secret key is empty (feature disabled).
-func NewStripeProvider(secretKey, webhookSecret string) *StripeProvider {
+// usdRate is the CNY→USD rate used to convert order amounts to USD cents.
+// Pass cfg.StripeUSDRate — it defaults to 7.1 when STRIPE_USD_RATE is unset.
+func NewStripeProvider(secretKey, webhookSecret string, usdRate float64) *StripeProvider {
 	if secretKey == "" {
 		return nil
 	}
-	return &StripeProvider{secretKey: secretKey, webhookSecret: webhookSecret}
+	if usdRate <= 0 {
+		usdRate = 7.1 // defensive fallback — should never be needed if config.Load() is used
+	}
+	return &StripeProvider{secretKey: secretKey, webhookSecret: webhookSecret, usdRate: usdRate}
 }
 
 // Name returns the provider identifier.
@@ -39,7 +38,7 @@ func (p *StripeProvider) Name() string { return "stripe" }
 func (p *StripeProvider) CreateCheckout(ctx context.Context, o *entity.PaymentOrder, returnURL string) (payURL, externalID string, err error) {
 	stripe.Key = p.secretKey
 
-	amountUSD := int64(o.AmountCNY / stripeUSDRate * 100) // convert to USD cents
+	amountUSD := int64(o.AmountCNY / p.usdRate * 100) // convert to USD cents using configured rate
 	if amountUSD < 50 {                                    // Stripe minimum is $0.50
 		amountUSD = 50
 	}

@@ -221,7 +221,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("init epay provider: %w", err)
 	}
-	stripeProvider := payment.NewStripeProvider(cfg.StripeSecretKey, cfg.StripeWebhookSecret)
+	stripeProvider := payment.NewStripeProvider(cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeUSDRate)
 	creemProvider, err := payment.NewCreemProvider(cfg.CreemAPIKey, cfg.CreemWebhookSecret)
 	if err != nil {
 		return fmt.Errorf("init creem provider: %w", err)
