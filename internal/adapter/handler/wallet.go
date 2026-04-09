@@ -19,18 +19,26 @@ const (
 
 // validPaymentMethods is the set of accepted payment method identifiers.
 var validPaymentMethods = map[string]bool{
-	"epay_alipay": true,
-	"epay_wechat": true,
-	"stripe":      true,
-	"creem":       true,
+	"alipay":        true,
+	"alipay_qr":     true,
+	"alipay_wap":    true,
+	"wechat_native": true,
+	"wechat_h5":     true,
+	"wechat_jsapi":  true,
+	"epay_alipay":   true,
+	"epay_wechat":   true,
+	"stripe":        true,
+	"creem":         true,
 }
 
 // WalletHandler handles wallet and topup endpoints.
 type WalletHandler struct {
-	wallets *app.WalletService
-	epay    *payment.EpayProvider
-	stripe  *payment.StripeProvider
-	creem   *payment.CreemProvider
+	wallets   *app.WalletService
+	epay      *payment.EpayProvider
+	stripe    *payment.StripeProvider
+	creem     *payment.CreemProvider
+	alipay    *payment.AlipayProvider
+	wechatPay *payment.WechatPayProvider
 }
 
 func NewWalletHandler(
@@ -40,6 +48,18 @@ func NewWalletHandler(
 	creem *payment.CreemProvider,
 ) *WalletHandler {
 	return &WalletHandler{wallets: wallets, epay: epay, stripe: stripe, creem: creem}
+}
+
+// WithAlipayProvider sets the direct Alipay provider.
+func (h *WalletHandler) WithAlipayProvider(p *payment.AlipayProvider) *WalletHandler {
+	h.alipay = p
+	return h
+}
+
+// WithWechatPayProvider sets the direct WeChat Pay provider.
+func (h *WalletHandler) WithWechatPayProvider(p *payment.WechatPayProvider) *WalletHandler {
+	h.wechatPay = p
+	return h
 }
 
 // GetWallet returns the current user's wallet balance and VIP info.
@@ -117,18 +137,35 @@ func (h *WalletHandler) Redeem(c *gin.Context) {
 // TopupInfo returns available payment methods for topup.
 // GET /api/v1/wallet/topup/info
 func (h *WalletHandler) TopupInfo(c *gin.Context) {
-	methods := make([]gin.H, 0, 4)
-	if h.epay != nil {
+	methods := make([]gin.H, 0, 8)
+	// Direct Alipay (preferred over Epay gateway).
+	if h.alipay != nil {
 		methods = append(methods,
-			gin.H{"id": "epay_alipay", "name": "支付宝", "provider": "epay"},
-			gin.H{"id": "epay_wxpay", "name": "微信支付", "provider": "epay"},
+			gin.H{"id": "alipay", "name": "支付宝", "provider": "alipay", "type": "redirect"},
+			gin.H{"id": "alipay_qr", "name": "支付宝 (扫码)", "provider": "alipay", "type": "qr"},
+			gin.H{"id": "alipay_wap", "name": "支付宝 (手机)", "provider": "alipay", "type": "redirect"},
+		)
+	} else if h.epay != nil {
+		methods = append(methods,
+			gin.H{"id": "epay_alipay", "name": "支付宝", "provider": "epay", "type": "qr"},
+		)
+	}
+	// Direct WeChat Pay (preferred over Epay gateway).
+	if h.wechatPay != nil {
+		methods = append(methods,
+			gin.H{"id": "wechat_native", "name": "微信支付 (扫码)", "provider": "wechat", "type": "qr"},
+			gin.H{"id": "wechat_h5", "name": "微信支付 (H5)", "provider": "wechat", "type": "redirect"},
+		)
+	} else if h.epay != nil {
+		methods = append(methods,
+			gin.H{"id": "epay_wechat", "name": "微信支付", "provider": "epay", "type": "qr"},
 		)
 	}
 	if h.stripe != nil {
-		methods = append(methods, gin.H{"id": "stripe", "name": "信用卡 (Stripe)", "provider": "stripe"})
+		methods = append(methods, gin.H{"id": "stripe", "name": "信用卡 (Stripe)", "provider": "stripe", "type": "redirect"})
 	}
 	if h.creem != nil {
-		methods = append(methods, gin.H{"id": "creem", "name": "Creem", "provider": "creem"})
+		methods = append(methods, gin.H{"id": "creem", "name": "Creem", "provider": "creem", "type": "redirect"})
 	}
 	c.JSON(http.StatusOK, gin.H{"payment_methods": methods})
 }
@@ -280,6 +317,16 @@ func (h *WalletHandler) AdminAdjustWallet(c *gin.Context) {
 // resolveCheckout routes the order to the correct payment provider.
 func (h *WalletHandler) resolveCheckout(ctx context.Context, order *entity.PaymentOrder, returnURL string) (payURL, externalID string, err error) {
 	switch order.PaymentMethod {
+	case "alipay", "alipay_qr", "alipay_wap":
+		if h.alipay == nil {
+			return "", "", errProviderDisabled("alipay")
+		}
+		return h.alipay.CreateCheckout(ctx, order, returnURL)
+	case "wechat_native", "wechat_h5", "wechat_jsapi":
+		if h.wechatPay == nil {
+			return "", "", errProviderDisabled("wechat")
+		}
+		return h.wechatPay.CreateCheckout(ctx, order, returnURL)
 	case "epay_alipay", "epay_wxpay":
 		if h.epay == nil {
 			return "", "", errProviderDisabled("epay")

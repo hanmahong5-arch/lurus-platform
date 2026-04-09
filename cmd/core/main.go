@@ -227,6 +227,41 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("init creem provider: %w", err)
 	}
 
+	// Alipay direct integration (go-pay).
+	alipayProvider, err := payment.NewAlipayProvider(payment.AlipayConfig{
+		AppID:                   cfg.AlipayAppID,
+		PrivateKey:              cfg.AlipayPrivateKey,
+		IsProd:                  cfg.AlipayIsProd,
+		NotifyURL:               cfg.AlipayNotifyURL,
+		ReturnURL:               cfg.AlipayReturnURL,
+		AppPublicCertContent:    readCertContent(cfg.AlipayAppPublicCert),
+		AlipayPublicCertContent: readCertContent(cfg.AlipayPublicCert),
+		AlipayRootCertContent:   readCertContent(cfg.AlipayRootCert),
+	}, payment.TradeTypePC)
+	if err != nil {
+		return fmt.Errorf("init alipay provider: %w", err)
+	}
+	if alipayProvider != nil {
+		slog.Info("alipay provider enabled (direct integration)")
+	}
+
+	// WeChat Pay v3 direct integration (go-pay).
+	wechatPayProvider, err := payment.NewWechatPayProvider(payment.WechatPayConfig{
+		MchID:      cfg.WechatPayMchID,
+		SerialNo:   cfg.WechatPaySerialNo,
+		APIv3Key:   cfg.WechatPayAPIv3Key,
+		PrivateKey: cfg.WechatPayPrivateKey,
+		AppID:      cfg.WechatPayAppID,
+		NotifyURL:  cfg.WechatPayNotifyURL,
+		IsProd:     true,
+	}, payment.TradeTypeNative)
+	if err != nil {
+		return fmt.Errorf("init wechat pay provider: %w", err)
+	}
+	if wechatPayProvider != nil {
+		slog.Info("wechat pay provider enabled (direct integration)")
+	}
+
 	// --- Auth Middleware (Zitadel JWKS JWT + lurus session token) ---
 	jwtValidator := auth.NewValidator(auth.ValidatorConfig{
 		Issuer:     cfg.ZitadelIssuer,
@@ -279,14 +314,19 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// --- HTTP Handlers ---
 	accountH := handler.NewAccountHandler(accountSvc, vipSvc, subSvc, overviewSvc, referralSvc)
 	subH := handler.NewSubscriptionHandler(subSvc, productSvc, walletSvc, epayProvider, stripeProvider, creemProvider)
+	subH.WithAlipayProvider(alipayProvider).WithWechatPayProvider(wechatPayProvider)
 	walletH := handler.NewWalletHandler(walletSvc, epayProvider, stripeProvider, creemProvider)
+	walletH.WithAlipayProvider(alipayProvider).WithWechatPayProvider(wechatPayProvider)
 	productH := handler.NewProductHandler(productSvc)
 	lurusAPIClient := lurusapi.NewClient(cfg.LurusAPIInternalURL, cfg.LurusAPIInternalKey)
 	internalH := handler.NewInternalHandler(accountSvc, subSvc, entSvc, vipSvc, overviewSvc, walletSvc, referralSvc, cfg.SessionSecret).
 		WithPaymentProviders(epayProvider, stripeProvider, creemProvider).
+		WithAlipayProvider(alipayProvider).
+		WithWechatPayProvider(wechatPayProvider).
 		WithProductService(productSvc).
 		WithLurusAPI(lurusAPIClient)
 	webhookH := handler.NewWebhookHandler(walletSvc, subSvc, epayProvider, stripeProvider, creemProvider, webhookDeduper)
+	webhookH.WithAlipayProvider(alipayProvider).WithWechatPayProvider(wechatPayProvider)
 	invoiceH := handler.NewInvoiceHandler(invoiceSvc)
 	refundH := handler.NewRefundHandler(refundSvc)
 	adminOpsH := handler.NewAdminOpsHandler(referralSvc)
@@ -298,6 +338,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	registrationH := handler.NewRegistrationHandler(registrationSvc)
 	checkinH     := handler.NewCheckinHandler(checkinSvc)
 	orgH         := handler.NewOrganizationHandler(orgSvc)
+	qrLoginH     := handler.NewQRLoginHandler(rdb, cfg.SessionSecret)
 
 	// --- NewAPI Admin Proxy (optional) ---
 	var newAPIProxyH *handler.NewAPIProxyHandler
@@ -329,6 +370,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		Registration:  registrationH,
 		Checkin:       checkinH,
 		Organizations: orgH,
+		QRLogin:       qrLoginH,
 		NewAPIProxy:   newAPIProxyH,
 		InternalKey:   cfg.InternalAPIKey,
 		JWT:           jwtMiddleware,
@@ -464,6 +506,26 @@ func getEnvDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// readCertContent reads a certificate file from the given path.
+// Returns nil if the path is empty (cert not configured).
+// The value can be a file path or raw PEM content.
+func readCertContent(pathOrContent string) []byte {
+	if pathOrContent == "" {
+		return nil
+	}
+	// If it looks like PEM content (starts with -----), use directly.
+	if len(pathOrContent) > 10 && pathOrContent[:5] == "-----" {
+		return []byte(pathOrContent)
+	}
+	// Otherwise treat as file path.
+	data, err := os.ReadFile(pathOrContent)
+	if err != nil {
+		slog.Warn("failed to read cert file, treating as raw content", "path", pathOrContent, "err", err)
+		return []byte(pathOrContent)
+	}
+	return data
 }
 
 func buildAccountLookup(rdb *redis.Client, accountSvc *app.AccountService) auth.AccountLookup {

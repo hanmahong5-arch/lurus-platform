@@ -33,6 +33,7 @@ type Deps struct {
 	Registration  *handler.RegistrationHandler      // nil when registration is not configured
 	Checkin       *handler.CheckinHandler           // daily check-in
 	Organizations *handler.OrganizationHandler      // organization management
+	QRLogin         *handler.QRLoginHandler            // nil when QR login is not configured
 	NewAPIProxy     *handler.NewAPIProxyHandler       // nil when newapi proxy is not configured
 	ServiceKeyAdmin *handler.AdminServiceKeyHandler  // nil when service key management not wired
 	InternalKey     string                            // legacy INTERNAL_API_KEY (fallback during migration)
@@ -103,6 +104,16 @@ func Build(deps Deps) *gin.Engine {
 		r.GET("/oauth/wechat/userinfo", deps.WechatOAuth.UserInfo)
 	}
 
+	// QR login — public endpoints (create session, poll status).
+	if deps.QRLogin != nil {
+		qrPublic := r.Group("/api/v1/public/qr-login")
+		if deps.RateLimit != nil {
+			qrPublic.Use(deps.RateLimit.PerIP())
+		}
+		qrPublic.POST("/session", deps.QRLogin.CreateSession)
+		qrPublic.GET("/:id/status", deps.QRLogin.PollStatus)
+	}
+
 	// Public QR code endpoint — unauthenticated, read-only.
 	if deps.AdminConfig != nil {
 		r.GET("/api/v1/public/qrcode/:type", deps.AdminConfig.GetPublicQRCode)
@@ -157,6 +168,11 @@ func Build(deps Deps) *gin.Engine {
 		if deps.Registration != nil {
 			v1.POST("/account/me/send-phone-code", deps.Registration.SendPhoneCode)
 			v1.POST("/account/me/verify-phone", deps.Registration.VerifyPhone)
+		}
+
+		// QR login — confirm (requires authenticated APP user)
+		if deps.QRLogin != nil {
+			v1.POST("/qr-login/:id/confirm", deps.QRLogin.Confirm)
 		}
 
 		// Daily check-in
@@ -285,9 +301,11 @@ func Build(deps Deps) *gin.Engine {
 		webhooks.Use(deps.RateLimit.PerIP())
 	}
 	{
-		webhooks.GET("/epay", deps.Webhooks.EpayNotify) // 易支付 uses GET callbacks
+		webhooks.GET("/epay", deps.Webhooks.EpayNotify)     // 易支付 uses GET callbacks
 		webhooks.POST("/stripe", deps.Webhooks.StripeWebhook)
 		webhooks.POST("/creem", deps.Webhooks.CreemWebhook)
+		webhooks.POST("/alipay", deps.Webhooks.AlipayNotify)      // Alipay async notification
+		webhooks.POST("/wechat", deps.Webhooks.WechatPayNotify)   // WeChat Pay v3 notification
 	}
 
 	return r

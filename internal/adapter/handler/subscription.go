@@ -14,12 +14,14 @@ import (
 
 // SubscriptionHandler handles subscription lifecycle endpoints.
 type SubscriptionHandler struct {
-	subs    *app.SubscriptionService
-	plans   *app.ProductService
-	wallets *app.WalletService
-	epay    *payment.EpayProvider
-	stripe  *payment.StripeProvider
-	creem   *payment.CreemProvider
+	subs      *app.SubscriptionService
+	plans     *app.ProductService
+	wallets   *app.WalletService
+	epay      *payment.EpayProvider
+	stripe    *payment.StripeProvider
+	creem     *payment.CreemProvider
+	alipay    *payment.AlipayProvider
+	wechatPay *payment.WechatPayProvider
 }
 
 func NewSubscriptionHandler(
@@ -31,6 +33,18 @@ func NewSubscriptionHandler(
 	creem *payment.CreemProvider,
 ) *SubscriptionHandler {
 	return &SubscriptionHandler{subs: subs, plans: plans, wallets: wallets, epay: epay, stripe: stripe, creem: creem}
+}
+
+// WithAlipayProvider sets the direct Alipay provider.
+func (h *SubscriptionHandler) WithAlipayProvider(p *payment.AlipayProvider) *SubscriptionHandler {
+	h.alipay = p
+	return h
+}
+
+// WithWechatPayProvider sets the direct WeChat Pay provider.
+func (h *SubscriptionHandler) WithWechatPayProvider(p *payment.WechatPayProvider) *SubscriptionHandler {
+	h.wechatPay = p
+	return h
 }
 
 // ListSubscriptions returns all subscriptions for the current user.
@@ -204,6 +218,16 @@ func (h *SubscriptionHandler) CancelSubscription(c *gin.Context) {
 // resolveCheckout routes the order to the correct payment provider.
 func (h *SubscriptionHandler) resolveCheckout(ctx context.Context, order *entity.PaymentOrder, returnURL string) (string, string, error) {
 	switch order.PaymentMethod {
+	case "alipay", "alipay_qr", "alipay_wap":
+		if h.alipay == nil {
+			return "", "", errProviderDisabled("alipay")
+		}
+		return h.alipay.CreateCheckout(ctx, order, returnURL)
+	case "wechat_native", "wechat_h5", "wechat_jsapi":
+		if h.wechatPay == nil {
+			return "", "", errProviderDisabled("wechat")
+		}
+		return h.wechatPay.CreateCheckout(ctx, order, returnURL)
 	case "epay_alipay", "epay_wxpay":
 		if h.epay == nil {
 			return "", "", errProviderDisabled("epay")

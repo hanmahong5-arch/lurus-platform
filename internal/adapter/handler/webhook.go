@@ -28,6 +28,8 @@ type WebhookHandler struct {
 	epay           *payment.EpayProvider
 	stripe         *payment.StripeProvider
 	creem          *payment.CreemProvider
+	alipay         *payment.AlipayProvider
+	wechatPay      *payment.WechatPayProvider
 	deduper        *idempotency.WebhookDeduper
 	temporalClient client.Client // nil when Temporal disabled
 }
@@ -48,6 +50,18 @@ func NewWebhookHandler(
 		creem:   creem,
 		deduper: deduper,
 	}
+}
+
+// WithAlipayProvider sets the direct Alipay provider.
+func (h *WebhookHandler) WithAlipayProvider(p *payment.AlipayProvider) *WebhookHandler {
+	h.alipay = p
+	return h
+}
+
+// WithWechatPayProvider sets the direct WeChat Pay provider.
+func (h *WebhookHandler) WithWechatPayProvider(p *payment.WechatPayProvider) *WebhookHandler {
+	h.wechatPay = p
+	return h
 }
 
 // WithTemporalClient sets the Temporal client for workflow-based payment processing.
@@ -183,6 +197,88 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 	}
 	metrics.RecordWebhookEvent("creem", "success")
 	c.JSON(http.StatusOK, gin.H{"received": true})
+}
+
+// AlipayNotify handles Alipay async payment notifications.
+// POST /webhook/alipay
+func (h *WebhookHandler) AlipayNotify(c *gin.Context) {
+	if h.alipay == nil {
+		c.String(http.StatusServiceUnavailable, "fail")
+		return
+	}
+
+	orderNo, ok, err := h.alipay.HandleNotify(c.Request)
+	if err != nil {
+		slog.Warn("webhook/alipay: notification verification failed", "err", err)
+		metrics.RecordWebhookEvent("alipay", "invalid_signature")
+		c.String(http.StatusBadRequest, "fail")
+		return
+	}
+	if !ok || orderNo == "" {
+		// Valid but irrelevant notification (e.g. WAIT_BUYER_PAY) — acknowledge.
+		c.String(http.StatusOK, "success")
+		return
+	}
+
+	// Deduplication: use order_no + "alipay" as event key.
+	eventKey := "alipay:" + orderNo
+	if err := h.deduper.TryProcess(c.Request.Context(), eventKey); err != nil {
+		if errors.Is(err, idempotency.ErrAlreadyProcessed) {
+			slog.Info("webhook/alipay: duplicate event, skipping", "order_no", orderNo)
+			c.String(http.StatusOK, "success")
+			return
+		}
+	}
+
+	if err := h.processOrderPaid(c, orderNo, "alipay"); err != nil {
+		slog.Error("webhook/alipay: process order failed", "order_no", orderNo, "err", err)
+		metrics.RecordWebhookEvent("alipay", "error")
+		c.String(http.StatusInternalServerError, "fail")
+		return
+	}
+	metrics.RecordWebhookEvent("alipay", "success")
+	c.String(http.StatusOK, "success")
+}
+
+// WechatPayNotify handles WeChat Pay v3 async payment notifications.
+// POST /webhook/wechat
+func (h *WebhookHandler) WechatPayNotify(c *gin.Context) {
+	if h.wechatPay == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "FAIL", "message": "wechat pay not configured"})
+		return
+	}
+
+	orderNo, ok, err := h.wechatPay.HandleNotify(c.Request)
+	if err != nil {
+		slog.Warn("webhook/wechat: notification verification failed", "err", err)
+		metrics.RecordWebhookEvent("wechat", "invalid_signature")
+		c.JSON(http.StatusBadRequest, gin.H{"code": "FAIL", "message": "invalid notification"})
+		return
+	}
+	if !ok || orderNo == "" {
+		// Valid but irrelevant notification — acknowledge.
+		c.JSON(http.StatusOK, gin.H{"code": "SUCCESS", "message": "ok"})
+		return
+	}
+
+	// Deduplication.
+	eventKey := "wechat:" + orderNo
+	if err := h.deduper.TryProcess(c.Request.Context(), eventKey); err != nil {
+		if errors.Is(err, idempotency.ErrAlreadyProcessed) {
+			slog.Info("webhook/wechat: duplicate event, skipping", "order_no", orderNo)
+			c.JSON(http.StatusOK, gin.H{"code": "SUCCESS", "message": "ok"})
+			return
+		}
+	}
+
+	if err := h.processOrderPaid(c, orderNo, "wechat"); err != nil {
+		slog.Error("webhook/wechat: process order failed", "order_no", orderNo, "err", err)
+		metrics.RecordWebhookEvent("wechat", "error")
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "FAIL", "message": "order processing failed"})
+		return
+	}
+	metrics.RecordWebhookEvent("wechat", "success")
+	c.JSON(http.StatusOK, gin.H{"code": "SUCCESS", "message": "ok"})
 }
 
 // processOrderPaid marks an order as paid and handles subscription activation if needed.

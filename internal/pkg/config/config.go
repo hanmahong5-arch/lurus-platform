@@ -55,6 +55,24 @@ type Config struct {
 	CreemWebhookSecret    string
 	CreemReturnURL        string
 
+	// Alipay (direct integration via go-pay)
+	AlipayAppID            string // ALIPAY_APP_ID
+	AlipayPrivateKey       string // ALIPAY_PRIVATE_KEY (RSA2 PKCS1)
+	AlipayAppPublicCert    string // ALIPAY_APP_PUBLIC_CERT (file path or base64 content)
+	AlipayPublicCert       string // ALIPAY_PUBLIC_CERT (file path or base64 content)
+	AlipayRootCert         string // ALIPAY_ROOT_CERT (file path or base64 content)
+	AlipayNotifyURL        string // ALIPAY_NOTIFY_URL
+	AlipayReturnURL        string // ALIPAY_RETURN_URL
+	AlipayIsProd           bool   // ALIPAY_IS_PROD (default: true)
+
+	// WeChat Pay v3 (direct integration via go-pay)
+	WechatPayMchID      string // WECHAT_PAY_MCH_ID
+	WechatPaySerialNo   string // WECHAT_PAY_SERIAL_NO (merchant cert serial)
+	WechatPayAPIv3Key   string // WECHAT_PAY_API_V3_KEY
+	WechatPayPrivateKey string // WECHAT_PAY_PRIVATE_KEY (merchant RSA private key, PEM)
+	WechatPayAppID      string // WECHAT_PAY_APP_ID
+	WechatPayNotifyURL  string // WECHAT_PAY_NOTIFY_URL
+
 	// Email (SMTP)
 	EmailSMTPHost string // EMAIL_SMTP_HOST (empty = noop sender)
 	EmailSMTPPort int    // EMAIL_SMTP_PORT (default: 587)
@@ -133,6 +151,20 @@ func Load() (*Config, error) {
 		CreemAPIKey:         getEnv("CREEM_API_KEY", ""),
 		CreemWebhookSecret:  getEnv("CREEM_WEBHOOK_SECRET", ""),
 		CreemReturnURL:      getEnv("CREEM_RETURN_URL", ""),
+		AlipayAppID:            getEnv("ALIPAY_APP_ID", ""),
+		AlipayPrivateKey:       getEnv("ALIPAY_PRIVATE_KEY", ""),
+		AlipayAppPublicCert:    getEnv("ALIPAY_APP_PUBLIC_CERT", ""),
+		AlipayPublicCert:       getEnv("ALIPAY_PUBLIC_CERT", ""),
+		AlipayRootCert:         getEnv("ALIPAY_ROOT_CERT", ""),
+		AlipayNotifyURL:        getEnv("ALIPAY_NOTIFY_URL", ""),
+		AlipayReturnURL:        getEnv("ALIPAY_RETURN_URL", ""),
+		AlipayIsProd:           getEnv("ALIPAY_IS_PROD", "true") == "true",
+		WechatPayMchID:      getEnv("WECHAT_PAY_MCH_ID", ""),
+		WechatPaySerialNo:   getEnv("WECHAT_PAY_SERIAL_NO", ""),
+		WechatPayAPIv3Key:   getEnv("WECHAT_PAY_API_V3_KEY", ""),
+		WechatPayPrivateKey: getEnv("WECHAT_PAY_PRIVATE_KEY", ""),
+		WechatPayAppID:      getEnv("WECHAT_PAY_APP_ID", ""),
+		WechatPayNotifyURL:  getEnv("WECHAT_PAY_NOTIFY_URL", ""),
 		WechatServerAddress:      getEnv("WECHAT_SERVER_ADDRESS", ""),
 		WechatServerToken:        getEnv("WECHAT_SERVER_TOKEN", ""),
 		SessionSecret:            getEnv("SESSION_SECRET", ""),
