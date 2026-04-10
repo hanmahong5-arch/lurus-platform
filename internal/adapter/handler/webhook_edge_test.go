@@ -69,7 +69,7 @@ func TestWebhookEdge_Stripe_MissingSignature(t *testing.T) {
 		makeWalletService(),
 		makeSubService(),
 		nil,
-		payment.NewStripeProvider("sk_test", "whsec_test"),
+		payment.NewStripeProvider("sk_test", "whsec_test", 7.1),
 		nil,
 		nil,
 	)

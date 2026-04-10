@@ -84,6 +84,10 @@ func (s *SubscriptionService) Expire(ctx context.Context, subID int64) error {
 	if err != nil || sub == nil {
 		return fmt.Errorf("subscription %d not found", subID)
 	}
+	if sub.Status != entity.SubStatusActive {
+		return fmt.Errorf("subscription %d cannot expire: current status %q, expected %q",
+			subID, sub.Status, entity.SubStatusActive)
+	}
 	grace := time.Now().UTC().Add(time.Duration(s.gracePeriodDays) * 24 * time.Hour)
 	sub.Status = entity.SubStatusGrace
 	sub.GraceUntil = &grace
@@ -104,6 +108,10 @@ func (s *SubscriptionService) EndGrace(ctx context.Context, subID int64) error {
 	sub, err := s.subs.GetByID(ctx, subID)
 	if err != nil || sub == nil {
 		return fmt.Errorf("subscription %d not found", subID)
+	}
+	if sub.Status != entity.SubStatusGrace {
+		return fmt.Errorf("subscription %d cannot end grace: current status %q, expected %q",
+			subID, sub.Status, entity.SubStatusGrace)
 	}
 	sub.Status = entity.SubStatusExpired
 	if err := s.subs.Update(ctx, sub); err != nil {

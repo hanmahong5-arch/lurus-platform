@@ -239,6 +239,9 @@ func Build(deps Deps) *gin.Engine {
 		internal.POST("/accounts/:id/wallet/transactions", deps.Internal.InternalListWalletTransactions)
 		// Resolve org API key to organization (used by lurus-api and other services)
 		internal.POST("/orgs/resolve-api-key", deps.Organizations.ResolveAPIKey)
+		// User preferences sync (cross-device, e.g. Creator model usage stats)
+		internal.POST("/preferences/sync", deps.Internal.SyncPreferences)
+		internal.GET("/preferences/:account_id", deps.Internal.GetPreferences)
 	}
 
 	// Admin API — requires admin JWT role (Zitadel only, not lurus session tokens)

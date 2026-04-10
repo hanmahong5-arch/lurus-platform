@@ -411,13 +411,21 @@ func (r *WalletRepo) SettlePreAuth(ctx context.Context, id int64, actualAmount f
 			return fmt.Errorf("lock wallet: %w", err)
 		}
 
-		// Unfreeze the original hold.
-		if err := db.Model(&w).Updates(map[string]any{
-			"frozen":         gorm.Expr("frozen - ?", pa.Amount),
-			"balance":        gorm.Expr("balance - ?", actualAmount),
-			"lifetime_spend": gorm.Expr("lifetime_spend + ?", actualAmount),
-		}).Error; err != nil {
-			return fmt.Errorf("settle wallet: %w", err)
+		// Unfreeze the original hold and debit actual amount.
+		// WHERE balance >= actualAmount prevents negative balance.
+		result := db.Model(&w).
+			Where("balance >= ?", actualAmount).
+			Updates(map[string]any{
+				"frozen":         gorm.Expr("frozen - ?", pa.Amount),
+				"balance":        gorm.Expr("balance - ?", actualAmount),
+				"lifetime_spend": gorm.Expr("lifetime_spend + ?", actualAmount),
+			})
+		if result.Error != nil {
+			return fmt.Errorf("settle wallet: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("insufficient balance to settle pre-auth %d: need %.4f, wallet %d",
+				id, actualAmount, w.ID)
 		}
 
 		// Re-read for balance_after.

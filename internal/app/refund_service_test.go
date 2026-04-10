@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -238,6 +239,56 @@ func TestRefundService_GetByNo_IDOR(t *testing.T) {
 	_, err := svc.GetByNo(context.Background(), attackerID, r.RefundNo)
 	if err == nil {
 		t.Fatal("expected IDOR error, got nil")
+	}
+}
+
+// TestRefundService_Approve_CreditFails_EnqueuesRetry verifies that when wallet credit
+// fails during refund approval, the refund is still marked approved and a retry event
+// is enqueued to the outbox for later reconciliation.
+func TestRefundService_Approve_CreditFails_EnqueuesRetry(t *testing.T) {
+	ws := newMockWalletStore()
+	rs := newMockRefundStore()
+	outbox := &mockEventOutbox{}
+	svc := NewRefundService(rs, ws, nil, outbox)
+
+	const accountID = int64(200)
+	const orderNo = "LO20260410RETRY1"
+	seedPaidOrderForRefund(ws, accountID, orderNo)
+
+	r, err := svc.RequestRefund(context.Background(), accountID, orderNo, "credit will fail")
+	if err != nil {
+		t.Fatalf("request refund: %v", err)
+	}
+
+	// Inject credit failure
+	ws.creditErr = errors.New("database connection lost")
+
+	err = svc.Approve(context.Background(), r.RefundNo, "admin1", "approved")
+	if err == nil {
+		t.Fatal("expected error when credit fails")
+	}
+
+	// Refund should be in approved state (not pending, not completed)
+	stored, _ := rs.GetByRefundNo(context.Background(), r.RefundNo)
+	if stored == nil {
+		t.Fatal("refund not found")
+	}
+	if stored.Status != entity.RefundStatusApproved {
+		t.Errorf("expected approved status, got %s", stored.Status)
+	}
+
+	// Outbox should have a retry event
+	if len(outbox.events) == 0 {
+		t.Fatal("expected retry event in outbox")
+	}
+	if outbox.events[0].EventType != "identity.refund.credit_retry" {
+		t.Errorf("expected credit_retry event, got %s", outbox.events[0].EventType)
+	}
+
+	// Wallet should NOT have been credited
+	w, _ := ws.GetByAccountID(context.Background(), accountID)
+	if w != nil && w.Balance != 0 {
+		t.Errorf("wallet should not be credited when credit fails, balance=%.2f", w.Balance)
 	}
 }
 

@@ -160,7 +160,10 @@ func (s *RefundService) Approve(ctx context.Context, refundNo, reviewerID, revie
 	}
 
 	// Credit the wallet (1 Credit = 1 CNY).
-	_, err = s.wallets.Credit(ctx,
+	// If this fails, we persist a "credit_pending" event in the outbox so that
+	// a background reconciliation worker can retry until the credit succeeds.
+	// This prevents the refund from being stuck in "approved" state indefinitely.
+	_, creditErr := s.wallets.Credit(ctx,
 		r.AccountID,
 		r.AmountCNY,
 		entity.TxTypeRefund,
@@ -169,16 +172,30 @@ func (s *RefundService) Approve(ctx context.Context, refundNo, reviewerID, revie
 		r.RefundNo,
 		"",
 	)
-	if err != nil {
-		// Log but do not roll back; the refund record is already approved.
-		// A background reconciliation job can retry the credit.
-		slog.Error("refund/approve: credit wallet failed",
+	if creditErr != nil {
+		slog.Error("refund/approve: credit wallet failed, enqueuing for retry",
 			"refund_no", refundNo,
 			"account_id", r.AccountID,
 			"amount", r.AmountCNY,
-			"err", err,
+			"err", creditErr,
 		)
-		return fmt.Errorf("credit wallet: %w", err)
+		metrics.RecordRefundOperation("approve", "credit_retry")
+
+		// Enqueue a retry event to the outbox for reliable delivery.
+		retryPayload := map[string]any{
+			"refund_no":  r.RefundNo,
+			"account_id": r.AccountID,
+			"amount_cny": r.AmountCNY,
+			"action":     "credit_wallet_retry",
+		}
+		retryEv, _ := event.NewEvent("identity.refund.credit_retry", r.AccountID, "", "", retryPayload)
+		if s.outbox != nil {
+			if outboxErr := s.outbox.Insert(ctx, retryEv); outboxErr != nil {
+				slog.Error("refund/approve: outbox insert for credit retry also failed",
+					"refund_no", refundNo, "err", outboxErr)
+			}
+		}
+		return fmt.Errorf("credit wallet (enqueued for retry): %w", creditErr)
 	}
 
 	// Transition to completed.

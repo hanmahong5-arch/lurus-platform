@@ -43,10 +43,10 @@ func TestWebhookDeduper_TryProcess_EmptyEventID(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	d := New(rdb, DefaultWebhookTTL)
 
-	// Empty event ID should be a no-op (returns nil).
+	// Empty event ID must be rejected to prevent deduplication bypass.
 	err := d.TryProcess(context.Background(), "")
-	if err != nil {
-		t.Fatalf("empty event ID: %v", err)
+	if err != ErrEmptyEventID {
+		t.Fatalf("empty event ID: want ErrEmptyEventID, got %v", err)
 	}
 }
 

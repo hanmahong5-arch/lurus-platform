@@ -3,6 +3,7 @@ package lifecycle
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -34,7 +35,9 @@ func (m *Manager) Start(ctx context.Context) {
 		wg.Add(1)
 		go func(task Task) {
 			defer wg.Done()
-			_ = task.Run(ctx)
+			if err := task.Run(ctx); err != nil {
+				slog.Error("lifecycle task failed", "task", task.Name(), "err", err)
+			}
 		}(t)
 	}
 	go func() {

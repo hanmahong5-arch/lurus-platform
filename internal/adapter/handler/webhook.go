@@ -83,6 +83,12 @@ func (h *WebhookHandler) EpayNotify(c *gin.Context) {
 			c.String(http.StatusOK, "success")
 			return
 		}
+		if errors.Is(err, idempotency.ErrEmptyEventID) {
+			slog.Warn("webhook/epay: empty event ID, rejecting")
+			metrics.RecordWebhookEvent("epay", "empty_event_id")
+			c.String(http.StatusBadRequest, "fail")
+			return
+		}
 	}
 
 	if h.epay == nil {
@@ -137,6 +143,12 @@ func (h *WebhookHandler) StripeWebhook(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"received": true})
 			return
 		}
+		if errors.Is(err, idempotency.ErrEmptyEventID) {
+			slog.Warn("webhook/stripe: empty event ID, rejecting")
+			metrics.RecordWebhookEvent("stripe", "empty_event_id")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing event ID"})
+			return
+		}
 	}
 
 	if orderNo != "" {
@@ -185,6 +197,12 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"received": true})
 			return
 		}
+		if errors.Is(err, idempotency.ErrEmptyEventID) {
+			slog.Warn("webhook/creem: empty event ID, rejecting")
+			metrics.RecordWebhookEvent("creem", "empty_event_id")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "missing event ID"})
+			return
+		}
 	}
 
 	if orderNo != "" {
@@ -228,6 +246,12 @@ func (h *WebhookHandler) AlipayNotify(c *gin.Context) {
 			c.String(http.StatusOK, "success")
 			return
 		}
+		if errors.Is(err, idempotency.ErrEmptyEventID) {
+			slog.Warn("webhook/alipay: empty event ID, rejecting")
+			metrics.RecordWebhookEvent("alipay", "empty_event_id")
+			c.String(http.StatusBadRequest, "fail")
+			return
+		}
 	}
 
 	if err := h.processOrderPaid(c, orderNo, "alipay"); err != nil {
@@ -267,6 +291,12 @@ func (h *WebhookHandler) WechatPayNotify(c *gin.Context) {
 		if errors.Is(err, idempotency.ErrAlreadyProcessed) {
 			slog.Info("webhook/wechat: duplicate event, skipping", "order_no", orderNo)
 			c.JSON(http.StatusOK, gin.H{"code": "SUCCESS", "message": "ok"})
+			return
+		}
+		if errors.Is(err, idempotency.ErrEmptyEventID) {
+			slog.Warn("webhook/wechat: empty event ID, rejecting")
+			metrics.RecordWebhookEvent("wechat", "empty_event_id")
+			c.JSON(http.StatusBadRequest, gin.H{"code": "FAIL", "message": "missing event ID"})
 			return
 		}
 	}

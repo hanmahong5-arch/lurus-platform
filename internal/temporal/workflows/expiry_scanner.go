@@ -1,6 +1,8 @@
 package workflows
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -8,7 +10,6 @@ import (
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
 	"github.com/hanmahong5-arch/lurus-platform/internal/temporal/activities"
-
 )
 
 // ExpiryScannerWorkflow is a migration bridge that catches up pre-Temporal
@@ -29,12 +30,15 @@ func ExpiryScannerWorkflow(ctx workflow.Context) error {
 	}
 	ctx = workflow.WithActivityOptions(ctx, actOpts)
 
+	logger := workflow.GetLogger(ctx)
+	var errs []error
+
 	// Phase 1: Active subscriptions past their expires_at.
 	// Start lifecycle workflows for each (idempotent via workflow ID).
 	var activeExpired []activities.SubscriptionSummary
 	if err := workflow.ExecuteActivity(ctx, "ListActiveExpired").Get(ctx, &activeExpired); err != nil {
-		// Non-fatal: log via activity error, continue to next phase.
-		_ = err
+		logger.Error("expiry-scanner: ListActiveExpired failed", "error", err)
+		errs = append(errs, fmt.Errorf("ListActiveExpired: %w", err))
 	} else {
 		for _, sub := range activeExpired {
 			startLifecycleForSub(ctx, sub, 3) // default grace days
@@ -45,11 +49,16 @@ func ExpiryScannerWorkflow(ctx workflow.Context) error {
 	// These don't need lifecycle workflows — just expire them directly.
 	var graceExpired []activities.SubscriptionSummary
 	if err := workflow.ExecuteActivity(ctx, "ListGraceExpired").Get(ctx, &graceExpired); err != nil {
-		_ = err
+		logger.Error("expiry-scanner: ListGraceExpired failed", "error", err)
+		errs = append(errs, fmt.Errorf("ListGraceExpired: %w", err))
 	} else {
 		for _, sub := range graceExpired {
-			_ = workflow.ExecuteActivity(ctx, "EndGrace", sub.ID).Get(ctx, nil)
-			_ = workflow.ExecuteActivity(ctx, "PublishToNATS", activities.PublishEventInput{
+			if err := workflow.ExecuteActivity(ctx, "EndGrace", sub.ID).Get(ctx, nil); err != nil {
+				logger.Error("expiry-scanner: EndGrace failed", "sub_id", sub.ID, "error", err)
+				errs = append(errs, fmt.Errorf("EndGrace(%d): %w", sub.ID, err))
+				continue
+			}
+			if err := workflow.ExecuteActivity(ctx, "PublishToNATS", activities.PublishEventInput{
 				Subject:   event.SubjectSubscriptionExpired,
 				AccountID: sub.AccountID,
 				ProductID: sub.ProductID,
@@ -57,16 +66,27 @@ func ExpiryScannerWorkflow(ctx workflow.Context) error {
 					"subscription_id": sub.ID,
 					"phase":           "expired_downgraded",
 				},
-			}).Get(ctx, nil)
+			}).Get(ctx, nil); err != nil {
+				logger.Warn("expiry-scanner: PublishToNATS failed (non-fatal)", "sub_id", sub.ID, "error", err)
+			}
 		}
 	}
 
 	// Phase 3: Expire stale pending payment orders (>24h).
-	_ = workflow.ExecuteActivity(ctx, "ExpireStalePendingOrders").Get(ctx, nil)
+	if err := workflow.ExecuteActivity(ctx, "ExpireStalePendingOrders").Get(ctx, nil); err != nil {
+		logger.Error("expiry-scanner: ExpireStalePendingOrders failed", "error", err)
+		errs = append(errs, fmt.Errorf("ExpireStalePendingOrders: %w", err))
+	}
 
 	// Phase 4: Expire stale pre-authorizations past their deadline and unfreeze held balance.
-	_ = workflow.ExecuteActivity(ctx, "ExpireStalePreAuths").Get(ctx, nil)
+	if err := workflow.ExecuteActivity(ctx, "ExpireStalePreAuths").Get(ctx, nil); err != nil {
+		logger.Error("expiry-scanner: ExpireStalePreAuths failed", "error", err)
+		errs = append(errs, fmt.Errorf("ExpireStalePreAuths: %w", err))
+	}
 
+	if len(errs) > 0 {
+		return fmt.Errorf("expiry-scanner completed with %d error(s): %w", len(errs), errors.Join(errs...))
+	}
 	return nil
 }
 

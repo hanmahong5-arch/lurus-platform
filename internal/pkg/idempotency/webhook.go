@@ -35,11 +35,18 @@ func New(rdb *redis.Client, ttl time.Duration) *WebhookDeduper {
 	return &WebhookDeduper{rdb: rdb, ttl: ttl}
 }
 
+// ErrEmptyEventID is returned when an empty event ID is passed to TryProcess.
+var ErrEmptyEventID = errors.New("idempotency: empty event ID")
+
 // TryProcess attempts to mark eventID as processed.
 // Returns nil on first call for this ID, ErrAlreadyProcessed on subsequent calls.
+// Returns ErrEmptyEventID if eventID is empty (prevents deduplication bypass).
 // On Redis failure, logs a warning and returns nil (fail-open: process the event).
 func (d *WebhookDeduper) TryProcess(ctx context.Context, eventID string) error {
-	if d.rdb == nil || eventID == "" {
+	if eventID == "" {
+		return ErrEmptyEventID
+	}
+	if d.rdb == nil {
 		return nil
 	}
 	key := fmt.Sprintf("%s%s", redisKeyPrefix, eventID)

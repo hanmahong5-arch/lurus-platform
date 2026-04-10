@@ -105,16 +105,16 @@ func TestIdempotency_ConcurrentSameKey(t *testing.T) {
 	}
 }
 
-// TestIdempotency_EmptyEventID_NoDedup verifies that empty event IDs are not deduplicated
-// (pass-through for missing event IDs).
-func TestIdempotency_EmptyEventID_NoDedup(t *testing.T) {
+// TestIdempotency_EmptyEventID_Rejected verifies that empty event IDs are rejected
+// to prevent deduplication bypass.
+func TestIdempotency_EmptyEventID_Rejected(t *testing.T) {
 	d, _ := newTestDeduper(t, time.Hour)
 	ctx := context.Background()
 
-	// Multiple calls with empty event ID should all succeed (no dedup on empty).
+	// Empty event ID must return ErrEmptyEventID to prevent bypass.
 	for i := 0; i < 3; i++ {
-		if err := d.TryProcess(ctx, ""); err != nil {
-			t.Errorf("empty event ID call %d: want nil, got %v", i+1, err)
+		if err := d.TryProcess(ctx, ""); err != ErrEmptyEventID {
+			t.Errorf("empty event ID call %d: want ErrEmptyEventID, got %v", i+1, err)
 		}
 	}
 }

@@ -319,12 +319,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 	walletH.WithAlipayProvider(alipayProvider).WithWechatPayProvider(wechatPayProvider)
 	productH := handler.NewProductHandler(productSvc)
 	lurusAPIClient := lurusapi.NewClient(cfg.LurusAPIInternalURL, cfg.LurusAPIInternalKey)
+	preferenceRepo := repo.NewPreferenceRepo(db)
 	internalH := handler.NewInternalHandler(accountSvc, subSvc, entSvc, vipSvc, overviewSvc, walletSvc, referralSvc, cfg.SessionSecret).
 		WithPaymentProviders(epayProvider, stripeProvider, creemProvider).
 		WithAlipayProvider(alipayProvider).
 		WithWechatPayProvider(wechatPayProvider).
 		WithProductService(productSvc).
-		WithLurusAPI(lurusAPIClient)
+		WithLurusAPI(lurusAPIClient).
+		WithPreferenceRepo(preferenceRepo)
 	webhookH := handler.NewWebhookHandler(walletSvc, subSvc, epayProvider, stripeProvider, creemProvider, webhookDeduper)
 	webhookH.WithAlipayProvider(alipayProvider).WithWechatPayProvider(wechatPayProvider)
 	invoiceH := handler.NewInvoiceHandler(invoiceSvc)

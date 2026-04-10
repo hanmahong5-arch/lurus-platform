@@ -205,7 +205,7 @@ func TestWebhookHandler_EpayNotify_InvalidSignature(t *testing.T) {
 // TestWebhookHandler_StripeWebhook_InvalidSignature verifies that an invalid Stripe
 // signature returns 400 when the provider is configured.
 func TestWebhookHandler_StripeWebhook_InvalidSignature(t *testing.T) {
-	provider := payment.NewStripeProvider("sk_test_fake", "whsec_test_fake_secret")
+	provider := payment.NewStripeProvider("sk_test_fake", "whsec_test_fake_secret", 7.1)
 	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, provider, nil, idempotency.New(nil, 0))
 	r := testRouter()
 	r.POST("/webhook/stripe", h.StripeWebhook)
@@ -224,7 +224,7 @@ func TestWebhookHandler_StripeWebhook_InvalidSignature(t *testing.T) {
 // signature on a non-checkout event is acknowledged with 200 (no order processing).
 func TestWebhookHandler_StripeWebhook_ValidSig_IrrelevantEvent(t *testing.T) {
 	secret := "whsec_test_stripe_secret"
-	provider := payment.NewStripeProvider("sk_test_fake", secret)
+	provider := payment.NewStripeProvider("sk_test_fake", secret, 7.1)
 	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, provider, nil, idempotency.New(nil, 0))
 	r := testRouter()
 	r.POST("/webhook/stripe", h.StripeWebhook)
@@ -247,7 +247,7 @@ func TestWebhookHandler_StripeWebhook_ValidSig_IrrelevantEvent(t *testing.T) {
 // that a valid checkout.session.completed event with an unknown order returns 500.
 func TestWebhookHandler_StripeWebhook_ValidSig_CheckoutCompleted_OrderNotFound(t *testing.T) {
 	secret := "whsec_test_stripe_secret"
-	provider := payment.NewStripeProvider("sk_test_fake", secret)
+	provider := payment.NewStripeProvider("sk_test_fake", secret, 7.1)
 	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, provider, nil, idempotency.New(nil, 0))
 	r := testRouter()
 	r.POST("/webhook/stripe", h.StripeWebhook)

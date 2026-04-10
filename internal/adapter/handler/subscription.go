@@ -228,7 +228,7 @@ func (h *SubscriptionHandler) resolveCheckout(ctx context.Context, order *entity
 			return "", "", errProviderDisabled("wechat")
 		}
 		return h.wechatPay.CreateCheckout(ctx, order, returnURL)
-	case "epay_alipay", "epay_wxpay":
+	case "epay_alipay", "epay_wxpay", "epay_wechat":
 		if h.epay == nil {
 			return "", "", errProviderDisabled("epay")
 		}

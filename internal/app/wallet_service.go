@@ -62,7 +62,9 @@ func (s *WalletService) Topup(ctx context.Context, accountID int64, amountCNY fl
 	metrics.RecordWalletOperation("topup", "success")
 	metrics.RecordWalletAmount("topup", amountCNY)
 	// Async-safe: VIP recalculation is idempotent
-	_ = s.vip.RecalculateFromWallet(ctx, accountID)
+	if err := s.vip.RecalculateFromWallet(ctx, accountID); err != nil {
+		slog.Warn("vip recalculation failed", "account_id", accountID, "err", err)
+	}
 	return tx, nil
 }
 

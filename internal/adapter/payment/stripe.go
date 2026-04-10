@@ -28,7 +28,11 @@ func NewStripeProvider(secretKey, webhookSecret string, usdRate float64) *Stripe
 	if usdRate <= 0 {
 		usdRate = 7.1 // defensive fallback — should never be needed if config.Load() is used
 	}
-	return &StripeProvider{secretKey: secretKey, webhookSecret: webhookSecret, usdRate: usdRate}
+	p := &StripeProvider{secretKey: secretKey, webhookSecret: webhookSecret, usdRate: usdRate}
+	// Set the API key once at construction time to avoid data races
+	// when multiple goroutines call CreateCheckout concurrently.
+	stripe.Key = secretKey
+	return p
 }
 
 // Name returns the provider identifier.
@@ -36,8 +40,6 @@ func (p *StripeProvider) Name() string { return "stripe" }
 
 // CreateCheckout creates a Stripe Checkout Session and returns the hosted URL.
 func (p *StripeProvider) CreateCheckout(ctx context.Context, o *entity.PaymentOrder, returnURL string) (payURL, externalID string, err error) {
-	stripe.Key = p.secretKey
-
 	amountUSD := int64(o.AmountCNY / p.usdRate * 100) // convert to USD cents using configured rate
 	if amountUSD < 50 {                                    // Stripe minimum is $0.50
 		amountUSD = 50

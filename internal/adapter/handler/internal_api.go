@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/repo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
@@ -28,6 +29,7 @@ type InternalHandler struct {
 	vip           *app.VIPService
 	overview      *app.OverviewService
 	wallet        *app.WalletService
+	preferences   *repo.PreferenceRepo
 	referral      *app.ReferralService
 	plans         *app.ProductService
 	sessionSecret string
@@ -362,6 +364,10 @@ func (h *InternalHandler) GetWalletBalance(c *gin.Context) {
 	w, err := h.wallet.GetBalance(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "balance lookup failed"})
+		return
+	}
+	if w == nil {
+		c.JSON(http.StatusOK, gin.H{"balance": 0.0, "frozen": 0.0})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"balance": w.Balance, "frozen": w.Frozen})

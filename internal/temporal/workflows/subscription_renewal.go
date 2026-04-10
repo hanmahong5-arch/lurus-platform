@@ -100,14 +100,33 @@ func SubscriptionRenewalWorkflow(ctx workflow.Context, in RenewalInput) error {
 			ProductID: in.ProductID,
 		}
 		// Use disconnected context so compensation runs even if workflow is cancelled.
-		_ = workflow.ExecuteActivity(compensationCtx, "Credit", creditIn).Get(compensationCtx, nil)
+		if creditErr := workflow.ExecuteActivity(compensationCtx, "Credit", creditIn).Get(compensationCtx, nil); creditErr != nil {
+			workflow.GetLogger(ctx).Error("CRITICAL: saga compensation (wallet refund) failed — manual intervention required",
+				"subscription_id", in.SubscriptionID,
+				"account_id", in.AccountID,
+				"amount", plan.PriceCNY,
+				"credit_error", creditErr,
+				"activate_error", err,
+			)
+			return temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("activation failed AND refund failed for sub %d, amount %.2f: activate=%v, refund=%v",
+					in.SubscriptionID, plan.PriceCNY, err, creditErr),
+				"COMPENSATION_FAILED",
+				creditErr,
+			)
+		}
 
 		publishRenewalFailedEvent(ctx, in, plan.Code, err.Error())
 		return fmt.Errorf("activate (funds refunded): %w", err)
 	}
 
 	// Step 4: Reset renewal state on the original subscription row
-	_ = workflow.ExecuteActivity(ctx, "ResetRenewalState", in.SubscriptionID).Get(ctx, nil)
+	if err := workflow.ExecuteActivity(ctx, "ResetRenewalState", in.SubscriptionID).Get(ctx, nil); err != nil {
+		workflow.GetLogger(ctx).Error("reset renewal state failed (non-critical, subscription already activated)",
+			"subscription_id", in.SubscriptionID,
+			"error", err,
+		)
+	}
 
 	// Step 5: Publish success event
 	publishRenewalSuccessEvent(ctx, in, plan.Code, activateOut)

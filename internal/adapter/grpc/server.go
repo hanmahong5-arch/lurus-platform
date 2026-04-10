@@ -4,9 +4,11 @@ package grpc
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -91,7 +93,13 @@ func (s *Server) authInterceptor(ctx context.Context, req any, info *grpc.UnaryS
 		return nil, status.Error(codes.Unauthenticated, "missing metadata")
 	}
 	vals := md.Get("authorization")
-	if len(vals) == 0 || vals[0] != "Bearer "+s.internalKey {
+	if len(vals) == 0 {
+		return nil, status.Error(codes.Unauthenticated, "invalid internal API key")
+	}
+	// Use constant-time comparison to prevent timing side-channel attacks.
+	const prefix = "Bearer "
+	token := vals[0]
+	if !strings.HasPrefix(token, prefix) || subtle.ConstantTimeCompare([]byte(token[len(prefix):]), []byte(s.internalKey)) != 1 {
 		return nil, status.Error(codes.Unauthenticated, "invalid internal API key")
 	}
 	return handler(ctx, req)

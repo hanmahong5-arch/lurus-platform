@@ -417,7 +417,7 @@ func TestWalletHandler_TopupInfo_AllProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEpayProvider: %v", err)
 	}
-	stripeProvider := payment.NewStripeProvider("sk_test_fake", "whsec_fake")
+	stripeProvider := payment.NewStripeProvider("sk_test_fake", "whsec_fake", 7.1)
 	creemProvider, err := payment.NewCreemProvider("creem_key", "creem_secret")
 	if err != nil {
 		t.Fatalf("NewCreemProvider: %v", err)

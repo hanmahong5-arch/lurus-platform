@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
 )
 
 // ── accountStore mock ─────────────────────────────────────────────────────────
@@ -182,6 +183,7 @@ func (m *mockAccountStore) GetByOAuthBinding(_ context.Context, provider, provid
 type mockWalletStore struct {
 	mu       sync.Mutex
 	wallets  map[int64]*entity.Wallet
+	creditErr error // if set, Credit() returns this error
 	txs      []entity.WalletTransaction
 	orders   map[string]*entity.PaymentOrder
 	codes    map[string]*entity.RedemptionCode
@@ -229,6 +231,9 @@ func (m *mockWalletStore) GetByAccountID(_ context.Context, accountID int64) (*e
 func (m *mockWalletStore) Credit(_ context.Context, accountID int64, amount float64, txType, desc, refType, refID, productID string) (*entity.WalletTransaction, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.creditErr != nil {
+		return nil, m.creditErr
+	}
 	w, ok := m.wallets[accountID]
 	if !ok {
 		w = &entity.Wallet{ID: m.nextWID, AccountID: accountID}
@@ -933,6 +938,20 @@ func (m *mockRefundStore) ListByAccount(_ context.Context, accountID int64, _, _
 		}
 	}
 	return out, int64(len(out)), nil
+}
+
+// ── eventOutbox mock ─────────────────────────────────────────────────────────
+
+type mockEventOutbox struct {
+	mu     sync.Mutex
+	events []*event.IdentityEvent
+}
+
+func (m *mockEventOutbox) Insert(_ context.Context, ev *event.IdentityEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events = append(m.events, ev)
+	return nil
 }
 
 // ── redemptionCodeStore mock ──────────────────────────────────────────────────
