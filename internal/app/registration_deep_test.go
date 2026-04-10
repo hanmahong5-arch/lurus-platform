@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -338,9 +339,9 @@ func TestRegDeep_SetOnAccountCreatedHook(t *testing.T) {
 	srv := newZitadelMockServer(t, http.StatusCreated, "zid-hook")
 	svc, _, _ := makeRegSvc(t, srv.URL)
 
-	var hookCalled bool
+	hookDone := make(chan struct{}, 1)
 	svc.SetOnAccountCreatedHook(func(ctx context.Context, account *entity.Account) {
-		hookCalled = true
+		hookDone <- struct{}{}
 	})
 
 	_, _ = svc.Register(context.Background(), RegisterRequest{
@@ -348,7 +349,10 @@ func TestRegDeep_SetOnAccountCreatedHook(t *testing.T) {
 		Password: "SecurePassword123!",
 	})
 
-	if !hookCalled {
+	select {
+	case <-hookDone:
+		// ok
+	case <-time.After(2 * time.Second):
 		t.Error("OnAccountCreatedHook should have been called")
 	}
 }

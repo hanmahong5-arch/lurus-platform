@@ -302,7 +302,7 @@ func TestWebhookHandler_CreemWebhook_ValidSig_NonSuccessEvent(t *testing.T) {
 	r := testRouter()
 	r.POST("/webhook/creem", h.CreemWebhook)
 
-	payload := []byte(`{"event_type":"subscription.created","order_no":""}`)
+	payload := []byte(`{"event_type":"subscription.created","order_no":"","event_id":"evt-test-nonsuccess-001"}`)
 	sig := webhookCreemSig(payload, secret)
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook/creem", bytes.NewReader(payload))
@@ -327,7 +327,7 @@ func TestWebhookHandler_CreemWebhook_ValidSig_PaymentSuccess_OrderNotFound(t *te
 	r := testRouter()
 	r.POST("/webhook/creem", h.CreemWebhook)
 
-	payload := []byte(`{"event_type":"payment.success","order_no":"CREEM-NONEXISTENT-001"}`)
+	payload := []byte(`{"event_type":"payment.success","order_no":"CREEM-NONEXISTENT-001","event_id":"evt-test-notfound-001"}`)
 	sig := webhookCreemSig(payload, secret)
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook/creem", bytes.NewReader(payload))
