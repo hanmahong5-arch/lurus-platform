@@ -534,6 +534,21 @@ func (r *WalletRepo) FindPaidTopupOrdersWithoutCredit(ctx context.Context) ([]en
 	return results, err
 }
 
+// FindStalePendingOrders returns pending orders older than the given age
+// that have NOT been expired yet (they still have time on their TTL or
+// were created without expires_at). These are candidates for provider-side
+// verification to detect missed webhooks.
+func (r *WalletRepo) FindStalePendingOrders(ctx context.Context, minAge time.Duration) ([]entity.PaymentOrder, error) {
+	cutoff := time.Now().UTC().Add(-minAge)
+	var orders []entity.PaymentOrder
+	err := r.db.WithContext(ctx).
+		Where("status = ? AND created_at < ?", entity.OrderStatusPending, cutoff).
+		Order("created_at ASC").
+		Limit(50).
+		Find(&orders).Error
+	return orders, err
+}
+
 // CreateReconciliationIssue persists a newly detected issue. Deduplicates by
 // (issue_type, order_no, status='open') — returns nil without insert if duplicate.
 func (r *WalletRepo) CreateReconciliationIssue(ctx context.Context, issue *entity.ReconciliationIssue) error {

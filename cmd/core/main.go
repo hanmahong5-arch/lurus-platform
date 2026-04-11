@@ -513,7 +513,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	// Reconciliation worker: periodic cleanup of stale payment orders and pre-auths.
 	// Runs every 5 minutes as a lightweight complement to the hourly Temporal ExpiryScanner.
-	reconciler := app.NewReconciliationWorker(walletSvc)
+	reconciler := app.NewReconciliationWorker(walletSvc, paymentRegistry)
 	g.Go(func() error {
 		reconciler.Start(gctx)
 		return nil

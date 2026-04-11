@@ -204,6 +204,20 @@ func (p *WechatPayProvider) HandleNotify(req *http.Request) (orderNo string, ok 
 	return result.OutTradeNo, true, nil
 }
 
+// QueryOrder checks the payment status of an order at WeChat Pay via V3TransactionQueryOrder.
+func (p *WechatPayProvider) QueryOrder(ctx context.Context, orderNo string) (*OrderQueryResult, error) {
+	resp, err := p.client.V3TransactionQueryOrder(ctx, wechat.OutTradeNo, orderNo)
+	if err != nil {
+		return nil, fmt.Errorf("wechat trade query: %w", err)
+	}
+	paid := resp.Response.TradeState == "SUCCESS"
+	var amount float64
+	if paid && resp.Response.Amount != nil {
+		amount = float64(resp.Response.Amount.Total) / 100.0 // fen → yuan
+	}
+	return &OrderQueryResult{Paid: paid, Amount: amount}, nil
+}
+
 // extractOpenID extracts the WeChat payer openid from order metadata (CallbackData field).
 func extractOpenID(o *entity.PaymentOrder) string {
 	if len(o.CallbackData) == 0 {

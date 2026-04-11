@@ -58,3 +58,16 @@ type EpayCallbackVerifier interface {
 type WebhookVerifier interface {
 	VerifyWebhook(payload []byte, sig string) (orderNo string, ok bool)
 }
+
+// OrderQueryResult is the result of a provider-side order status query.
+type OrderQueryResult struct {
+	Paid   bool    // true if the provider considers the order paid/completed
+	Amount float64 // amount in the order's currency (CNY for domestic providers)
+}
+
+// OrderQuerier is an optional interface for providers that support querying
+// the payment status of an existing order. Used by the reconciliation worker
+// to detect missed webhooks on stale pending orders.
+type OrderQuerier interface {
+	QueryOrder(ctx context.Context, orderNo string) (*OrderQueryResult, error)
+}

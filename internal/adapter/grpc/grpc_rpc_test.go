@@ -298,6 +298,10 @@ func (m *grpcMockWalletStore) CountPendingOrders(_ context.Context, _ int64) (in
 func (m *grpcMockWalletStore) GetPendingOrderByIdempotencyKey(_ context.Context, _ string) (*entity.PaymentOrder, error) {
 	return nil, nil
 }
+func (m *grpcMockWalletStore) FindStalePendingOrders(_ context.Context, _ time.Duration) ([]entity.PaymentOrder, error) {
+	return nil, nil
+}
+
 func (m *grpcMockWalletStore) FindPaidTopupOrdersWithoutCredit(_ context.Context) ([]entity.PaidOrderWithoutCredit, error) {
 	return nil, nil
 }

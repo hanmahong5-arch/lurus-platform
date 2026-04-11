@@ -163,6 +163,23 @@ func (p *AlipayProvider) HandleNotify(req *http.Request) (orderNo string, ok boo
 	return outTradeNo, true, nil
 }
 
+// QueryOrder checks the payment status of an order at Alipay via TradeQuery.
+func (p *AlipayProvider) QueryOrder(ctx context.Context, orderNo string) (*OrderQueryResult, error) {
+	bm := gopay.BodyMap{}
+	bm.Set("out_trade_no", orderNo)
+
+	resp, err := p.client.TradeQuery(ctx, bm)
+	if err != nil {
+		return nil, fmt.Errorf("alipay trade query: %w", err)
+	}
+	paid := resp.Response.TradeStatus == "TRADE_SUCCESS" || resp.Response.TradeStatus == "TRADE_FINISHED"
+	var amount float64
+	if paid {
+		_, _ = fmt.Sscanf(resp.Response.TotalAmount, "%f", &amount)
+	}
+	return &OrderQueryResult{Paid: paid, Amount: amount}, nil
+}
+
 // productCode returns the Alipay product code for the trade type.
 func (p *AlipayProvider) productCode() string {
 	switch p.tradeType {

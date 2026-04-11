@@ -36,7 +36,7 @@ func TestReconciliationWorker_TickCallsBothMethods(t *testing.T) {
 		expirePreAuthReturn: 1,
 	}
 	ws := NewWalletService(store, nil)
-	w := NewReconciliationWorker(ws)
+	w := NewReconciliationWorker(ws, nil)
 
 	ctx := context.Background()
 	w.tick(ctx)
@@ -55,7 +55,7 @@ func TestReconciliationWorker_TickContinuesOnOrderError(t *testing.T) {
 		expireOrdersErr: context.DeadlineExceeded,
 	}
 	ws := NewWalletService(store, nil)
-	w := NewReconciliationWorker(ws)
+	w := NewReconciliationWorker(ws, nil)
 
 	ctx := context.Background()
 	w.tick(ctx)
@@ -72,7 +72,7 @@ func TestReconciliationWorker_TickContinuesOnPreAuthError(t *testing.T) {
 		expirePreAuthErr: context.DeadlineExceeded,
 	}
 	ws := NewWalletService(store, nil)
-	w := NewReconciliationWorker(ws)
+	w := NewReconciliationWorker(ws, nil)
 
 	ctx := context.Background()
 	w.tick(ctx)
@@ -91,7 +91,7 @@ func TestReconciliationWorker_StartRunsImmediatelyAndStopsOnCancel(t *testing.T)
 		mockWalletStore: *newMockWalletStore(),
 	}
 	ws := NewWalletService(store, nil)
-	w := NewReconciliationWorker(ws)
+	w := NewReconciliationWorker(ws, nil)
 	w.interval = 50 * time.Millisecond // fast ticks for test
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -120,7 +120,7 @@ func TestReconciliationWorker_StartRunsImmediatelyAndStopsOnCancel(t *testing.T)
 
 func TestReconciliationWorker_Defaults(t *testing.T) {
 	ws := NewWalletService(newMockWalletStore(), nil)
-	w := NewReconciliationWorker(ws)
+	w := NewReconciliationWorker(ws, nil)
 
 	if w.interval != defaultReconciliationInterval {
 		t.Errorf("interval = %v, want %v", w.interval, defaultReconciliationInterval)

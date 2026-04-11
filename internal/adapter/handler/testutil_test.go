@@ -385,6 +385,10 @@ func (m *mockWalletStore) CountPendingOrders(_ context.Context, _ int64) (int64,
 	return 0, nil
 }
 
+func (m *mockWalletStore) FindStalePendingOrders(_ context.Context, _ time.Duration) ([]entity.PaymentOrder, error) {
+	return nil, nil
+}
+
 func (m *mockWalletStore) FindPaidTopupOrdersWithoutCredit(_ context.Context) ([]entity.PaidOrderWithoutCredit, error) {
 	return nil, nil
 }

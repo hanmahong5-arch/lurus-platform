@@ -189,6 +189,20 @@ func (r *Registry) HasProvider(name string) bool {
 	return ok
 }
 
+// QueryOrder queries a provider for the status of an order.
+// Returns (nil, nil) if the provider doesn't implement OrderQuerier.
+func (r *Registry) QueryOrder(ctx context.Context, providerName, orderNo string) (*OrderQueryResult, error) {
+	entry, ok := r.entries[providerName]
+	if !ok {
+		return nil, nil
+	}
+	querier, ok := entry.provider.(OrderQuerier)
+	if !ok {
+		return nil, nil // provider doesn't support order queries
+	}
+	return querier.QueryOrder(ctx, orderNo)
+}
+
 // ProviderStatuses returns the circuit breaker state of all registered providers.
 func (r *Registry) ProviderStatuses() []ProviderStatus {
 	statuses := make([]ProviderStatus, 0, len(r.entries))

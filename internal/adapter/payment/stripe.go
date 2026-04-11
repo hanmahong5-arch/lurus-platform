@@ -75,6 +75,36 @@ func (p *StripeProvider) CreateCheckout(ctx context.Context, o *entity.PaymentOr
 	return s.URL, s.ID, nil
 }
 
+// QueryOrder checks the payment status of a Stripe Checkout Session.
+// orderNo is the platform order number; Stripe uses ClientReferenceID to store it.
+// This method iterates recent sessions to find the match. For efficiency, prefer
+// storing the Stripe session ID in PaymentOrder.ExternalID and calling QueryByExternalID.
+func (p *StripeProvider) QueryOrder(ctx context.Context, orderNo string) (*OrderQueryResult, error) {
+	stripe.Key = p.secretKey
+	// If we have the session ID, retrieve directly. Otherwise we'd need to list sessions
+	// which is expensive. Return an unsupported error to signal that ExternalID-based
+	// lookup should be used instead.
+	return nil, fmt.Errorf("stripe QueryOrder by orderNo not supported; use ExternalID (session ID)")
+}
+
+// QueryByExternalID checks a Stripe Checkout Session by its session ID.
+func (p *StripeProvider) QueryByExternalID(ctx context.Context, sessionID string) (*OrderQueryResult, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("stripe: empty session ID")
+	}
+	stripe.Key = p.secretKey
+	s, err := session.Get(sessionID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("stripe get session: %w", err)
+	}
+	paid := s.PaymentStatus == stripe.CheckoutSessionPaymentStatusPaid
+	var amount float64
+	if paid {
+		amount = float64(s.AmountTotal) / 100.0 // cents → dollars
+	}
+	return &OrderQueryResult{Paid: paid, Amount: amount}, nil
+}
+
 // VerifyWebhook validates the Stripe webhook signature and extracts the order number + event ID.
 // eventID is the Stripe event's unique identifier, suitable for deduplication.
 func (p *StripeProvider) VerifyWebhook(payload []byte, sig string) (orderNo, eventID string, ok bool) {

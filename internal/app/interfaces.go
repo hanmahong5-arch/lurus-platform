@@ -62,6 +62,7 @@ type walletStore interface {
 	CountPendingOrders(ctx context.Context, accountID int64) (int64, error)
 
 	// Reconciliation
+	FindStalePendingOrders(ctx context.Context, minAge time.Duration) ([]entity.PaymentOrder, error)
 	FindPaidTopupOrdersWithoutCredit(ctx context.Context) ([]entity.PaidOrderWithoutCredit, error)
 	CreateReconciliationIssue(ctx context.Context, issue *entity.ReconciliationIssue) error
 	ListReconciliationIssues(ctx context.Context, status string, page, pageSize int) ([]entity.ReconciliationIssue, int64, error)

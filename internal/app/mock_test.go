@@ -557,6 +557,10 @@ func (m *mockWalletStore) CountPendingOrders(_ context.Context, accountID int64)
 
 // ── Reconciliation stubs (satisfy interface, not exercised in unit tests) ─────
 
+func (m *mockWalletStore) FindStalePendingOrders(_ context.Context, _ time.Duration) ([]entity.PaymentOrder, error) {
+	return nil, nil
+}
+
 func (m *mockWalletStore) FindPaidTopupOrdersWithoutCredit(_ context.Context) ([]entity.PaidOrderWithoutCredit, error) {
 	return nil, nil
 }

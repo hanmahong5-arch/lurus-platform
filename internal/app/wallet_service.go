@@ -247,6 +247,11 @@ func (s *WalletService) ExpireStalePreAuths(ctx context.Context) (int64, error) 
 
 // --- Reconciliation pass-through ---
 
+// FindStalePendingOrders returns pending orders older than minAge (for provider verification).
+func (s *WalletService) FindStalePendingOrders(ctx context.Context, minAge time.Duration) ([]entity.PaymentOrder, error) {
+	return s.wallets.FindStalePendingOrders(ctx, minAge)
+}
+
 // FindPaidTopupOrdersWithoutCredit returns paid topup orders missing a wallet credit.
 func (s *WalletService) FindPaidTopupOrdersWithoutCredit(ctx context.Context) ([]entity.PaidOrderWithoutCredit, error) {
 	return s.wallets.FindPaidTopupOrdersWithoutCredit(ctx)
