@@ -15,20 +15,6 @@ const (
 	maxTopupCNY = 100000.0 // maximum single topup amount in CNY
 )
 
-// validPaymentMethods is the set of accepted payment method identifiers.
-var validPaymentMethods = map[string]bool{
-	"alipay":        true,
-	"alipay_qr":     true,
-	"alipay_wap":    true,
-	"wechat_native": true,
-	"wechat_h5":     true,
-	"wechat_jsapi":  true,
-	"epay_alipay":   true,
-	"epay_wechat":   true,
-	"stripe":        true,
-	"creem":         true,
-}
-
 // WalletHandler handles wallet and topup endpoints.
 type WalletHandler struct {
 	wallets  *app.WalletService

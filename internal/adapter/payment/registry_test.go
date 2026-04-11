@@ -193,3 +193,74 @@ func TestRegistry_RegisterSameNameTwice_AppendsMethods(t *testing.T) {
 		t.Error("both epay methods should be registered")
 	}
 }
+
+func TestRegistry_Fallback_OnCircuitOpen(t *testing.T) {
+	r := NewRegistry()
+	// Primary: flaky alipay that always fails.
+	primary := &stubProvider{name: "alipay", fail: true}
+	r.Register("alipay", primary, MethodInfo{ID: "alipay_qr", Name: "Alipay QR", Provider: "alipay", Type: "qr"})
+	// Fallback: working epay.
+	fallback := &stubProvider{name: "epay"}
+	r.Register("epay", fallback, MethodInfo{ID: "epay_alipay", Name: "Epay Alipay", Provider: "epay", Type: "qr"})
+	r.SetFallback("alipay_qr", "epay", "epay_alipay")
+
+	order := &entity.PaymentOrder{OrderNo: "ORD-FB", PaymentMethod: "alipay_qr"}
+
+	// Trip the primary's circuit breaker.
+	for i := 0; i < int(cbFailures); i++ {
+		_, _, _ = r.Checkout(context.Background(), order, "")
+	}
+
+	// Next call: primary is circuit-open → should fallback to epay.
+	url, _, err := r.Checkout(context.Background(), order, "")
+	if err != nil {
+		t.Fatalf("expected fallback to succeed, got error: %v", err)
+	}
+	if url != "https://pay.example.com/ORD-FB" {
+		t.Errorf("payURL = %q, want fallback URL", url)
+	}
+	// PaymentMethod should be restored to original after fallback.
+	if order.PaymentMethod != "alipay_qr" {
+		t.Errorf("PaymentMethod mutated to %q, want alipay_qr", order.PaymentMethod)
+	}
+}
+
+func TestRegistry_Fallback_NotTriggered_OnNormalError(t *testing.T) {
+	r := NewRegistry()
+	// Primary fails but circuit is not yet open.
+	primary := &stubProvider{name: "alipay", fail: true}
+	r.Register("alipay", primary, MethodInfo{ID: "alipay_qr", Name: "Alipay QR", Provider: "alipay", Type: "qr"})
+	fallback := &stubProvider{name: "epay"}
+	r.Register("epay", fallback)
+	r.SetFallback("alipay_qr", "epay", "epay_alipay")
+
+	order := &entity.PaymentOrder{OrderNo: "ORD-NF", PaymentMethod: "alipay_qr"}
+	// Single failure: should return the provider error directly, NOT fall back.
+	_, _, err := r.Checkout(context.Background(), order, "")
+	if err == nil {
+		t.Fatal("expected error on first failure")
+	}
+	var ce *ProviderCircuitOpenError
+	if errors.As(err, &ce) {
+		t.Error("should not get ProviderCircuitOpenError on first failure")
+	}
+}
+
+func TestRegistry_Fallback_NoFallbackConfigured(t *testing.T) {
+	r := NewRegistry()
+	primary := &stubProvider{name: "stripe", fail: true}
+	r.Register("stripe", primary, MethodInfo{ID: "stripe", Name: "Stripe", Provider: "stripe", Type: "redirect"})
+	// No fallback set for stripe.
+
+	order := &entity.PaymentOrder{OrderNo: "ORD-NF2", PaymentMethod: "stripe"}
+	// Trip circuit.
+	for i := 0; i < int(cbFailures); i++ {
+		_, _, _ = r.Checkout(context.Background(), order, "")
+	}
+	// Circuit open, no fallback → should get ProviderCircuitOpenError.
+	_, _, err := r.Checkout(context.Background(), order, "")
+	var ce *ProviderCircuitOpenError
+	if !errors.As(err, &ce) {
+		t.Errorf("expected ProviderCircuitOpenError, got %T: %v", err, err)
+	}
+}

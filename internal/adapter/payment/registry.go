@@ -98,18 +98,26 @@ type checkoutResult struct {
 	externalID string
 }
 
+// FallbackRule defines a fallback provider to try when the primary is circuit-open.
+type FallbackRule struct {
+	Provider       string // registry name of fallback provider
+	MethodOverride string // payment method to set on the order for the fallback (e.g., "epay_alipay")
+}
+
 // Registry stores all payment providers and routes checkout by payment method.
 type Registry struct {
-	entries  map[string]*providerEntry // name → entry (provider + breaker)
-	routing  map[string]string         // method_id → provider name
-	methods  []MethodInfo              // ordered list of exposed methods
+	entries   map[string]*providerEntry  // name → entry (provider + breaker)
+	routing   map[string]string          // method_id → provider name
+	fallbacks map[string]FallbackRule    // method_id → fallback rule
+	methods   []MethodInfo               // ordered list of exposed methods
 }
 
 // NewRegistry creates an empty Registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		entries: make(map[string]*providerEntry),
-		routing: make(map[string]string),
+		entries:   make(map[string]*providerEntry),
+		routing:   make(map[string]string),
+		fallbacks: make(map[string]FallbackRule),
 	}
 }
 
@@ -131,14 +139,42 @@ func (r *Registry) Register(name string, p Provider, methods ...MethodInfo) {
 	}
 }
 
+// SetFallback configures a fallback provider for a payment method.
+// When the primary provider's circuit breaker is open, the fallback is tried.
+// methodOverride replaces order.PaymentMethod for the fallback call (e.g., "epay_alipay").
+func (r *Registry) SetFallback(methodID string, fallbackProvider, methodOverride string) {
+	r.fallbacks[methodID] = FallbackRule{Provider: fallbackProvider, MethodOverride: methodOverride}
+}
+
 // Checkout routes the order to the correct payment provider and calls CreateCheckout
-// through the provider's circuit breaker. Returns ProviderCircuitOpenError if the
-// breaker is open.
+// through the provider's circuit breaker. On circuit-open, tries the fallback if configured.
 func (r *Registry) Checkout(ctx context.Context, order *entity.PaymentOrder, returnURL string) (payURL, externalID string, err error) {
 	providerName, ok := r.routing[order.PaymentMethod]
 	if !ok {
 		return "", "", &ProviderNotAvailableError{Method: order.PaymentMethod}
 	}
+
+	url, extID, err := r.checkoutVia(ctx, providerName, order, returnURL)
+	if err != nil {
+		// On circuit open, try fallback if available.
+		var ce *ProviderCircuitOpenError
+		if errors.As(err, &ce) {
+			if fb, hasFB := r.fallbacks[order.PaymentMethod]; hasFB {
+				slog.Warn("payment: primary circuit open, trying fallback",
+					"method", order.PaymentMethod,
+					"primary", providerName,
+					"fallback", fb.Provider)
+				cbCheckoutTotal.WithLabelValues(providerName, "fallback").Inc()
+				return r.checkoutViaFallback(ctx, fb, order, returnURL)
+			}
+		}
+		return "", "", err
+	}
+	return url, extID, nil
+}
+
+// checkoutVia executes a checkout through a specific provider's circuit breaker.
+func (r *Registry) checkoutVia(ctx context.Context, providerName string, order *entity.PaymentOrder, returnURL string) (string, string, error) {
 	entry, ok := r.entries[providerName]
 	if !ok {
 		return "", "", &ProviderNotAvailableError{Method: order.PaymentMethod}
@@ -161,6 +197,16 @@ func (r *Registry) Checkout(ctx context.Context, order *entity.PaymentOrder, ret
 	}
 	cbCheckoutTotal.WithLabelValues(providerName, "success").Inc()
 	return result.payURL, result.externalID, nil
+}
+
+// checkoutViaFallback calls the fallback provider with an overridden payment method.
+func (r *Registry) checkoutViaFallback(ctx context.Context, fb FallbackRule, order *entity.PaymentOrder, returnURL string) (string, string, error) {
+	// Temporarily override PaymentMethod for the fallback provider's dispatch logic.
+	original := order.PaymentMethod
+	order.PaymentMethod = fb.MethodOverride
+	url, extID, err := r.checkoutVia(ctx, fb.Provider, order, returnURL)
+	order.PaymentMethod = original // restore so the caller sees the original method
+	return url, extID, err
 }
 
 // ListMethods returns all registered payment methods in registration order.

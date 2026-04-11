@@ -345,6 +345,18 @@ func run(ctx context.Context, cfg *config.Config) error {
 		paymentRegistry.Register("epay", epayProvider,
 			payment.MethodInfo{ID: "epay_wechat", Name: "微信支付", Provider: "epay", Type: "qr"})
 	}
+	// Fallback routes: when direct provider circuit is open, try epay gateway.
+	if epayProvider != nil {
+		if alipayProvider != nil {
+			paymentRegistry.SetFallback("alipay", "epay", "epay_alipay")
+			paymentRegistry.SetFallback("alipay_qr", "epay", "epay_alipay")
+			paymentRegistry.SetFallback("alipay_wap", "epay", "epay_alipay")
+		}
+		if wechatPayProvider != nil {
+			paymentRegistry.SetFallback("wechat_native", "epay", "epay_wxpay")
+			paymentRegistry.SetFallback("wechat_h5", "epay", "epay_wxpay")
+		}
+	}
 	slog.Info("payment registry initialized", "methods", len(paymentRegistry.ListMethods()))
 
 	// --- HTTP Handlers ---
