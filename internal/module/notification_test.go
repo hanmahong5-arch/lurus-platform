@@ -230,9 +230,9 @@ func TestNotificationModule_Register(t *testing.T) {
 
 	m.Register(r)
 
-	// Notification module registers 3 hooks: account_created, checkin, referral_signup.
-	if r.HookCount() != 3 {
-		t.Errorf("HookCount = %d, want 3", r.HookCount())
+	// Notification module registers 4 hooks: account_created, checkin, referral_signup, reconciliation_issue.
+	if r.HookCount() != 4 {
+		t.Errorf("HookCount = %d, want 4", r.HookCount())
 	}
 }
 

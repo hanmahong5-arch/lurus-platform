@@ -36,6 +36,7 @@ var providerNameByMethod = map[string]string{
 type ReconciliationWorker struct {
 	wallets     *WalletService
 	payments    *payment.Registry
+	onAlert     func(ctx context.Context, issue *entity.ReconciliationIssue) // optional notification hook
 	interval    time.Duration
 	orderMaxAge time.Duration
 }
@@ -49,6 +50,12 @@ func NewReconciliationWorker(wallets *WalletService, payments *payment.Registry)
 		interval:    defaultReconciliationInterval,
 		orderMaxAge: defaultOrderMaxAge,
 	}
+}
+
+// SetOnAlertHook sets a callback invoked for every critical reconciliation issue.
+// Used to push notifications via the module registry.
+func (w *ReconciliationWorker) SetOnAlertHook(fn func(ctx context.Context, issue *entity.ReconciliationIssue)) {
+	w.onAlert = fn
 }
 
 // Start runs the reconciliation loop in a blocking fashion. It returns when
@@ -133,6 +140,7 @@ func (w *ReconciliationWorker) checkPaidOrdersIntegrity(ctx context.Context) {
 			slog.Error("reconciliation: failed to create issue",
 				"order_no", o.OrderNo, "err", err)
 		}
+		w.fireAlert(ctx, issue)
 	}
 }
 
@@ -163,7 +171,7 @@ func (w *ReconciliationWorker) verifyStalePendingOrders(ctx context.Context) {
 			continue
 		}
 
-		result, err := w.payments.QueryOrder(ctx, providerName, order.OrderNo)
+		result, err := w.queryProviderOrder(ctx, providerName, order)
 		if err != nil {
 			slog.Warn("reconciliation: provider query failed",
 				"order_no", order.OrderNo, "provider", providerName, "err", err)
@@ -200,6 +208,7 @@ func (w *ReconciliationWorker) verifyStalePendingOrders(ctx context.Context) {
 					order.OrderNo, providerName, result.Amount, err),
 			}
 			_ = w.wallets.CreateReconciliationIssue(ctx, issue)
+			w.fireAlert(ctx, issue)
 			continue
 		}
 		recovered++
@@ -227,5 +236,29 @@ func (w *ReconciliationWorker) verifyStalePendingOrders(ctx context.Context) {
 	if recovered > 0 {
 		slog.Info("reconciliation: recovered missed-webhook orders", "count", recovered)
 		metrics.RecordReconciliationIssues(recovered)
+	}
+}
+
+// queryProviderOrder queries the provider for an order's status.
+// For Stripe, uses ExternalID (session ID) when available since Stripe
+// doesn't support lookup by our order number.
+func (w *ReconciliationWorker) queryProviderOrder(ctx context.Context, providerName string, order entity.PaymentOrder) (*payment.OrderQueryResult, error) {
+	// Stripe optimization: use ExternalID (session ID) for direct lookup.
+	if providerName == "stripe" && order.ExternalID != "" {
+		p, ok := w.payments.Get("stripe")
+		if !ok {
+			return nil, nil
+		}
+		if sq, ok := p.(*payment.StripeProvider); ok {
+			return sq.QueryByExternalID(ctx, order.ExternalID)
+		}
+	}
+	return w.payments.QueryOrder(ctx, providerName, order.OrderNo)
+}
+
+// fireAlert calls the notification hook if configured.
+func (w *ReconciliationWorker) fireAlert(ctx context.Context, issue *entity.ReconciliationIssue) {
+	if w.onAlert != nil {
+		w.onAlert(ctx, issue)
 	}
 }

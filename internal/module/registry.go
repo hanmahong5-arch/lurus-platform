@@ -23,13 +23,17 @@ type CheckinHook func(ctx context.Context, accountID int64, streak int) error
 // ReferralSignupHook is called when a referred user completes registration.
 type ReferralSignupHook func(ctx context.Context, referrerAccountID int64, referredName string) error
 
+// ReconciliationIssueHook is called when a critical reconciliation issue is detected.
+type ReconciliationIssueHook func(ctx context.Context, issue *entity.ReconciliationIssue) error
+
 // Registry holds module hooks registered at startup.
 type Registry struct {
-	onAccountCreated  []AccountHook
-	onAccountDeleted  []AccountHook
-	onPlanChanged     []PlanChangeHook
-	onCheckin         []CheckinHook
-	onReferralSignup  []ReferralSignupHook
+	onAccountCreated       []AccountHook
+	onAccountDeleted       []AccountHook
+	onPlanChanged          []PlanChangeHook
+	onCheckin              []CheckinHook
+	onReferralSignup       []ReferralSignupHook
+	onReconciliationIssue  []ReconciliationIssueHook
 }
 
 // NewRegistry creates an empty module registry.
@@ -130,8 +134,27 @@ func (r *Registry) FireReferralSignup(ctx context.Context, referrerAccountID int
 	}
 }
 
+// OnReconciliationIssue registers a hook for critical reconciliation issues.
+func (r *Registry) OnReconciliationIssue(hook ReconciliationIssueHook) {
+	r.onReconciliationIssue = append(r.onReconciliationIssue, hook)
+}
+
+// FireReconciliationIssue invokes all registered reconciliation issue hooks.
+func (r *Registry) FireReconciliationIssue(ctx context.Context, issue *entity.ReconciliationIssue) {
+	for _, hook := range r.onReconciliationIssue {
+		if err := hook(ctx, issue); err != nil {
+			slog.Warn("module hook failed",
+				"event", "reconciliation_issue",
+				"issue_type", issue.IssueType,
+				"order_no", issue.OrderNo,
+				"error", err,
+			)
+		}
+	}
+}
+
 // HookCount returns the total number of registered hooks (useful for startup logging).
 func (r *Registry) HookCount() int {
 	return len(r.onAccountCreated) + len(r.onAccountDeleted) + len(r.onPlanChanged) +
-		len(r.onCheckin) + len(r.onReferralSignup)
+		len(r.onCheckin) + len(r.onReferralSignup) + len(r.onReconciliationIssue)
 }

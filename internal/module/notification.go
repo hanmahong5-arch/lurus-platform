@@ -96,14 +96,47 @@ func (m *NotificationModule) OnReferralSignup(ctx context.Context, referrerAccou
 	})
 }
 
+// OnReconciliationIssue sends a critical alert when a payment reconciliation issue is found.
+func (m *NotificationModule) OnReconciliationIssue(ctx context.Context, issue *entity.ReconciliationIssue) error {
+	// Only alert on critical issues (missing_credit, missed_webhook).
+	if issue.Severity != "critical" {
+		return nil
+	}
+	channels := []string{"in_app"}
+	// Also send email if the issue has an account (for admin notification, channel "email"
+	// is sent to the platform admin, not the user account).
+	vars := map[string]string{
+		"issue_type":  issue.IssueType,
+		"order_no":    issue.OrderNo,
+		"provider":    issue.Provider,
+		"description": issue.Description,
+		"severity":    issue.Severity,
+	}
+	if issue.ExpectedAmount != nil {
+		vars["expected_amount"] = fmt.Sprintf("%.2f", *issue.ExpectedAmount)
+	}
+	accountID := int64(0) // admin-level alert
+	if issue.AccountID != nil {
+		accountID = *issue.AccountID
+	}
+	return m.send(ctx, notifyRequest{
+		AccountID: accountID,
+		EventType: "billing.reconciliation.critical",
+		EventID:   fmt.Sprintf("recon_%s_%s", issue.IssueType, issue.OrderNo),
+		Channels:  channels,
+		Vars:      vars,
+	})
+}
+
 // Register registers all notification module hooks into the module registry.
 func (m *NotificationModule) Register(r *Registry) {
 	r.OnAccountCreated(m.OnAccountCreated)
 	r.OnCheckin(m.OnCheckin)
 	r.OnReferralSignup(m.OnReferralSignup)
+	r.OnReconciliationIssue(m.OnReconciliationIssue)
 	slog.Info("module registered", "module", "notification",
 		"service_url", m.cfg.ServiceURL,
-		"hooks", "account_created,checkin,referral_signup")
+		"hooks", "account_created,checkin,referral_signup,reconciliation_issue")
 }
 
 type notifyRequest struct {
