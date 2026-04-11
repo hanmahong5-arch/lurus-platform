@@ -262,6 +262,22 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("wechat pay provider enabled (direct integration)")
 	}
 
+	// WorldFirst (万里汇) integration — Alipay+ Cashier Payment.
+	worldFirstProvider, err := payment.NewWorldFirstProvider(payment.WorldFirstConfig{
+		ClientID:      cfg.WorldFirstClientID,
+		PrivateKeyPEM: cfg.WorldFirstPrivateKey,
+		PublicKeyPEM:  cfg.WorldFirstPublicKey,
+		Gateway:       cfg.WorldFirstGateway,
+		NotifyURL:     cfg.WorldFirstNotifyURL,
+		KeyVersion:    cfg.WorldFirstKeyVersion,
+	})
+	if err != nil {
+		return fmt.Errorf("init worldfirst provider: %w", err)
+	}
+	if worldFirstProvider != nil {
+		slog.Info("worldfirst provider enabled", "gateway", cfg.WorldFirstGateway)
+	}
+
 	// --- Auth Middleware (Zitadel JWKS JWT + lurus session token) ---
 	jwtValidator := auth.NewValidator(auth.ValidatorConfig{
 		Issuer:     cfg.ZitadelIssuer,
@@ -323,6 +339,10 @@ func run(ctx context.Context, cfg *config.Config) error {
 	if creemProvider != nil {
 		paymentRegistry.Register("creem", creemProvider,
 			payment.MethodInfo{ID: "creem", Name: "Creem", Provider: "creem", Type: "redirect"})
+	}
+	if worldFirstProvider != nil {
+		paymentRegistry.Register("worldfirst", worldFirstProvider,
+			payment.MethodInfo{ID: "worldfirst", Name: "万里汇 (WorldFirst)", Provider: "worldfirst", Type: "redirect"})
 	}
 	// Direct Alipay preferred over Epay gateway.
 	if alipayProvider != nil {

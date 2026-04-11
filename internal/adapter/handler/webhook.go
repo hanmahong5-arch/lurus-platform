@@ -321,6 +321,49 @@ func (h *WebhookHandler) WechatPayNotify(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": "SUCCESS", "message": "ok"})
 }
 
+// WorldFirstNotify handles WorldFirst (万里汇) async payment notifications.
+// POST /webhook/worldfirst
+func (h *WebhookHandler) WorldFirstNotify(c *gin.Context) {
+	p, pok := h.payments.Get("worldfirst")
+	if !pok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"result": map[string]string{"resultStatus": "F", "resultMessage": "worldfirst not configured"}})
+		return
+	}
+	nh, _ := p.(payment.NotifyHandler)
+	if nh == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"result": map[string]string{"resultStatus": "F", "resultMessage": "worldfirst not configured"}})
+		return
+	}
+
+	orderNo, ok, err := nh.HandleNotify(c.Request)
+	if err != nil {
+		slog.Warn("webhook/worldfirst: notification verification failed", "err", err)
+		metrics.RecordWebhookEvent("worldfirst", "invalid_signature")
+		c.JSON(http.StatusBadRequest, gin.H{"result": map[string]string{"resultStatus": "F", "resultMessage": "invalid notification"}})
+		return
+	}
+	if !ok || orderNo == "" {
+		c.JSON(http.StatusOK, gin.H{"result": map[string]string{"resultStatus": "S"}})
+		return
+	}
+
+	eventKey := "worldfirst:" + orderNo
+	if err := h.deduper.TryProcess(c.Request.Context(), eventKey); err != nil {
+		slog.Info("webhook/worldfirst: duplicate event, skipping", "order_no", orderNo)
+		c.JSON(http.StatusOK, gin.H{"result": map[string]string{"resultStatus": "S"}})
+		return
+	}
+
+	if err := h.processOrderPaid(c, orderNo, "worldfirst"); err != nil {
+		slog.Error("webhook/worldfirst: process order failed", "order_no", orderNo, "err", err)
+		metrics.RecordWebhookEvent("worldfirst", "error")
+		c.JSON(http.StatusInternalServerError, gin.H{"result": map[string]string{"resultStatus": "F", "resultMessage": "order processing failed"}})
+		return
+	}
+	metrics.RecordWebhookEvent("worldfirst", "success")
+	c.JSON(http.StatusOK, gin.H{"result": map[string]string{"resultStatus": "S"}})
+}
+
 // processOrderPaid marks an order as paid and handles subscription activation if needed.
 // When Temporal is enabled, it starts a PaymentCompletionWorkflow (idempotent via workflow ID).
 // Otherwise falls back to the direct synchronous path.

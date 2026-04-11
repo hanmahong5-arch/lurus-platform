@@ -74,6 +74,14 @@ type Config struct {
 	WechatPayAppID      string // WECHAT_PAY_APP_ID
 	WechatPayNotifyURL  string // WECHAT_PAY_NOTIFY_URL
 
+	// WorldFirst (万里汇, built on Alipay+ infrastructure)
+	WorldFirstClientID     string // WORLDFIRST_CLIENT_ID
+	WorldFirstPrivateKey   string // WORLDFIRST_PRIVATE_KEY (merchant RSA private key, PEM)
+	WorldFirstPublicKey    string // WORLDFIRST_PUBLIC_KEY (WorldFirst's RSA public key, PEM)
+	WorldFirstGateway      string // WORLDFIRST_GATEWAY (default: https://open-sea-global.alipay.com)
+	WorldFirstNotifyURL    string // WORLDFIRST_NOTIFY_URL
+	WorldFirstKeyVersion   string // WORLDFIRST_KEY_VERSION (default: "1")
+
 	// Email (SMTP)
 	EmailSMTPHost string // EMAIL_SMTP_HOST (empty = noop sender)
 	EmailSMTPPort int    // EMAIL_SMTP_PORT (default: 587)
@@ -167,6 +175,12 @@ func Load() (*Config, error) {
 		WechatPayPrivateKey: getEnv("WECHAT_PAY_PRIVATE_KEY", ""),
 		WechatPayAppID:      getEnv("WECHAT_PAY_APP_ID", ""),
 		WechatPayNotifyURL:  getEnv("WECHAT_PAY_NOTIFY_URL", ""),
+		WorldFirstClientID:     getEnv("WORLDFIRST_CLIENT_ID", ""),
+		WorldFirstPrivateKey:   getEnv("WORLDFIRST_PRIVATE_KEY", ""),
+		WorldFirstPublicKey:    getEnv("WORLDFIRST_PUBLIC_KEY", ""),
+		WorldFirstGateway:      getEnv("WORLDFIRST_GATEWAY", "https://open-sea-global.alipay.com"),
+		WorldFirstNotifyURL:    getEnv("WORLDFIRST_NOTIFY_URL", ""),
+		WorldFirstKeyVersion:   getEnv("WORLDFIRST_KEY_VERSION", "1"),
 		WechatServerAddress:      getEnv("WECHAT_SERVER_ADDRESS", ""),
 		WechatServerToken:        getEnv("WECHAT_SERVER_TOKEN", ""),
 		SessionSecret:            getEnv("SESSION_SECRET", ""),

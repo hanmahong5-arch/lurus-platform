@@ -312,6 +312,7 @@ func Build(deps Deps) *gin.Engine {
 		webhooks.POST("/creem", deps.Webhooks.CreemWebhook)
 		webhooks.POST("/alipay", deps.Webhooks.AlipayNotify)      // Alipay async notification
 		webhooks.POST("/wechat", deps.Webhooks.WechatPayNotify)   // WeChat Pay v3 notification
+		webhooks.POST("/worldfirst", deps.Webhooks.WorldFirstNotify) // WorldFirst (万里汇) notification
 	}
 
 	return r
