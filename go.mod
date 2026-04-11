@@ -41,6 +41,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.1-0.20220228012449-10b1cf09e00b // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
+	github.com/sony/gobreaker/v2 v2.4.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	go.temporal.io/api v1.62.2 // indirect
 	golang.org/x/time v0.3.0 // indirect

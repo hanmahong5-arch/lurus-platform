@@ -891,6 +891,19 @@ func (h *InternalHandler) InternalSubscriptionCheckout(c *gin.Context) {
 	})
 }
 
+// GetPaymentProviderStatus returns the circuit breaker state of all payment providers.
+// GET /internal/v1/payment/providers
+func (h *InternalHandler) GetPaymentProviderStatus(c *gin.Context) {
+	if !requireScope(c, "checkout") {
+		return
+	}
+	if h.payments == nil {
+		c.JSON(http.StatusOK, gin.H{"providers": []any{}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"providers": h.payments.ProviderStatuses()})
+}
+
 // InternalListWalletTransactions returns wallet transaction history for an account.
 // POST /internal/v1/accounts/:id/wallet/transactions
 func (h *InternalHandler) InternalListWalletTransactions(c *gin.Context) {

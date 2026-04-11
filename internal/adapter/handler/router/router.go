@@ -217,6 +217,7 @@ func Build(deps Deps) *gin.Engine {
 		internal.POST("/checkout/create", deps.Internal.CreateCheckout)
 		internal.GET("/checkout/:order_no/status", deps.Internal.GetCheckoutStatus)
 		internal.GET("/payment-methods", deps.Internal.GetPaymentMethods)
+		internal.GET("/payment/providers", deps.Internal.GetPaymentProviderStatus)
 		// Pre-authorization (freeze/settle/release for streaming API calls)
 		internal.POST("/accounts/:id/wallet/pre-authorize", deps.Internal.PreAuthorize)
 		internal.POST("/wallet/pre-auth/:id/settle", deps.Internal.SettlePreAuth)
