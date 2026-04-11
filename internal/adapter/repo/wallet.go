@@ -511,3 +511,74 @@ func (r *WalletRepo) ExpireStalePreAuths(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
+// --- Reconciliation ---
+
+// FindPaidTopupOrdersWithoutCredit returns topup orders marked as paid
+// that have no corresponding wallet_transaction (type=topup, reference_id=order_no).
+// This detects cases where MarkOrderPaid succeeded but the Credit call failed.
+func (r *WalletRepo) FindPaidTopupOrdersWithoutCredit(ctx context.Context) ([]entity.PaidOrderWithoutCredit, error) {
+	var results []entity.PaidOrderWithoutCredit
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT o.order_no, o.account_id, o.amount_cny, o.payment_method, o.paid_at
+		FROM billing.payment_orders o
+		LEFT JOIN billing.wallet_transactions t
+			ON t.reference_type = 'payment_order'
+			AND t.reference_id = o.order_no
+			AND t.type = 'topup'
+		WHERE o.status = 'paid'
+			AND o.order_type = 'topup'
+			AND t.id IS NULL
+		ORDER BY o.paid_at DESC
+		LIMIT 100
+	`).Scan(&results).Error
+	return results, err
+}
+
+// CreateReconciliationIssue persists a newly detected issue. Deduplicates by
+// (issue_type, order_no, status='open') — returns nil without insert if duplicate.
+func (r *WalletRepo) CreateReconciliationIssue(ctx context.Context, issue *entity.ReconciliationIssue) error {
+	var count int64
+	r.db.WithContext(ctx).Model(&entity.ReconciliationIssue{}).
+		Where("issue_type = ? AND order_no = ? AND status = ?", issue.IssueType, issue.OrderNo, entity.ReconStatusOpen).
+		Count(&count)
+	if count > 0 {
+		return nil // already tracked
+	}
+	return r.db.WithContext(ctx).Create(issue).Error
+}
+
+// ListReconciliationIssues returns paginated issues, optionally filtered by status.
+func (r *WalletRepo) ListReconciliationIssues(ctx context.Context, status string, page, pageSize int) ([]entity.ReconciliationIssue, int64, error) {
+	q := r.db.WithContext(ctx).Model(&entity.ReconciliationIssue{})
+	if status != "" {
+		q = q.Where("status = ?", status)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var items []entity.ReconciliationIssue
+	offset := (page - 1) * pageSize
+	if err := q.Order("detected_at DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
+// ResolveReconciliationIssue marks an issue as resolved or ignored.
+func (r *WalletRepo) ResolveReconciliationIssue(ctx context.Context, id int64, status, resolution string) error {
+	now := time.Now().UTC()
+	result := r.db.WithContext(ctx).
+		Model(&entity.ReconciliationIssue{}).
+		Where("id = ? AND status = ?", id, entity.ReconStatusOpen).
+		Updates(map[string]any{
+			"status":      status,
+			"resolution":  resolution,
+			"resolved_at": &now,
+		})
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("issue %d not found or already resolved", id)
+	}
+	return result.Error
+}
+

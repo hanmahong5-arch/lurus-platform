@@ -298,6 +298,18 @@ func (m *grpcMockWalletStore) CountPendingOrders(_ context.Context, _ int64) (in
 func (m *grpcMockWalletStore) GetPendingOrderByIdempotencyKey(_ context.Context, _ string) (*entity.PaymentOrder, error) {
 	return nil, nil
 }
+func (m *grpcMockWalletStore) FindPaidTopupOrdersWithoutCredit(_ context.Context) ([]entity.PaidOrderWithoutCredit, error) {
+	return nil, nil
+}
+func (m *grpcMockWalletStore) CreateReconciliationIssue(_ context.Context, _ *entity.ReconciliationIssue) error {
+	return nil
+}
+func (m *grpcMockWalletStore) ListReconciliationIssues(_ context.Context, _ string, _, _ int) ([]entity.ReconciliationIssue, int64, error) {
+	return nil, 0, nil
+}
+func (m *grpcMockWalletStore) ResolveReconciliationIssue(_ context.Context, _ int64, _, _ string) error {
+	return nil
+}
 
 func (m *grpcMockWalletStore) CreatePreAuth(_ context.Context, pa *entity.WalletPreAuthorization) error {
 	m.mu.Lock()

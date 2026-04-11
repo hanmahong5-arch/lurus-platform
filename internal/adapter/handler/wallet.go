@@ -261,5 +261,40 @@ func (h *WalletHandler) AdminAdjustWallet(c *gin.Context) {
 	c.JSON(http.StatusOK, wallet)
 }
 
+// AdminListReconciliationIssues returns paginated reconciliation issues.
+// GET /admin/v1/reconciliation/issues?status=open&page=1&page_size=20
+func (h *WalletHandler) AdminListReconciliationIssues(c *gin.Context) {
+	status := c.Query("status")
+	page, pageSize := parsePagination(c)
+	list, total, err := h.wallets.ListReconciliationIssues(c.Request.Context(), status, page, pageSize)
+	if err != nil {
+		respondInternalError(c, "reconciliation.list", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
+}
+
+// AdminResolveReconciliationIssue marks an issue as resolved or ignored.
+// POST /admin/v1/reconciliation/issues/:id/resolve
+func (h *WalletHandler) AdminResolveReconciliationIssue(c *gin.Context) {
+	id, ok := parsePathInt64(c, "id", "Issue ID")
+	if !ok {
+		return
+	}
+	var req struct {
+		Status     string `json:"status"     binding:"required,oneof=resolved ignored"`
+		Resolution string `json:"resolution" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		handleBindError(c, err)
+		return
+	}
+	if err := h.wallets.ResolveReconciliationIssue(c.Request.Context(), id, req.Status, req.Resolution); err != nil {
+		respondInternalError(c, "reconciliation.resolve", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"resolved": true})
+}
+
 // providerError wraps payment.ProviderNotAvailableError for backward compatibility in tests.
 type providerError = payment.ProviderNotAvailableError

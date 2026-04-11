@@ -272,6 +272,8 @@ func Build(deps Deps) *gin.Engine {
 
 		// Admin Reports: financial reconciliation
 		admin.GET("/reports/financial", deps.Reports.FinancialReport)
+		admin.GET("/reconciliation/issues", deps.Wallets.AdminListReconciliationIssues)
+		admin.POST("/reconciliation/issues/:id/resolve", deps.Wallets.AdminResolveReconciliationIssue)
 
 		// Admin Settings: runtime payment config + QR code management
 		if deps.AdminConfig != nil {

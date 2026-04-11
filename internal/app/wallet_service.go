@@ -245,6 +245,28 @@ func (s *WalletService) ExpireStalePreAuths(ctx context.Context) (int64, error) 
 	return s.wallets.ExpireStalePreAuths(ctx)
 }
 
+// --- Reconciliation pass-through ---
+
+// FindPaidTopupOrdersWithoutCredit returns paid topup orders missing a wallet credit.
+func (s *WalletService) FindPaidTopupOrdersWithoutCredit(ctx context.Context) ([]entity.PaidOrderWithoutCredit, error) {
+	return s.wallets.FindPaidTopupOrdersWithoutCredit(ctx)
+}
+
+// CreateReconciliationIssue persists a reconciliation issue (deduplicates by order_no + type).
+func (s *WalletService) CreateReconciliationIssue(ctx context.Context, issue *entity.ReconciliationIssue) error {
+	return s.wallets.CreateReconciliationIssue(ctx, issue)
+}
+
+// ListReconciliationIssues returns paginated reconciliation issues.
+func (s *WalletService) ListReconciliationIssues(ctx context.Context, status string, page, pageSize int) ([]entity.ReconciliationIssue, int64, error) {
+	return s.wallets.ListReconciliationIssues(ctx, status, page, pageSize)
+}
+
+// ResolveReconciliationIssue marks an issue as resolved or ignored.
+func (s *WalletService) ResolveReconciliationIssue(ctx context.Context, id int64, status, resolution string) error {
+	return s.wallets.ResolveReconciliationIssue(ctx, id, status, resolution)
+}
+
 // CreateCheckoutSession creates a checkout order initiated by an external product service.
 // If idempotencyKey is provided and a pending order exists with that key, returns it.
 func (s *WalletService) CreateCheckoutSession(ctx context.Context, accountID int64, amountCNY float64, method, sourceService, idempotencyKey string, ttl time.Duration) (*entity.PaymentOrder, error) {

@@ -555,6 +555,24 @@ func (m *mockWalletStore) CountPendingOrders(_ context.Context, accountID int64)
 	return count, nil
 }
 
+// ── Reconciliation stubs (satisfy interface, not exercised in unit tests) ─────
+
+func (m *mockWalletStore) FindPaidTopupOrdersWithoutCredit(_ context.Context) ([]entity.PaidOrderWithoutCredit, error) {
+	return nil, nil
+}
+
+func (m *mockWalletStore) CreateReconciliationIssue(_ context.Context, _ *entity.ReconciliationIssue) error {
+	return nil
+}
+
+func (m *mockWalletStore) ListReconciliationIssues(_ context.Context, _ string, _, _ int) ([]entity.ReconciliationIssue, int64, error) {
+	return nil, 0, nil
+}
+
+func (m *mockWalletStore) ResolveReconciliationIssue(_ context.Context, _ int64, _, _ string) error {
+	return nil
+}
+
 // ── vipStore mock ─────────────────────────────────────────────────────────────
 
 type mockVIPStore struct {

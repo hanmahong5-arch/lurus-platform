@@ -60,6 +60,12 @@ type walletStore interface {
 	CountActivePreAuths(ctx context.Context, accountID int64) (int64, error)
 	// CountPendingOrders returns the number of pending payment orders for an account.
 	CountPendingOrders(ctx context.Context, accountID int64) (int64, error)
+
+	// Reconciliation
+	FindPaidTopupOrdersWithoutCredit(ctx context.Context) ([]entity.PaidOrderWithoutCredit, error)
+	CreateReconciliationIssue(ctx context.Context, issue *entity.ReconciliationIssue) error
+	ListReconciliationIssues(ctx context.Context, status string, page, pageSize int) ([]entity.ReconciliationIssue, int64, error)
+	ResolveReconciliationIssue(ctx context.Context, id int64, status, resolution string) error
 }
 
 // vipStore is the minimal DB interface required by VIPService.

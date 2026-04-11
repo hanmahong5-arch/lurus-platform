@@ -97,6 +97,14 @@ var (
 		},
 		[]string{"action", "result"},
 	)
+
+	reconciliationIssuesFound = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "reconciliation_issues_found_total",
+			Help:      "Total reconciliation issues detected by the worker.",
+		},
+	)
 )
 
 // Handler returns the standard Prometheus /metrics HTTP handler.
@@ -165,4 +173,9 @@ func RecordSubscriptionTransition(fromStatus, toStatus, productID string) {
 // result: "success" | "error"
 func RecordRefundOperation(action, result string) {
 	refundOpsTotal.WithLabelValues(action, result).Inc()
+}
+
+// RecordReconciliationIssues records the number of issues found in a single tick.
+func RecordReconciliationIssues(count int) {
+	reconciliationIssuesFound.Add(float64(count))
 }
