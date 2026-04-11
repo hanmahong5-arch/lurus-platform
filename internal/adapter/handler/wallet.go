@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -9,7 +8,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
-	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 )
 
 const (
@@ -33,33 +31,12 @@ var validPaymentMethods = map[string]bool{
 
 // WalletHandler handles wallet and topup endpoints.
 type WalletHandler struct {
-	wallets   *app.WalletService
-	epay      *payment.EpayProvider
-	stripe    *payment.StripeProvider
-	creem     *payment.CreemProvider
-	alipay    *payment.AlipayProvider
-	wechatPay *payment.WechatPayProvider
+	wallets  *app.WalletService
+	payments *payment.Registry
 }
 
-func NewWalletHandler(
-	wallets *app.WalletService,
-	epay *payment.EpayProvider,
-	stripe *payment.StripeProvider,
-	creem *payment.CreemProvider,
-) *WalletHandler {
-	return &WalletHandler{wallets: wallets, epay: epay, stripe: stripe, creem: creem}
-}
-
-// WithAlipayProvider sets the direct Alipay provider.
-func (h *WalletHandler) WithAlipayProvider(p *payment.AlipayProvider) *WalletHandler {
-	h.alipay = p
-	return h
-}
-
-// WithWechatPayProvider sets the direct WeChat Pay provider.
-func (h *WalletHandler) WithWechatPayProvider(p *payment.WechatPayProvider) *WalletHandler {
-	h.wechatPay = p
-	return h
+func NewWalletHandler(wallets *app.WalletService, payments *payment.Registry) *WalletHandler {
+	return &WalletHandler{wallets: wallets, payments: payments}
 }
 
 // GetWallet returns the current user's wallet balance and VIP info.
@@ -137,37 +114,7 @@ func (h *WalletHandler) Redeem(c *gin.Context) {
 // TopupInfo returns available payment methods for topup.
 // GET /api/v1/wallet/topup/info
 func (h *WalletHandler) TopupInfo(c *gin.Context) {
-	methods := make([]gin.H, 0, 8)
-	// Direct Alipay (preferred over Epay gateway).
-	if h.alipay != nil {
-		methods = append(methods,
-			gin.H{"id": "alipay", "name": "支付宝", "provider": "alipay", "type": "redirect"},
-			gin.H{"id": "alipay_qr", "name": "支付宝 (扫码)", "provider": "alipay", "type": "qr"},
-			gin.H{"id": "alipay_wap", "name": "支付宝 (手机)", "provider": "alipay", "type": "redirect"},
-		)
-	} else if h.epay != nil {
-		methods = append(methods,
-			gin.H{"id": "epay_alipay", "name": "支付宝", "provider": "epay", "type": "qr"},
-		)
-	}
-	// Direct WeChat Pay (preferred over Epay gateway).
-	if h.wechatPay != nil {
-		methods = append(methods,
-			gin.H{"id": "wechat_native", "name": "微信支付 (扫码)", "provider": "wechat", "type": "qr"},
-			gin.H{"id": "wechat_h5", "name": "微信支付 (H5)", "provider": "wechat", "type": "redirect"},
-		)
-	} else if h.epay != nil {
-		methods = append(methods,
-			gin.H{"id": "epay_wechat", "name": "微信支付", "provider": "epay", "type": "qr"},
-		)
-	}
-	if h.stripe != nil {
-		methods = append(methods, gin.H{"id": "stripe", "name": "信用卡 (Stripe)", "provider": "stripe", "type": "redirect"})
-	}
-	if h.creem != nil {
-		methods = append(methods, gin.H{"id": "creem", "name": "Creem", "provider": "creem", "type": "redirect"})
-	}
-	c.JSON(http.StatusOK, gin.H{"payment_methods": methods})
+	c.JSON(http.StatusOK, gin.H{"payment_methods": h.payments.ListMethods()})
 }
 
 // CreateTopup creates a payment order and returns the checkout URL.
@@ -197,7 +144,7 @@ func (h *WalletHandler) CreateTopup(c *gin.Context) {
 			"Maximum topup amount is 100,000 CNY per transaction")
 		return
 	}
-	if !validPaymentMethods[req.PaymentMethod] {
+	if !h.payments.HasMethod(req.PaymentMethod) {
 		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
 			"Unsupported payment method")
 		return
@@ -214,9 +161,9 @@ func (h *WalletHandler) CreateTopup(c *gin.Context) {
 		returnURL = "/topup/result"
 	}
 
-	payURL, externalID, err := h.resolveCheckout(c.Request.Context(), order, returnURL)
+	payURL, externalID, err := h.payments.Checkout(c.Request.Context(), order, returnURL)
 	if err != nil {
-		var pe *providerError
+		var pe *payment.ProviderNotAvailableError
 		if errors.As(err, &pe) {
 			respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, pe.Error())
 			return
@@ -314,45 +261,5 @@ func (h *WalletHandler) AdminAdjustWallet(c *gin.Context) {
 	c.JSON(http.StatusOK, wallet)
 }
 
-// resolveCheckout routes the order to the correct payment provider.
-func (h *WalletHandler) resolveCheckout(ctx context.Context, order *entity.PaymentOrder, returnURL string) (payURL, externalID string, err error) {
-	switch order.PaymentMethod {
-	case "alipay", "alipay_qr", "alipay_wap":
-		if h.alipay == nil {
-			return "", "", errProviderDisabled("alipay")
-		}
-		return h.alipay.CreateCheckout(ctx, order, returnURL)
-	case "wechat_native", "wechat_h5", "wechat_jsapi":
-		if h.wechatPay == nil {
-			return "", "", errProviderDisabled("wechat")
-		}
-		return h.wechatPay.CreateCheckout(ctx, order, returnURL)
-	case "epay_alipay", "epay_wxpay", "epay_wechat":
-		if h.epay == nil {
-			return "", "", errProviderDisabled("epay")
-		}
-		return h.epay.CreateCheckout(ctx, order, returnURL)
-	case "stripe":
-		if h.stripe == nil {
-			return "", "", errProviderDisabled("stripe")
-		}
-		return h.stripe.CreateCheckout(ctx, order, returnURL)
-	case "creem":
-		if h.creem == nil {
-			return "", "", errProviderDisabled("creem")
-		}
-		return h.creem.CreateCheckout(ctx, order, returnURL)
-	default:
-		return "", "", errProviderDisabled(order.PaymentMethod)
-	}
-}
-
-func errProviderDisabled(name string) error {
-	return &providerError{name: name}
-}
-
-type providerError struct{ name string }
-
-func (e *providerError) Error() string {
-	return "Payment provider not available: " + e.name
-}
+// providerError wraps payment.ProviderNotAvailableError for backward compatibility in tests.
+type providerError = payment.ProviderNotAvailableError

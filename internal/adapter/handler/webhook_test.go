@@ -56,9 +56,18 @@ func makeWebhookHandler() *WebhookHandler {
 	return NewWebhookHandler(
 		makeWalletService(),
 		makeSubService(),
-		nil, nil, nil, // all payment providers nil
+		payment.NewRegistry(),
 		idempotency.New(nil, 0), // nil redis → dedup is a no-op
 	)
+}
+
+// testPaymentRegistry creates a Registry with a single provider registered under the given name.
+func testPaymentRegistry(name string, p payment.Provider) *payment.Registry {
+	r := payment.NewRegistry()
+	if p != nil {
+		r.Register(name, p)
+	}
+	return r
 }
 
 // ---------- EpayNotify ----------
@@ -158,7 +167,7 @@ func TestWebhookHandler_ProcessOrderPaid_TopupOrder(t *testing.T) {
 		PaymentMethod: "creem",
 	}
 	walletSvc := app.NewWalletService(ws, makeVIPService())
-	h := NewWebhookHandler(walletSvc, makeSubService(), nil, nil, nil, idempotency.New(nil, 0))
+	h := NewWebhookHandler(walletSvc, makeSubService(), payment.NewRegistry(), idempotency.New(nil, 0))
 
 	r := testRouter()
 	r.POST("/test/process", func(c *gin.Context) {
@@ -186,7 +195,7 @@ func TestWebhookHandler_EpayNotify_InvalidSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEpayProvider: %v", err)
 	}
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), provider, nil, nil, idempotency.New(nil, 0))
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), testPaymentRegistry("epay", provider), idempotency.New(nil, 0))
 	r := testRouter()
 	r.GET("/webhook/epay", h.EpayNotify)
 
@@ -206,7 +215,7 @@ func TestWebhookHandler_EpayNotify_InvalidSignature(t *testing.T) {
 // signature returns 400 when the provider is configured.
 func TestWebhookHandler_StripeWebhook_InvalidSignature(t *testing.T) {
 	provider := payment.NewStripeProvider("sk_test_fake", "whsec_test_fake_secret", 7.1)
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, provider, nil, idempotency.New(nil, 0))
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), testPaymentRegistry("stripe", provider), idempotency.New(nil, 0))
 	r := testRouter()
 	r.POST("/webhook/stripe", h.StripeWebhook)
 
@@ -225,7 +234,7 @@ func TestWebhookHandler_StripeWebhook_InvalidSignature(t *testing.T) {
 func TestWebhookHandler_StripeWebhook_ValidSig_IrrelevantEvent(t *testing.T) {
 	secret := "whsec_test_stripe_secret"
 	provider := payment.NewStripeProvider("sk_test_fake", secret, 7.1)
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, provider, nil, idempotency.New(nil, 0))
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), testPaymentRegistry("stripe", provider), idempotency.New(nil, 0))
 	r := testRouter()
 	r.POST("/webhook/stripe", h.StripeWebhook)
 
@@ -248,7 +257,7 @@ func TestWebhookHandler_StripeWebhook_ValidSig_IrrelevantEvent(t *testing.T) {
 func TestWebhookHandler_StripeWebhook_ValidSig_CheckoutCompleted_OrderNotFound(t *testing.T) {
 	secret := "whsec_test_stripe_secret"
 	provider := payment.NewStripeProvider("sk_test_fake", secret, 7.1)
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, provider, nil, idempotency.New(nil, 0))
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), testPaymentRegistry("stripe", provider), idempotency.New(nil, 0))
 	r := testRouter()
 	r.POST("/webhook/stripe", h.StripeWebhook)
 
@@ -276,7 +285,7 @@ func TestWebhookHandler_CreemWebhook_InvalidSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCreemProvider: %v", err)
 	}
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, nil, provider, idempotency.New(nil, 0))
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), testPaymentRegistry("creem", provider), idempotency.New(nil, 0))
 	r := testRouter()
 	r.POST("/webhook/creem", h.CreemWebhook)
 
@@ -298,7 +307,7 @@ func TestWebhookHandler_CreemWebhook_ValidSig_NonSuccessEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCreemProvider: %v", err)
 	}
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, nil, provider, idempotency.New(nil, 0))
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), testPaymentRegistry("creem", provider), idempotency.New(nil, 0))
 	r := testRouter()
 	r.POST("/webhook/creem", h.CreemWebhook)
 
@@ -323,7 +332,7 @@ func TestWebhookHandler_CreemWebhook_ValidSig_PaymentSuccess_OrderNotFound(t *te
 	if err != nil {
 		t.Fatalf("NewCreemProvider: %v", err)
 	}
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, nil, provider, idempotency.New(nil, 0))
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), testPaymentRegistry("creem", provider), idempotency.New(nil, 0))
 	r := testRouter()
 	r.POST("/webhook/creem", h.CreemWebhook)
 
@@ -358,7 +367,7 @@ func TestWebhookHandler_ProcessOrderPaid_SubscriptionOrder(t *testing.T) {
 		ProductID:     "test-product",
 	}
 	walletSvc := app.NewWalletService(ws, makeVIPService())
-	h := NewWebhookHandler(walletSvc, makeSubService(), nil, nil, nil, idempotency.New(nil, 0))
+	h := NewWebhookHandler(walletSvc, makeSubService(), payment.NewRegistry(), idempotency.New(nil, 0))
 
 	r := testRouter()
 	r.POST("/test/process", func(c *gin.Context) {

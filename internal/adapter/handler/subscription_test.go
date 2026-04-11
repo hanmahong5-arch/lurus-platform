@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 )
@@ -16,7 +17,7 @@ func makeSubHandler() *SubscriptionHandler {
 		makeSubService(),
 		makeProductService(),
 		makeWalletService(),
-		nil, nil, nil, // all payment providers nil
+		payment.NewRegistry(),
 	)
 }
 
@@ -134,7 +135,7 @@ func makeSubHandlerWithPlan(plan *entity.ProductPlan) *SubscriptionHandler {
 	ps := newMockPlanStore()
 	ps.plans[plan.ID] = plan
 	subSvc := app.NewSubscriptionService(newMockSubStore(), ps, makeEntitlementService(), 3)
-	return NewSubscriptionHandler(subSvc, app.NewProductService(ps), makeWalletService(), nil, nil, nil)
+	return NewSubscriptionHandler(subSvc, app.NewProductService(ps), makeWalletService(), payment.NewRegistry())
 }
 
 func TestSubHandler_Checkout_WalletPayment_FreePlan(t *testing.T) {
@@ -214,7 +215,7 @@ func TestSubHandler_Checkout_ExternalPayment_ProviderNil(t *testing.T) {
 		makeSubService(),
 		app.NewProductService(ps),
 		makeWalletService(),
-		nil, nil, nil, // all providers nil
+		payment.NewRegistry(),
 	)
 
 	r := testRouter()
@@ -250,7 +251,7 @@ func TestSubHandler_Checkout_EpayAlipay_ProviderNil(t *testing.T) {
 		makeSubService(),
 		app.NewProductService(ps),
 		makeWalletService(),
-		nil, nil, nil,
+		payment.NewRegistry(),
 	)
 
 	r := testRouter()
@@ -284,7 +285,7 @@ func TestSubHandler_Checkout_UnknownMethod_ProviderNil(t *testing.T) {
 		makeSubService(),
 		app.NewProductService(ps),
 		makeWalletService(),
-		nil, nil, nil,
+		payment.NewRegistry(),
 	)
 
 	r := testRouter()
@@ -310,7 +311,7 @@ func TestSubHandler_Checkout_Creem_ProviderNil(t *testing.T) {
 	ps := newMockPlanStore()
 	planID := int64(996)
 	ps.plans[planID] = &entity.ProductPlan{ID: planID, ProductID: "lucrum", PriceCNY: 15.0}
-	h := NewSubscriptionHandler(makeSubService(), app.NewProductService(ps), makeWalletService(), nil, nil, nil)
+	h := NewSubscriptionHandler(makeSubService(), app.NewProductService(ps), makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/subscriptions/checkout", withAccountID(1), h.Checkout)
 
@@ -331,7 +332,7 @@ func TestSubHandler_Checkout_Creem_ProviderNil(t *testing.T) {
 // TestSubHandler_ListSubscriptions_Error verifies 500 when the store fails.
 func TestSubHandler_ListSubscriptions_Error(t *testing.T) {
 	subSvc := app.NewSubscriptionService(&errSubStoreH{*newMockSubStore()}, newMockPlanStore(), makeEntitlementService(), 3)
-	h := NewSubscriptionHandler(subSvc, makeProductService(), makeWalletService(), nil, nil, nil)
+	h := NewSubscriptionHandler(subSvc, makeProductService(), makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/subscriptions", withAccountID(1), h.ListSubscriptions)
 
@@ -345,7 +346,7 @@ func TestSubHandler_ListSubscriptions_Error(t *testing.T) {
 
 func TestSubHandler_GetSubscription_Error(t *testing.T) {
 	subSvc := app.NewSubscriptionService(&errGetActiveSubStore{*newMockSubStore()}, newMockPlanStore(), makeEntitlementService(), 3)
-	h := NewSubscriptionHandler(subSvc, makeProductService(), makeWalletService(), nil, nil, nil)
+	h := NewSubscriptionHandler(subSvc, makeProductService(), makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/subscriptions/:product_id", withAccountID(1), h.GetSubscription)
 
@@ -363,7 +364,7 @@ func TestSubHandler_GetSubscription_Found(t *testing.T) {
 		ID: 1, AccountID: 1, ProductID: "llm-api", Status: "active",
 	}
 	subSvc := app.NewSubscriptionService(store, newMockPlanStore(), makeEntitlementService(), 3)
-	h := NewSubscriptionHandler(subSvc, makeProductService(), makeWalletService(), nil, nil, nil)
+	h := NewSubscriptionHandler(subSvc, makeProductService(), makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/subscriptions/:product_id", withAccountID(1), h.GetSubscription)
 

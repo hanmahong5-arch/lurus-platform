@@ -311,24 +311,55 @@ func run(ctx context.Context, cfg *config.Config) error {
 		})
 	}
 
+	// --- Payment Provider Registry ---
+	paymentRegistry := payment.NewRegistry()
+	if epayProvider != nil {
+		paymentRegistry.Register("epay", epayProvider)
+	}
+	if stripeProvider != nil {
+		paymentRegistry.Register("stripe", stripeProvider,
+			payment.MethodInfo{ID: "stripe", Name: "信用卡 (Stripe)", Provider: "stripe", Type: "redirect"})
+	}
+	if creemProvider != nil {
+		paymentRegistry.Register("creem", creemProvider,
+			payment.MethodInfo{ID: "creem", Name: "Creem", Provider: "creem", Type: "redirect"})
+	}
+	// Direct Alipay preferred over Epay gateway.
+	if alipayProvider != nil {
+		paymentRegistry.Register("alipay", alipayProvider,
+			payment.MethodInfo{ID: "alipay", Name: "支付宝", Provider: "alipay", Type: "redirect"},
+			payment.MethodInfo{ID: "alipay_qr", Name: "支付宝 (扫码)", Provider: "alipay", Type: "qr"},
+			payment.MethodInfo{ID: "alipay_wap", Name: "支付宝 (手机)", Provider: "alipay", Type: "redirect"},
+		)
+	} else if epayProvider != nil {
+		paymentRegistry.Register("epay", epayProvider,
+			payment.MethodInfo{ID: "epay_alipay", Name: "支付宝", Provider: "epay", Type: "qr"})
+	}
+	// Direct WeChat Pay preferred over Epay gateway.
+	if wechatPayProvider != nil {
+		paymentRegistry.Register("wechat", wechatPayProvider,
+			payment.MethodInfo{ID: "wechat_native", Name: "微信支付 (扫码)", Provider: "wechat", Type: "qr"},
+			payment.MethodInfo{ID: "wechat_h5", Name: "微信支付 (H5)", Provider: "wechat", Type: "redirect"},
+		)
+	} else if epayProvider != nil {
+		paymentRegistry.Register("epay", epayProvider,
+			payment.MethodInfo{ID: "epay_wechat", Name: "微信支付", Provider: "epay", Type: "qr"})
+	}
+	slog.Info("payment registry initialized", "methods", len(paymentRegistry.ListMethods()))
+
 	// --- HTTP Handlers ---
 	accountH := handler.NewAccountHandler(accountSvc, vipSvc, subSvc, overviewSvc, referralSvc)
-	subH := handler.NewSubscriptionHandler(subSvc, productSvc, walletSvc, epayProvider, stripeProvider, creemProvider)
-	subH.WithAlipayProvider(alipayProvider).WithWechatPayProvider(wechatPayProvider)
-	walletH := handler.NewWalletHandler(walletSvc, epayProvider, stripeProvider, creemProvider)
-	walletH.WithAlipayProvider(alipayProvider).WithWechatPayProvider(wechatPayProvider)
+	subH := handler.NewSubscriptionHandler(subSvc, productSvc, walletSvc, paymentRegistry)
+	walletH := handler.NewWalletHandler(walletSvc, paymentRegistry)
 	productH := handler.NewProductHandler(productSvc)
 	lurusAPIClient := lurusapi.NewClient(cfg.LurusAPIInternalURL, cfg.LurusAPIInternalKey)
 	preferenceRepo := repo.NewPreferenceRepo(db)
 	internalH := handler.NewInternalHandler(accountSvc, subSvc, entSvc, vipSvc, overviewSvc, walletSvc, referralSvc, cfg.SessionSecret).
-		WithPaymentProviders(epayProvider, stripeProvider, creemProvider).
-		WithAlipayProvider(alipayProvider).
-		WithWechatPayProvider(wechatPayProvider).
+		WithPayments(paymentRegistry).
 		WithProductService(productSvc).
 		WithLurusAPI(lurusAPIClient).
 		WithPreferenceRepo(preferenceRepo)
-	webhookH := handler.NewWebhookHandler(walletSvc, subSvc, epayProvider, stripeProvider, creemProvider, webhookDeduper)
-	webhookH.WithAlipayProvider(alipayProvider).WithWechatPayProvider(wechatPayProvider)
+	webhookH := handler.NewWebhookHandler(walletSvc, subSvc, paymentRegistry, webhookDeduper)
 	invoiceH := handler.NewInvoiceHandler(invoiceSvc)
 	refundH := handler.NewRefundHandler(refundSvc)
 	adminOpsH := handler.NewAdminOpsHandler(referralSvc)

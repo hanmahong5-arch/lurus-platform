@@ -12,7 +12,7 @@ import (
 )
 
 func TestWalletHandler_GetWallet(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet", withAccountID(1), h.GetWallet)
 
@@ -25,7 +25,7 @@ func TestWalletHandler_GetWallet(t *testing.T) {
 }
 
 func TestWalletHandler_ListTransactions(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/transactions", withAccountID(1), h.ListTransactions)
 
@@ -51,7 +51,7 @@ func TestWalletHandler_ListTransactions(t *testing.T) {
 }
 
 func TestWalletHandler_Redeem(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/redeem", withAccountID(1), h.Redeem)
 
@@ -94,7 +94,7 @@ func TestWalletHandler_TopupInfo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// nil providers = disabled
-			h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+			h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 			// We can't easily construct real providers, but nil check is the test
 			r := testRouter()
 			r.GET("/api/v1/wallet/topup/info", withAccountID(1), h.TopupInfo)
@@ -116,7 +116,7 @@ func TestWalletHandler_TopupInfo(t *testing.T) {
 }
 
 func TestWalletHandler_CreateTopup_Validation(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
 
@@ -159,10 +159,9 @@ func TestWalletHandler_CreateTopup_Validation(t *testing.T) {
 		{
 			"provider_disabled",
 			map[string]interface{}{"amount_cny": 50.0, "payment_method": "stripe"},
-			// stripe provider is nil, so after passing validation + CreateTopup,
-			// resolveCheckout returns providerError → 400
+			// stripe not registered in empty registry → HasMethod returns false → 400
 			http.StatusBadRequest,
-			"not available",
+			"Unsupported",
 		},
 	}
 
@@ -193,7 +192,7 @@ func TestWalletHandler_CreateTopup_Validation(t *testing.T) {
 }
 
 func TestWalletHandler_AdminAdjustWallet(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 
 	tests := []struct {
 		name   string
@@ -244,7 +243,7 @@ func TestWalletHandler_AdminAdjustWallet(t *testing.T) {
 }
 
 func TestWalletHandler_ListOrders(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/orders", withAccountID(1), h.ListOrders)
 
@@ -257,7 +256,7 @@ func TestWalletHandler_ListOrders(t *testing.T) {
 }
 
 func TestWalletHandler_GetOrder_NotFound(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/orders/:order_no", withAccountID(1), h.GetOrder)
 
@@ -287,7 +286,7 @@ func indexOf(s, sub string) int {
 
 // TestWalletHandler_CreateTopup_EpayAlipay_ProviderNil verifies 400 when epay is nil.
 func TestWalletHandler_CreateTopup_EpayAlipay_ProviderNil(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
 
@@ -307,7 +306,7 @@ func TestWalletHandler_CreateTopup_EpayAlipay_ProviderNil(t *testing.T) {
 
 // TestWalletHandler_CreateTopup_EpayWxpay_ProviderNil verifies 400 for epay_wxpay with nil provider.
 func TestWalletHandler_CreateTopup_EpayWxpay_ProviderNil(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
 
@@ -327,7 +326,7 @@ func TestWalletHandler_CreateTopup_EpayWxpay_ProviderNil(t *testing.T) {
 
 // TestWalletHandler_CreateTopup_Creem_ProviderNil verifies 400 for creem with nil provider.
 func TestWalletHandler_CreateTopup_Creem_ProviderNil(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
 
@@ -348,7 +347,7 @@ func TestWalletHandler_CreateTopup_Creem_ProviderNil(t *testing.T) {
 func TestWalletHandler_GetWallet_Error(t *testing.T) {
 	store := &errWalletH{}
 	svc := app.NewWalletService(store, makeVIPService())
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet", withAccountID(1), h.GetWallet)
 
@@ -363,7 +362,7 @@ func TestWalletHandler_GetWallet_Error(t *testing.T) {
 func TestWalletHandler_ListOrders_Error(t *testing.T) {
 	store := &errWalletH{}
 	svc := app.NewWalletService(store, makeVIPService())
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/orders", withAccountID(1), h.ListOrders)
 
@@ -377,7 +376,7 @@ func TestWalletHandler_ListOrders_Error(t *testing.T) {
 
 // TestWalletHandler_AdminAdjustWallet_NegativeAmount verifies 400 when debit fails due to insufficient balance.
 func TestWalletHandler_AdminAdjustWallet_NegativeAmount(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/admin/v1/accounts/:id/wallet/adjust", h.AdminAdjustWallet)
 
@@ -396,7 +395,7 @@ func TestWalletHandler_AdminAdjustWallet_NegativeAmount(t *testing.T) {
 func TestWalletHandler_AdminAdjustWallet_GetWalletError(t *testing.T) {
 	store := &errGetWalletH{*newMockWalletStore()}
 	svc := app.NewWalletService(store, makeVIPService())
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 	r := testRouter()
 	r.POST("/admin/v1/accounts/:id/wallet/adjust", h.AdminAdjustWallet)
 
@@ -423,7 +422,17 @@ func TestWalletHandler_TopupInfo_AllProviders(t *testing.T) {
 		t.Fatalf("NewCreemProvider: %v", err)
 	}
 
-	h := NewWalletHandler(makeWalletService(), epayProvider, stripeProvider, creemProvider)
+	reg := payment.NewRegistry()
+	reg.Register("epay", epayProvider,
+		payment.MethodInfo{ID: "epay_alipay", Name: "支付宝", Provider: "epay", Type: "qr"},
+		payment.MethodInfo{ID: "epay_wechat", Name: "微信支付", Provider: "epay", Type: "qr"},
+	)
+	reg.Register("stripe", stripeProvider,
+		payment.MethodInfo{ID: "stripe", Name: "Stripe", Provider: "stripe", Type: "redirect"})
+	reg.Register("creem", creemProvider,
+		payment.MethodInfo{ID: "creem", Name: "Creem", Provider: "creem", Type: "redirect"})
+
+	h := NewWalletHandler(makeWalletService(), reg)
 	r := testRouter()
 	r.GET("/api/v1/wallet/topup/info", withAccountID(1), h.TopupInfo)
 

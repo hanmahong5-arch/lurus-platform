@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 )
@@ -120,7 +121,7 @@ func TestWalletHandler_GetOrder_IDOR_CrossAccount(t *testing.T) {
 		Status:    entity.OrderStatusPaid,
 	}
 	svc := app.NewWalletService(ws, nil)
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 
 	r := testRouter()
 	r.GET("/api/v1/wallet/orders/:order_no", withAccountID(2), h.GetOrder) // user 2
@@ -139,7 +140,7 @@ func TestWalletHandler_GetOrder_IDOR_CrossAccount(t *testing.T) {
 
 func TestWalletHandler_CreateTopup_NegativeAmount(t *testing.T) {
 	svc := app.NewWalletService(newMockWalletStore(), nil)
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
@@ -160,7 +161,7 @@ func TestWalletHandler_CreateTopup_NegativeAmount(t *testing.T) {
 
 func TestWalletHandler_CreateTopup_ZeroAmount(t *testing.T) {
 	svc := app.NewWalletService(newMockWalletStore(), nil)
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
@@ -181,7 +182,7 @@ func TestWalletHandler_CreateTopup_ZeroAmount(t *testing.T) {
 
 func TestWalletHandler_CreateTopup_ExcessiveAmount(t *testing.T) {
 	svc := app.NewWalletService(newMockWalletStore(), nil)
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
@@ -202,7 +203,7 @@ func TestWalletHandler_CreateTopup_ExcessiveAmount(t *testing.T) {
 
 func TestWalletHandler_CreateTopup_BelowMinimum(t *testing.T) {
 	svc := app.NewWalletService(newMockWalletStore(), nil)
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
@@ -223,7 +224,7 @@ func TestWalletHandler_CreateTopup_BelowMinimum(t *testing.T) {
 
 func TestWalletHandler_CreateTopup_InvalidPaymentMethod(t *testing.T) {
 	svc := app.NewWalletService(newMockWalletStore(), nil)
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
@@ -244,7 +245,7 @@ func TestWalletHandler_CreateTopup_InvalidPaymentMethod(t *testing.T) {
 
 func TestWalletHandler_Redeem_EmptyCode(t *testing.T) {
 	svc := app.NewWalletService(newMockWalletStore(), nil)
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 
 	r := testRouter()
 	r.POST("/api/v1/wallet/redeem", withAccountID(1), h.Redeem)
@@ -265,7 +266,7 @@ func TestWalletHandler_Redeem_EmptyCode(t *testing.T) {
 func TestWalletHandler_GetWallet_ZeroAccountID(t *testing.T) {
 	ws := newMockWalletStore()
 	svc := app.NewWalletService(ws, nil)
-	h := NewWalletHandler(svc, nil, nil, nil)
+	h := NewWalletHandler(svc, payment.NewRegistry())
 
 	r := testRouter()
 	r.GET("/api/v1/wallet", withAccountID(0), h.GetWallet) // zero = unauthenticated

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/idempotency"
@@ -30,7 +31,7 @@ func newTestDeduper(t *testing.T) *idempotency.WebhookDeduper {
 
 func TestWebhookCoverage_EpayNotify_NilProviderRealDeduper(t *testing.T) {
 	deduper := newTestDeduper(t)
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, nil, nil, deduper)
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), payment.NewRegistry(), deduper)
 	r := testRouter()
 	r.GET("/webhook/epay", h.EpayNotify)
 
@@ -51,7 +52,7 @@ func TestWebhookCoverage_EpayNotify_DuplicateEvent(t *testing.T) {
 	// Pre-process the event to mark it as seen.
 	deduper.TryProcess(context.Background(), "T002")
 
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, nil, nil, deduper)
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), payment.NewRegistry(), deduper)
 	r := testRouter()
 	r.GET("/webhook/epay", h.EpayNotify)
 
@@ -83,7 +84,7 @@ func TestWebhookCoverage_ProcessOrderPaid_Topup(t *testing.T) {
 	}
 	walletSvc := app.NewWalletService(ws, makeVIPService())
 
-	h := NewWebhookHandler(walletSvc, makeSubService(), nil, nil, nil, nil)
+	h := NewWebhookHandler(walletSvc, makeSubService(), payment.NewRegistry(), nil)
 
 	// Call processOrderPaidDirect directly (not via HTTP).
 	r := testRouter()
@@ -115,7 +116,7 @@ func TestWebhookCoverage_ProcessOrderPaid_Topup(t *testing.T) {
 
 func TestWebhookCoverage_ProcessOrderPaid_NotFound(t *testing.T) {
 	walletSvc := makeWalletService()
-	h := NewWebhookHandler(walletSvc, makeSubService(), nil, nil, nil, nil)
+	h := NewWebhookHandler(walletSvc, makeSubService(), payment.NewRegistry(), nil)
 
 	r := testRouter()
 	r.GET("/test", func(c *gin.Context) {
@@ -154,7 +155,7 @@ func TestWebhookCoverage_ProcessOrderPaid_Subscription(t *testing.T) {
 	walletSvc := app.NewWalletService(ws, makeVIPService())
 	subSvc := makeSubService()
 
-	h := NewWebhookHandler(walletSvc, subSvc, nil, nil, nil, nil)
+	h := NewWebhookHandler(walletSvc, subSvc, payment.NewRegistry(), nil)
 
 	r := testRouter()
 	r.GET("/test", func(c *gin.Context) {
@@ -188,7 +189,7 @@ func TestWebhookCoverage_ProcessOrderPaid_Subscription(t *testing.T) {
 
 func TestWebhookCoverage_StripeWebhook_DuplicateWithDeduper(t *testing.T) {
 	deduper := newTestDeduper(t)
-	h := NewWebhookHandler(makeWalletService(), makeSubService(), nil, nil, nil, deduper)
+	h := NewWebhookHandler(makeWalletService(), makeSubService(), payment.NewRegistry(), deduper)
 	r := testRouter()
 	r.POST("/webhook/stripe", h.StripeWebhook)
 

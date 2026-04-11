@@ -19,9 +19,7 @@ func newTestWebhookHandler(t *testing.T, deduper *idempotency.WebhookDeduper) *W
 	return NewWebhookHandler(
 		makeWalletService(),
 		makeSubService(),
-		nil, // epay
-		nil, // stripe
-		nil, // creem
+		payment.NewRegistry(),
 		deduper,
 	)
 }
@@ -68,9 +66,7 @@ func TestWebhookEdge_Stripe_MissingSignature(t *testing.T) {
 	h := NewWebhookHandler(
 		makeWalletService(),
 		makeSubService(),
-		nil,
-		payment.NewStripeProvider("sk_test", "whsec_test", 7.1),
-		nil,
+		testPaymentRegistry("stripe", payment.NewStripeProvider("sk_test", "whsec_test", 7.1)),
 		nil,
 	)
 	r := testRouter()
@@ -126,9 +122,7 @@ func TestWebhookEdge_Creem_MissingSignature(t *testing.T) {
 	h := NewWebhookHandler(
 		makeWalletService(),
 		makeSubService(),
-		nil,
-		nil,
-		creemProvider,
+		testPaymentRegistry("creem", creemProvider),
 		nil,
 	)
 	r := testRouter()

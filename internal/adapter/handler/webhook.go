@@ -25,11 +25,7 @@ import (
 type WebhookHandler struct {
 	wallets        *app.WalletService
 	subs           *app.SubscriptionService
-	epay           *payment.EpayProvider
-	stripe         *payment.StripeProvider
-	creem          *payment.CreemProvider
-	alipay         *payment.AlipayProvider
-	wechatPay      *payment.WechatPayProvider
+	payments       *payment.Registry
 	deduper        *idempotency.WebhookDeduper
 	temporalClient client.Client // nil when Temporal disabled
 }
@@ -37,31 +33,15 @@ type WebhookHandler struct {
 func NewWebhookHandler(
 	wallets *app.WalletService,
 	subs *app.SubscriptionService,
-	epay *payment.EpayProvider,
-	stripe *payment.StripeProvider,
-	creem *payment.CreemProvider,
+	payments *payment.Registry,
 	deduper *idempotency.WebhookDeduper,
 ) *WebhookHandler {
 	return &WebhookHandler{
-		wallets: wallets,
-		subs:    subs,
-		epay:    epay,
-		stripe:  stripe,
-		creem:   creem,
-		deduper: deduper,
+		wallets:  wallets,
+		subs:     subs,
+		payments: payments,
+		deduper:  deduper,
 	}
-}
-
-// WithAlipayProvider sets the direct Alipay provider.
-func (h *WebhookHandler) WithAlipayProvider(p *payment.AlipayProvider) *WebhookHandler {
-	h.alipay = p
-	return h
-}
-
-// WithWechatPayProvider sets the direct WeChat Pay provider.
-func (h *WebhookHandler) WithWechatPayProvider(p *payment.WechatPayProvider) *WebhookHandler {
-	h.wechatPay = p
-	return h
 }
 
 // WithTemporalClient sets the Temporal client for workflow-based payment processing.
@@ -91,12 +71,18 @@ func (h *WebhookHandler) EpayNotify(c *gin.Context) {
 		}
 	}
 
-	if h.epay == nil {
+	p, pok := h.payments.Get("epay")
+	if !pok {
+		c.String(http.StatusServiceUnavailable, "fail")
+		return
+	}
+	epay, _ := p.(payment.EpayCallbackVerifier)
+	if epay == nil {
 		c.String(http.StatusServiceUnavailable, "fail")
 		return
 	}
 
-	orderNo, ok := h.epay.VerifyCallback(params)
+	orderNo, ok := epay.VerifyCallback(params)
 	if !ok {
 		slog.Warn("webhook/epay: signature verification failed", "trade_no", tradeNo)
 		metrics.RecordWebhookEvent("epay", "invalid_signature")
@@ -122,13 +108,19 @@ func (h *WebhookHandler) StripeWebhook(c *gin.Context) {
 		return
 	}
 
-	if h.stripe == nil {
+	p, pok := h.payments.Get("stripe")
+	if !pok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "stripe not configured"})
+		return
+	}
+	stripe, _ := p.(*payment.StripeProvider)
+	if stripe == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "stripe not configured"})
 		return
 	}
 
 	sig := c.GetHeader("Stripe-Signature")
-	orderNo, eventID, ok := h.stripe.VerifyWebhook(body, sig)
+	orderNo, eventID, ok := stripe.VerifyWebhook(body, sig)
 	if !ok {
 		slog.Warn("webhook/stripe: signature verification failed")
 		metrics.RecordWebhookEvent("stripe", "invalid_signature")
@@ -172,13 +164,19 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 		return
 	}
 
-	if h.creem == nil {
+	p, pok := h.payments.Get("creem")
+	if !pok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "creem not configured"})
+		return
+	}
+	creem, _ := p.(*payment.CreemProvider)
+	if creem == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "creem not configured"})
 		return
 	}
 
 	sig := c.GetHeader("X-Creem-Signature")
-	orderNo, ok := h.creem.VerifyWebhook(body, sig)
+	orderNo, ok := creem.VerifyWebhook(body, sig)
 	if !ok {
 		slog.Warn("webhook/creem: signature verification failed")
 		metrics.RecordWebhookEvent("creem", "invalid_signature")
@@ -220,12 +218,18 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 // AlipayNotify handles Alipay async payment notifications.
 // POST /webhook/alipay
 func (h *WebhookHandler) AlipayNotify(c *gin.Context) {
-	if h.alipay == nil {
+	p, pok := h.payments.Get("alipay")
+	if !pok {
+		c.String(http.StatusServiceUnavailable, "fail")
+		return
+	}
+	alipay, _ := p.(payment.NotifyHandler)
+	if alipay == nil {
 		c.String(http.StatusServiceUnavailable, "fail")
 		return
 	}
 
-	orderNo, ok, err := h.alipay.HandleNotify(c.Request)
+	orderNo, ok, err := alipay.HandleNotify(c.Request)
 	if err != nil {
 		slog.Warn("webhook/alipay: notification verification failed", "err", err)
 		metrics.RecordWebhookEvent("alipay", "invalid_signature")
@@ -267,12 +271,18 @@ func (h *WebhookHandler) AlipayNotify(c *gin.Context) {
 // WechatPayNotify handles WeChat Pay v3 async payment notifications.
 // POST /webhook/wechat
 func (h *WebhookHandler) WechatPayNotify(c *gin.Context) {
-	if h.wechatPay == nil {
+	p, pok := h.payments.Get("wechat")
+	if !pok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "FAIL", "message": "wechat pay not configured"})
+		return
+	}
+	wechat, _ := p.(payment.NotifyHandler)
+	if wechat == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "FAIL", "message": "wechat pay not configured"})
 		return
 	}
 
-	orderNo, ok, err := h.wechatPay.HandleNotify(c.Request)
+	orderNo, ok, err := wechat.HandleNotify(c.Request)
 	if err != nil {
 		slog.Warn("webhook/wechat: notification verification failed", "err", err)
 		metrics.RecordWebhookEvent("wechat", "invalid_signature")

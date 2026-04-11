@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 )
@@ -80,7 +81,7 @@ func TestSecurity_Wallet_GetOrder_CrossAccount(t *testing.T) {
 	}
 	ws.CreatePaymentOrder(context.Background(), order)
 
-	h := NewWalletHandler(walletSvc, nil, nil, nil)
+	h := NewWalletHandler(walletSvc, payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/orders/:order_no", withAccountID(2), h.GetOrder) // user 2
 

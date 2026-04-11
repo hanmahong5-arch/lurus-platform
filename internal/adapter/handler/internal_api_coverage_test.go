@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 )
@@ -133,7 +134,7 @@ func TestInternalCoverage_SubCheckout_ExternalPayment_NoProvider(t *testing.T) {
 
 	h := NewInternalHandler(accountSvc, subSvc, entSvc, vipSvc, nil, walletSvc, referralSvc, "")
 	h.WithProductService(app.NewProductService(ps))
-	// No payment providers set → stripe/epay/creem all nil.
+	h.WithPayments(payment.NewRegistry()) // Empty registry → stripe not available.
 	r := testRouter()
 	r.POST("/internal/v1/subscriptions/checkout", withAllScopes(), h.InternalSubscriptionCheckout)
 
@@ -142,14 +143,14 @@ func TestInternalCoverage_SubCheckout_ExternalPayment_NoProvider(t *testing.T) {
 		"product_id":     "lucrum",
 		"plan_code":      "pro",
 		"billing_cycle":  "monthly",
-		"payment_method": "stripe", // external, but stripe provider is nil
+		"payment_method": "stripe", // external, but stripe not in registry
 	})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/internal/v1/subscriptions/checkout", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 
-	// Stripe provider nil → providerError → 400.
+	// Stripe not in registry → ProviderNotAvailableError → 400.
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (provider not available); body: %s", w.Code, w.Body.String())
 	}

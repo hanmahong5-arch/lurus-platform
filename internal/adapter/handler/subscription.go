@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,37 +13,19 @@ import (
 
 // SubscriptionHandler handles subscription lifecycle endpoints.
 type SubscriptionHandler struct {
-	subs      *app.SubscriptionService
-	plans     *app.ProductService
-	wallets   *app.WalletService
-	epay      *payment.EpayProvider
-	stripe    *payment.StripeProvider
-	creem     *payment.CreemProvider
-	alipay    *payment.AlipayProvider
-	wechatPay *payment.WechatPayProvider
+	subs     *app.SubscriptionService
+	plans    *app.ProductService
+	wallets  *app.WalletService
+	payments *payment.Registry
 }
 
 func NewSubscriptionHandler(
 	subs *app.SubscriptionService,
 	plans *app.ProductService,
 	wallets *app.WalletService,
-	epay *payment.EpayProvider,
-	stripe *payment.StripeProvider,
-	creem *payment.CreemProvider,
+	payments *payment.Registry,
 ) *SubscriptionHandler {
-	return &SubscriptionHandler{subs: subs, plans: plans, wallets: wallets, epay: epay, stripe: stripe, creem: creem}
-}
-
-// WithAlipayProvider sets the direct Alipay provider.
-func (h *SubscriptionHandler) WithAlipayProvider(p *payment.AlipayProvider) *SubscriptionHandler {
-	h.alipay = p
-	return h
-}
-
-// WithWechatPayProvider sets the direct WeChat Pay provider.
-func (h *SubscriptionHandler) WithWechatPayProvider(p *payment.WechatPayProvider) *SubscriptionHandler {
-	h.wechatPay = p
-	return h
+	return &SubscriptionHandler{subs: subs, plans: plans, wallets: wallets, payments: payments}
 }
 
 // ListSubscriptions returns all subscriptions for the current user.
@@ -174,9 +155,9 @@ func (h *SubscriptionHandler) Checkout(c *gin.Context) {
 		return
 	}
 
-	payURL, externalID, err := h.resolveCheckout(ctx, order, returnURL)
+	payURL, externalID, err := h.payments.Checkout(ctx, order, returnURL)
 	if err != nil {
-		var pe *providerError
+		var pe *payment.ProviderNotAvailableError
 		if errors.As(err, &pe) {
 			respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, pe.Error())
 			return
@@ -215,35 +196,3 @@ func (h *SubscriptionHandler) CancelSubscription(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cancelled": true})
 }
 
-// resolveCheckout routes the order to the correct payment provider.
-func (h *SubscriptionHandler) resolveCheckout(ctx context.Context, order *entity.PaymentOrder, returnURL string) (string, string, error) {
-	switch order.PaymentMethod {
-	case "alipay", "alipay_qr", "alipay_wap":
-		if h.alipay == nil {
-			return "", "", errProviderDisabled("alipay")
-		}
-		return h.alipay.CreateCheckout(ctx, order, returnURL)
-	case "wechat_native", "wechat_h5", "wechat_jsapi":
-		if h.wechatPay == nil {
-			return "", "", errProviderDisabled("wechat")
-		}
-		return h.wechatPay.CreateCheckout(ctx, order, returnURL)
-	case "epay_alipay", "epay_wxpay", "epay_wechat":
-		if h.epay == nil {
-			return "", "", errProviderDisabled("epay")
-		}
-		return h.epay.CreateCheckout(ctx, order, returnURL)
-	case "stripe":
-		if h.stripe == nil {
-			return "", "", errProviderDisabled("stripe")
-		}
-		return h.stripe.CreateCheckout(ctx, order, returnURL)
-	case "creem":
-		if h.creem == nil {
-			return "", "", errProviderDisabled("creem")
-		}
-		return h.creem.CreateCheckout(ctx, order, returnURL)
-	default:
-		return "", "", errProviderDisabled(order.PaymentMethod)
-	}
-}

@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 )
 
 // ── GetWallet ─────────────────────────────────────────────────────────────
 
 func TestWalletHandler_GetWallet_NoAuth(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet", h.GetWallet) // no withAccountID
 
@@ -27,7 +29,7 @@ func TestWalletHandler_GetWallet_NoAuth(t *testing.T) {
 // ── ListTransactions ──────────────────────────────────────────────────────
 
 func TestWalletHandler_ListTransactions_Success(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/transactions", withAccountID(1), h.ListTransactions)
 
@@ -49,7 +51,7 @@ func TestWalletHandler_ListTransactions_Success(t *testing.T) {
 }
 
 func TestWalletHandler_ListTransactions_NoAuth(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/transactions", h.ListTransactions)
 
@@ -63,7 +65,7 @@ func TestWalletHandler_ListTransactions_NoAuth(t *testing.T) {
 }
 
 func TestWalletHandler_ListTransactions_Pagination(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/transactions", withAccountID(1), h.ListTransactions)
 
@@ -79,7 +81,7 @@ func TestWalletHandler_ListTransactions_Pagination(t *testing.T) {
 // ── Redeem ────────────────────────────────────────────────────────────────
 
 func TestWalletHandler_Redeem_InvalidCode(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/redeem", withAccountID(1), h.Redeem)
 
@@ -101,7 +103,7 @@ func TestWalletHandler_Redeem_InvalidCode(t *testing.T) {
 }
 
 func TestWalletHandler_Redeem_MissingCode(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/redeem", withAccountID(1), h.Redeem)
 
@@ -117,7 +119,7 @@ func TestWalletHandler_Redeem_MissingCode(t *testing.T) {
 }
 
 func TestWalletHandler_Redeem_NoAuth(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/redeem", h.Redeem) // no auth
 
@@ -135,7 +137,7 @@ func TestWalletHandler_Redeem_NoAuth(t *testing.T) {
 // ── TopupInfo ─────────────────────────────────────────────────────────────
 
 func TestWalletHandler_TopupInfo_NoProviders(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/topup/info", h.TopupInfo)
 
@@ -157,7 +159,7 @@ func TestWalletHandler_TopupInfo_NoProviders(t *testing.T) {
 // ── CreateTopup ───────────────────────────────────────────────────────────
 
 func TestWalletHandler_CreateTopup_NoAuth(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", h.CreateTopup)
 
@@ -173,7 +175,7 @@ func TestWalletHandler_CreateTopup_NoAuth(t *testing.T) {
 }
 
 func TestWalletHandler_CreateTopup_MissingFields(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
 
@@ -189,7 +191,7 @@ func TestWalletHandler_CreateTopup_MissingFields(t *testing.T) {
 }
 
 func TestWalletHandler_CreateTopup_AmountAboveMax(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
 
@@ -205,7 +207,7 @@ func TestWalletHandler_CreateTopup_AmountAboveMax(t *testing.T) {
 }
 
 func TestWalletHandler_CreateTopup_UnsupportedMethod(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/api/v1/wallet/topup", withAccountID(1), h.CreateTopup)
 
@@ -223,7 +225,7 @@ func TestWalletHandler_CreateTopup_UnsupportedMethod(t *testing.T) {
 // ── ListOrders ────────────────────────────────────────────────────────────
 
 func TestWalletHandler_ListOrders_Success(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/orders", withAccountID(1), h.ListOrders)
 
@@ -237,7 +239,7 @@ func TestWalletHandler_ListOrders_Success(t *testing.T) {
 }
 
 func TestWalletHandler_ListOrders_NoAuth(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/orders", h.ListOrders)
 
@@ -253,7 +255,7 @@ func TestWalletHandler_ListOrders_NoAuth(t *testing.T) {
 // ── GetOrder ──────────────────────────────────────────────────────────────
 
 func TestWalletHandler_GetOrder_NotFound_Extra(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.GET("/api/v1/wallet/orders/:order_no", withAccountID(1), h.GetOrder)
 
@@ -269,7 +271,7 @@ func TestWalletHandler_GetOrder_NotFound_Extra(t *testing.T) {
 // ── AdminAdjustWallet ─────────────────────────────────────────────────────
 
 func TestWalletHandler_AdminAdjust_Credit(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/admin/v1/accounts/:id/wallet/adjust", h.AdminAdjustWallet)
 
@@ -285,7 +287,7 @@ func TestWalletHandler_AdminAdjust_Credit(t *testing.T) {
 }
 
 func TestWalletHandler_AdminAdjust_InvalidID(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/admin/v1/accounts/:id/wallet/adjust", h.AdminAdjustWallet)
 
@@ -301,7 +303,7 @@ func TestWalletHandler_AdminAdjust_InvalidID(t *testing.T) {
 }
 
 func TestWalletHandler_AdminAdjust_MissingDescription(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/admin/v1/accounts/:id/wallet/adjust", h.AdminAdjustWallet)
 
@@ -317,7 +319,7 @@ func TestWalletHandler_AdminAdjust_MissingDescription(t *testing.T) {
 }
 
 func TestWalletHandler_AdminAdjust_DebitInsufficientBalance(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/admin/v1/accounts/:id/wallet/adjust", h.AdminAdjustWallet)
 
@@ -334,7 +336,7 @@ func TestWalletHandler_AdminAdjust_DebitInsufficientBalance(t *testing.T) {
 }
 
 func TestWalletHandler_AdminAdjust_ZeroAmount(t *testing.T) {
-	h := NewWalletHandler(makeWalletService(), nil, nil, nil)
+	h := NewWalletHandler(makeWalletService(), payment.NewRegistry())
 	r := testRouter()
 	r.POST("/admin/v1/accounts/:id/wallet/adjust", h.AdminAdjustWallet)
 
