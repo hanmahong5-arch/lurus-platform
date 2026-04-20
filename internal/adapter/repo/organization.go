@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tenant"
 	"gorm.io/gorm"
 )
 
@@ -79,20 +80,26 @@ func (r *OrganizationRepo) RemoveMember(ctx context.Context, orgID, accountID in
 		Delete(&entity.OrgMember{}).Error
 }
 
+// GetMember looks up a specific membership row. RLS (migration 019) ensures
+// the caller can only see members of orgs they themselves belong to.
 func (r *OrganizationRepo) GetMember(ctx context.Context, orgID, accountID int64) (*entity.OrgMember, error) {
 	var m entity.OrgMember
-	err := r.db.WithContext(ctx).
-		Where("org_id = ? AND account_id = ?", orgID, accountID).
-		First(&m).Error
+	err := tenant.WithTenant(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Where("org_id = ? AND account_id = ?", orgID, accountID).First(&m).Error
+	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &m, err
 }
 
+// ListMembers lists all members of an org. RLS restricts results to orgs the
+// caller belongs to; cross-org listing returns empty.
 func (r *OrganizationRepo) ListMembers(ctx context.Context, orgID int64) ([]entity.OrgMember, error) {
 	var members []entity.OrgMember
-	err := r.db.WithContext(ctx).Where("org_id = ?", orgID).Find(&members).Error
+	err := tenant.WithTenant(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Where("org_id = ?", orgID).Find(&members).Error
+	})
 	return members, err
 }
 
@@ -111,9 +118,13 @@ func (r *OrganizationRepo) GetAPIKeyByHash(ctx context.Context, hash string) (*e
 	return &k, err
 }
 
+// ListAPIKeys lists all keys for an org. RLS restricts results to orgs the
+// caller belongs to.
 func (r *OrganizationRepo) ListAPIKeys(ctx context.Context, orgID int64) ([]entity.OrgAPIKey, error) {
 	var keys []entity.OrgAPIKey
-	err := r.db.WithContext(ctx).Where("org_id = ?", orgID).Order("id DESC").Find(&keys).Error
+	err := tenant.WithTenant(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Where("org_id = ?", orgID).Order("id DESC").Find(&keys).Error
+	})
 	return keys, err
 }
 
@@ -134,11 +145,18 @@ func (r *OrganizationRepo) TouchAPIKey(ctx context.Context, id int64) error {
 
 // --- Wallet ---
 
+// GetOrCreateWallet fetches the org wallet, creating it on first access.
+//
+// When the context carries a tenant identity (account_id), the query runs
+// inside a transaction with PostgreSQL RLS session vars set, so the
+// billing.org_wallets policy (see migration 018) enforces that the caller
+// must be a member of the org. Without tenant context (e.g. internal
+// admin paths), the policy's NULL-bypass allows unrestricted access.
 func (r *OrganizationRepo) GetOrCreateWallet(ctx context.Context, orgID int64) (*entity.OrgWallet, error) {
 	var w entity.OrgWallet
-	err := r.db.WithContext(ctx).
-		Where(entity.OrgWallet{OrgID: orgID}).
-		FirstOrCreate(&w).Error
+	err := tenant.WithTenant(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Where(entity.OrgWallet{OrgID: orgID}).FirstOrCreate(&w).Error
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -58,8 +58,9 @@ func (OAuthBinding) TableName() string { return "identity.account_oauth_bindings
 
 // Username validation: 3-32 alphanumeric/underscore, OR 11-digit China phone number.
 var (
-	reUsername = regexp.MustCompile(`^[a-zA-Z0-9_]{3,32}$`)
-	rePhone   = regexp.MustCompile(`^1[3-9]\d{9}$`)
+	reUsername  = regexp.MustCompile(`^[a-zA-Z0-9_]{3,32}$`)
+	rePhone     = regexp.MustCompile(`^1[3-9]\d{9}$`)
+	reAllDigits = regexp.MustCompile(`^\d+$`)
 )
 
 // ValidateUsername checks if s is a valid username (3-32 chars alphanumeric/underscore or 11-digit China phone).
@@ -67,7 +68,16 @@ func ValidateUsername(s string) error {
 	if s == "" {
 		return fmt.Errorf("username is required")
 	}
-	if reUsername.MatchString(s) || rePhone.MatchString(s) {
+	// All-digit strings must be a valid 11-digit China mobile number —
+	// prevents ambiguous accounts like "01234567890" that look like phones
+	// but aren't, which would confuse phone-based lookup downstream.
+	if reAllDigits.MatchString(s) {
+		if rePhone.MatchString(s) {
+			return nil
+		}
+		return fmt.Errorf("all-digit username must be a valid 11-digit China mobile number")
+	}
+	if reUsername.MatchString(s) {
 		return nil
 	}
 	return fmt.Errorf("username must be 3-32 alphanumeric/underscore characters, or a valid phone number")

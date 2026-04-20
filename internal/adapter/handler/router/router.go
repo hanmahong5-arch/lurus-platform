@@ -12,6 +12,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tenant"
 )
 
 // Deps holds all handler dependencies injected at startup.
@@ -122,6 +123,7 @@ func Build(deps Deps) *gin.Engine {
 	// Public user API — requires Zitadel JWT or lurus session token
 	v1 := r.Group("/api/v1")
 	v1.Use(deps.JWT.Auth())
+	v1.Use(tenant.Middleware()) // Propagate account_id to ctx for RLS-aware repos.
 	if deps.RateLimit != nil {
 		v1.Use(deps.RateLimit.PerUser())
 	}
