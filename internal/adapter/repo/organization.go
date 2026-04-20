@@ -67,17 +67,23 @@ func (r *OrganizationRepo) ListAll(ctx context.Context, limit, offset int) ([]en
 
 // --- Members ---
 
+// AddMember inserts or updates a membership. RLS (migration 022) enforces
+// either admin role on the org, or bootstrap owner-self-add (registered org
+// owner adding themselves as 'owner').
 func (r *OrganizationRepo) AddMember(ctx context.Context, m *entity.OrgMember) error {
-	return r.db.WithContext(ctx).
-		Where(entity.OrgMember{OrgID: m.OrgID, AccountID: m.AccountID}).
-		Assign(entity.OrgMember{Role: m.Role}).
-		FirstOrCreate(m).Error
+	return tenant.WithTenant(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Where(entity.OrgMember{OrgID: m.OrgID, AccountID: m.AccountID}).
+			Assign(entity.OrgMember{Role: m.Role}).
+			FirstOrCreate(m).Error
+	})
 }
 
+// RemoveMember deletes a membership. RLS restricts to admins of that org.
 func (r *OrganizationRepo) RemoveMember(ctx context.Context, orgID, accountID int64) error {
-	return r.db.WithContext(ctx).
-		Where("org_id = ? AND account_id = ?", orgID, accountID).
-		Delete(&entity.OrgMember{}).Error
+	return tenant.WithTenant(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Where("org_id = ? AND account_id = ?", orgID, accountID).
+			Delete(&entity.OrgMember{}).Error
+	})
 }
 
 // GetMember looks up a specific membership row. RLS (migration 019) ensures
@@ -105,8 +111,12 @@ func (r *OrganizationRepo) ListMembers(ctx context.Context, orgID int64) ([]enti
 
 // --- API Keys ---
 
+// CreateAPIKey inserts a new org API key. RLS enforces that the caller must
+// be a member of the org.
 func (r *OrganizationRepo) CreateAPIKey(ctx context.Context, k *entity.OrgAPIKey) error {
-	return r.db.WithContext(ctx).Create(k).Error
+	return tenant.WithTenant(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Create(k).Error
+	})
 }
 
 func (r *OrganizationRepo) GetAPIKeyByHash(ctx context.Context, hash string) (*entity.OrgAPIKey, error) {
@@ -128,11 +138,14 @@ func (r *OrganizationRepo) ListAPIKeys(ctx context.Context, orgID int64) ([]enti
 	return keys, err
 }
 
+// RevokeAPIKey marks a key as revoked. RLS ensures only org members see
+// the key at all; revocation by outsiders returns 0 rows affected.
 func (r *OrganizationRepo) RevokeAPIKey(ctx context.Context, id int64) error {
-	return r.db.WithContext(ctx).
-		Model(&entity.OrgAPIKey{}).
-		Where("id = ?", id).
-		Update("status", "revoked").Error
+	return tenant.WithTenant(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&entity.OrgAPIKey{}).
+			Where("id = ?", id).
+			Update("status", "revoked").Error
+	})
 }
 
 func (r *OrganizationRepo) TouchAPIKey(ctx context.Context, id int64) error {
