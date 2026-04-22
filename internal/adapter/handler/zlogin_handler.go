@@ -19,12 +19,20 @@ import (
 
 // ZLoginHandler proxies Zitadel Session API v2 requests for the custom OIDC login UI.
 // Required config: ZITADEL_ISSUER + ZITADEL_SERVICE_ACCOUNT_PAT + SESSION_SECRET.
+//
+// When serviceAccountPAT is empty the handler is in "disabled" mode: routes are
+// still registered but each endpoint returns 503 JSON with a clear error
+// message. This prevents the SPA static-file fallback from swallowing unknown
+// paths and returning HTML, which would show up in the browser as
+// "Unexpected token '<', '<!DOCTYPE'..." — a terrible error surface for a
+// missing config value.
 type ZLoginHandler struct {
 	accounts          *app.AccountService
 	accountStore      accountStoreForLogin
 	zitadelIssuer     string // e.g. https://auth.lurus.cn
 	serviceAccountPAT string // Zitadel PAT with session creation rights
 	sessionSecret     string // for validating lurus-issued session tokens
+	disabled          bool   // true when PAT is empty; all handlers respond 503
 }
 
 // accountStoreForLogin is a minimal interface for resolving login identifiers.
@@ -34,28 +42,46 @@ type accountStoreForLogin interface {
 	GetByUsername(ctx context.Context, username string) (*entity.Account, error)
 }
 
-// NewZLoginHandler creates the handler.
-// Returns nil when serviceAccountPAT is empty (custom login disabled).
+// NewZLoginHandler creates the handler. Never returns nil — when
+// serviceAccountPAT is empty the handler operates in disabled mode (see
+// type docs) so routes still register and produce 503 JSON rather than a
+// silent SPA HTML fallback.
 func NewZLoginHandler(
 	accounts *app.AccountService,
 	accountStore accountStoreForLogin,
 	zitadelIssuer, serviceAccountPAT, sessionSecret string,
 ) *ZLoginHandler {
-	if serviceAccountPAT == "" {
-		return nil
-	}
 	return &ZLoginHandler{
 		accounts:          accounts,
 		accountStore:      accountStore,
 		zitadelIssuer:     zitadelIssuer,
 		serviceAccountPAT: serviceAccountPAT,
 		sessionSecret:     sessionSecret,
+		disabled:          serviceAccountPAT == "",
 	}
+}
+
+// respondDisabled writes a 503 JSON when the handler cannot service the
+// request because ZITADEL_SERVICE_ACCOUNT_PAT is not configured.
+func (h *ZLoginHandler) respondDisabled(c *gin.Context) bool {
+	if !h.disabled {
+		return false
+	}
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error": "login_unavailable",
+		"message": "Custom login is not configured on this deployment " +
+			"(ZITADEL_SERVICE_ACCOUNT_PAT missing). Please use OIDC redirect " +
+			"or contact the administrator.",
+	})
+	return true
 }
 
 // GetAuthInfo returns metadata about an OIDC auth request (e.g. requesting app name).
 // GET /api/v1/auth/info?authRequestId=<id>
 func (h *ZLoginHandler) GetAuthInfo(c *gin.Context) {
+	if h.respondDisabled(c) {
+		return
+	}
 	authRequestID := c.Query("authRequestId")
 	if authRequestID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "authRequestId is required"})
@@ -95,6 +121,9 @@ func (h *ZLoginHandler) GetAuthInfo(c *gin.Context) {
 // SubmitPassword creates a Zitadel session using email + password and returns the OIDC callback URL.
 // POST /api/v1/auth/zlogin/password
 func (h *ZLoginHandler) SubmitPassword(c *gin.Context) {
+	if h.respondDisabled(c) {
+		return
+	}
 	var req struct {
 		AuthRequestID string `json:"auth_request_id" binding:"required"`
 		Username      string `json:"username"         binding:"required"`
@@ -125,6 +154,9 @@ func (h *ZLoginHandler) SubmitPassword(c *gin.Context) {
 // LinkWechatAndComplete bridges a lurus WeChat session to an active Zitadel OIDC auth request.
 // POST /api/v1/auth/wechat/link-oidc
 func (h *ZLoginHandler) LinkWechatAndComplete(c *gin.Context) {
+	if h.respondDisabled(c) {
+		return
+	}
 	var req struct {
 		AuthRequestID string `json:"auth_request_id" binding:"required"`
 		LurusToken    string `json:"lurus_token"      binding:"required"`
@@ -180,6 +212,9 @@ func (h *ZLoginHandler) LinkWechatAndComplete(c *gin.Context) {
 // DirectLogin authenticates with identifier (username/email/phone) + password and returns a lurus session token.
 // POST /api/v1/auth/login  (no OIDC — stays entirely within identity.lurus.cn)
 func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
+	if h.respondDisabled(c) {
+		return
+	}
 	var req struct {
 		Identifier string `json:"identifier"`
 		Username   string `json:"username"` // backward compatibility

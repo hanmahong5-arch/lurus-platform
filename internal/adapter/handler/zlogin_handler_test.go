@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -23,11 +24,36 @@ func makeZLoginHandler(t *testing.T, zitadelURL string) *ZLoginHandler {
 
 // ---------- constructor ----------
 
-// TestZLoginHandler_New_NilWhenNoPAT verifies nil return when serviceAccountPAT is empty.
-func TestZLoginHandler_New_NilWhenNoPAT(t *testing.T) {
+// TestZLoginHandler_New_DisabledWhenNoPAT verifies the handler is created in
+// disabled mode when serviceAccountPAT is empty. Routes still register and
+// endpoints respond 503 JSON so the SPA static-file fallback doesn't catch
+// the path and return HTML.
+func TestZLoginHandler_New_DisabledWhenNoPAT(t *testing.T) {
 	h := NewZLoginHandler(makeAccountService(), newMockAccountStore(), "https://auth.example.com", "", "secret")
-	if h != nil {
-		t.Error("expected nil when serviceAccountPAT is empty")
+	if h == nil {
+		t.Fatal("expected non-nil handler (disabled mode), got nil")
+	}
+	if !h.disabled {
+		t.Error("expected disabled=true when serviceAccountPAT is empty")
+	}
+
+	// Exercise DirectLogin in disabled mode — must return 503 JSON, not HTML.
+	r := testRouter()
+	r.POST("/api/v1/auth/login", h.DirectLogin)
+	reqBody, _ := json.Marshal(map[string]string{"identifier": "x", "password": "y"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 in disabled mode, got %d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Errorf("expected JSON response in disabled mode, got: %s", w.Body.String())
+	}
+	if body["error"] != "login_unavailable" {
+		t.Errorf("expected error=login_unavailable, got %v", body)
 	}
 }
 
