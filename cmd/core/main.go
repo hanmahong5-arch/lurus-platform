@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -454,26 +453,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("embed web/dist: %w", err)
 	}
-	engine.NoRoute(func(c *gin.Context) {
-		// Serve static assets (JS/CSS/fonts) when the file exists in dist/.
-		// Fall back to index.html for SPA client-side routes (/wallet, /callback, etc.).
-		reqPath := strings.TrimPrefix(c.Request.URL.Path, "/")
-		if reqPath != "" {
-			if _, err := webFS.Open(reqPath); err == nil {
-				http.FileServerFS(webFS).ServeHTTP(c.Writer, c.Request)
-				return
-			}
-		}
-		// Read index.html directly — do NOT use c.FileFromFS or http.FileServer here.
-		// net/http.serveFile redirects any URL path ending in "/index.html" to "./"
-		// which would cause an infinite redirect loop at the root path.
-		data, err := fs.ReadFile(webFS, "index.html")
-		if err != nil {
-			c.Status(http.StatusInternalServerError)
-			return
-		}
-		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
-	})
+	engine.NoRoute(handler.NoRouteHandler(webFS))
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),

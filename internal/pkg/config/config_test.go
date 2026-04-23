@@ -27,12 +27,15 @@ func setEnv(t *testing.T, kvs map[string]string) {
 }
 
 // requiredEnvs returns the minimal set of required env vars.
+// SESSION_SECRET must decode to ≥ 32 bytes (see Validate); we use a 32-byte
+// base64 test value here.
 func requiredEnvs() map[string]string {
 	return map[string]string{
 		"DATABASE_DSN":     "postgres://test:test@localhost/test",
 		"ZITADEL_ISSUER":  "https://auth.example.com",
 		"ZITADEL_JWKS_URL": "https://auth.example.com/oauth/v2/keys",
 		"INTERNAL_API_KEY": "test-internal-key",
+		"SESSION_SECRET":   "dGVzdC1zZXNzaW9uLXNlY3JldC1rZXktMzItYnl0ZXMh", // "test-session-secret-key-32-bytes!" base64
 	}
 }
 

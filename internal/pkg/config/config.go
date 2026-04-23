@@ -2,9 +2,12 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -205,7 +208,71 @@ func Load() (*Config, error) {
 		TemporalNamespace:   getEnv("TEMPORAL_NAMESPACE", "default"),
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// minSessionSecretBytes is the minimum length we accept for SESSION_SECRET
+// after base64 decoding. 32 bytes gives 256-bit HMAC keys — anything less is
+// a security risk and almost certainly a misconfiguration.
+const minSessionSecretBytes = 32
+
+// Validate enforces invariants that requireEnv alone can't express:
+//
+//   - SESSION_SECRET must decode to ≥ 32 bytes (HMAC-SHA256 key strength).
+//   - Optional feature-flag configs (PAT, SMTP, WeChat, ...) are logged as
+//     disabled so the deployment's reduced capability is visible in logs.
+//
+// Returns an error for invariants that MUST block startup. Non-fatal
+// degradations print WARN logs but allow startup to proceed.
+func (c *Config) Validate() error {
+	// SESSION_SECRET: reject empty; treat input as base64 first, then raw.
+	raw := strings.TrimSpace(c.SessionSecret)
+	if raw == "" {
+		return fmt.Errorf("SESSION_SECRET is required (min %d bytes, base64 or raw)", minSessionSecretBytes)
+	}
+	n := decodedLen(raw)
+	if n < minSessionSecretBytes {
+		return fmt.Errorf("SESSION_SECRET too short: decoded %d bytes, need ≥ %d (regenerate: `openssl rand -base64 32`)", n, minSessionSecretBytes)
+	}
+
+	// Log degraded-feature summary so operators know what's turned off.
+	if c.ZitadelServiceAccountPAT == "" {
+		log.Println("config: ZITADEL_SERVICE_ACCOUNT_PAT not set — custom login (/api/v1/auth/login) will respond 503")
+	}
+	if c.StripeSecretKey == "" {
+		log.Println("config: STRIPE_SECRET_KEY not set — Stripe checkout disabled")
+	}
+	if c.AlipayAppID == "" {
+		log.Println("config: ALIPAY_APP_ID not set — Alipay direct disabled")
+	}
+	if c.WechatPayMchID == "" {
+		log.Println("config: WECHAT_PAY_MCH_ID not set — WeChat Pay direct disabled")
+	}
+	if c.TemporalHostPort == "" {
+		log.Println("config: TEMPORAL_HOST_PORT not set — async workflows run on the direct path (no durability)")
+	}
+	if c.SMSProvider == "" {
+		log.Println("config: SMS_PROVIDER not set — SMS verification codes disabled")
+	}
+	return nil
+}
+
+// decodedLen returns the byte length of s after tolerant base64 decoding.
+// Accepts both standard and URL-safe alphabets with optional padding.
+// Falls back to raw length if s is not valid base64.
+func decodedLen(s string) int {
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding,
+		base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		if b, err := enc.DecodeString(s); err == nil {
+			return len(b)
+		}
+	}
+	return len(s)
 }
 
 func requireEnv(key string) string {
