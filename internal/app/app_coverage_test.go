@@ -148,9 +148,9 @@ func newTestReconWorker(rs *mockReconWalletStore) *ReconciliationWorker {
 
 func TestAccountService_SetOnAccountCreatedHook_Fires(t *testing.T) {
 	svc := NewAccountService(newMockAccountStore(), newMockWalletStore(), newMockVIPStore(nil))
-	called := false
+	var called atomic.Bool
 	svc.SetOnAccountCreatedHook(func(_ context.Context, _ *entity.Account) {
-		called = true
+		called.Store(true)
 	})
 	_, err := svc.UpsertByZitadelSub(context.Background(), "sub-hook-test", "hook@example.com", "Hook User", "")
 	if err != nil {
@@ -158,7 +158,7 @@ func TestAccountService_SetOnAccountCreatedHook_Fires(t *testing.T) {
 	}
 	// Hook fires in a goroutine — wait briefly.
 	time.Sleep(20 * time.Millisecond)
-	if !called {
+	if !called.Load() {
 		t.Fatal("expected onAccountCreated hook to be called")
 	}
 }
@@ -702,9 +702,9 @@ func TestReconWorker_SetOnAlertHook_FiresForOrphan(t *testing.T) {
 	rs := &mockReconWalletStore{mockWalletStore: newMockWalletStore()}
 	w := newTestReconWorker(rs)
 
-	called := false
+	var called atomic.Bool
 	w.SetOnAlertHook(func(_ context.Context, _ *entity.ReconciliationIssue) {
-		called = true
+		called.Store(true)
 	})
 
 	amt := 99.0
@@ -712,7 +712,7 @@ func TestReconWorker_SetOnAlertHook_FiresForOrphan(t *testing.T) {
 		{OrderNo: "TEST-ORD", AccountID: 1, AmountCNY: amt, PaymentMethod: "stripe"},
 	}
 	w.checkPaidOrdersIntegrity(context.Background())
-	if !called {
+	if !called.Load() {
 		t.Fatal("expected alert hook to be called for orphan order")
 	}
 }
