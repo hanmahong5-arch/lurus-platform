@@ -403,6 +403,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	checkinH     := handler.NewCheckinHandler(checkinSvc)
 	orgH         := handler.NewOrganizationHandler(orgSvc)
 	qrLoginH     := handler.NewQRLoginHandler(rdb, cfg.SessionSecret)
+	qrH          := handler.NewQRHandler(rdb, cfg.SessionSecret)
 
 	// --- NewAPI Admin Proxy (optional) ---
 	var newAPIProxyH *handler.NewAPIProxyHandler
@@ -435,6 +436,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		Checkin:       checkinH,
 		Organizations: orgH,
 		QRLogin:       qrLoginH,
+		QR:            qrH,
 		NewAPIProxy:   newAPIProxyH,
 		InternalKey:   cfg.InternalAPIKey,
 		JWT:           jwtMiddleware,

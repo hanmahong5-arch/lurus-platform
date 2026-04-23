@@ -34,7 +34,8 @@ type Deps struct {
 	Registration  *handler.RegistrationHandler      // nil when registration is not configured
 	Checkin       *handler.CheckinHandler           // daily check-in
 	Organizations *handler.OrganizationHandler      // organization management
-	QRLogin         *handler.QRLoginHandler            // nil when QR login is not configured
+	QRLogin         *handler.QRLoginHandler            // v1 QR login (login-only, legacy)
+	QR              *handler.QRHandler                 // v2 multi-action QR primitive (login → join_org/delegate pending)
 	NewAPIProxy     *handler.NewAPIProxyHandler       // nil when newapi proxy is not configured
 	ServiceKeyAdmin *handler.AdminServiceKeyHandler  // nil when service key management not wired
 	InternalKey     string                            // legacy INTERNAL_API_KEY (fallback during migration)
@@ -115,6 +116,16 @@ func Build(deps Deps) *gin.Engine {
 		qrPublic.GET("/:id/status", deps.QRLogin.PollStatus)
 	}
 
+	// QR v2 primitive — public endpoints (create/status). Confirm is auth'd below.
+	if deps.QR != nil {
+		qrV2Public := r.Group("/api/v2/qr")
+		if deps.RateLimit != nil {
+			qrV2Public.Use(deps.RateLimit.PerIP())
+		}
+		qrV2Public.POST("/session", deps.QR.CreateSession)
+		qrV2Public.GET("/:id/status", deps.QR.PollStatus)
+	}
+
 	// Public QR code endpoint — unauthenticated, read-only.
 	if deps.AdminConfig != nil {
 		r.GET("/api/v1/public/qrcode/:type", deps.AdminConfig.GetPublicQRCode)
@@ -191,6 +202,17 @@ func Build(deps Deps) *gin.Engine {
 		v1.POST("/organizations/:id/api-keys", deps.Organizations.CreateAPIKey)
 		v1.DELETE("/organizations/:id/api-keys/:kid", deps.Organizations.RevokeAPIKey)
 		v1.GET("/organizations/:id/wallet", deps.Organizations.GetWallet)
+	}
+
+	// QR v2 confirm — under /api/v2 with auth. Sibling group to v1 (different prefix).
+	if deps.QR != nil {
+		v2 := r.Group("/api/v2")
+		v2.Use(deps.JWT.Auth())
+		v2.Use(tenant.Middleware())
+		if deps.RateLimit != nil {
+			v2.Use(deps.RateLimit.PerUser())
+		}
+		v2.POST("/qr/:id/confirm", deps.QR.Confirm)
 	}
 
 	// Internal service-to-service API — scoped bearer token auth.
