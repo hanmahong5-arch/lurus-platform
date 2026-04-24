@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -37,20 +38,23 @@ import (
 // scripts so each mutation is atomic.
 
 const (
-	qrKeyPrefix    = "qr:"
-	qrDefaultTTL   = 5 * time.Minute
-	qrIDRandomBytes = 32 // 256 bits — unguessable within session lifetime
-	qrMaxPollWait  = 30 * time.Second
-	qrPollInterval = time.Second
-	qrLoginTTL     = 7 * 24 * time.Hour // session token TTL after login consume
-	qrPayloadHMACLen = 16 // hex chars kept from HMAC-SHA256 (64 bits — enough for anti-tamper)
-	qrMaxUALength  = 256 // truncate user-agent so Redis value stays small
+	qrKeyPrefix      = "qr:"
+	qrDefaultTTL     = 5 * time.Minute
+	qrIDRandomBytes  = 32 // 256 bits — unguessable within session lifetime
+	qrMaxPollWait    = 30 * time.Second
+	qrPollInterval   = time.Second
+	qrLoginTTL       = 7 * 24 * time.Hour // session token TTL after login consume
+	qrPayloadHMACLen = 16                 // hex chars kept from HMAC-SHA256 (64 bits — enough for anti-tamper)
+	qrMaxUALength    = 256                // truncate user-agent so Redis value stays small
+	// qrTimestampSkew tolerates small client/server clock drift when validating
+	// the issued-at (t) parameter. TTL + skew is the full replay window.
+	qrTimestampSkew = 30 * time.Second
 )
 
 // QRHandler owns the v2 QR primitive.
 type QRHandler struct {
 	rdb           *redis.Client
-	sessionSecret string      // signs payload HMAC and issued session tokens
+	sessionSecret string           // signs payload HMAC and issued session tokens
 	now           func() time.Time // injectable for deterministic tests
 }
 
@@ -113,12 +117,13 @@ func (h *QRHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
+	issuedAt := h.now().UTC()
 	session := entity.QRSession{
 		ID:        id,
 		Action:    action,
 		Params:    req.Params,
 		Status:    entity.QRStatusPending,
-		CreatedAt: h.now().UTC(),
+		CreatedAt: issuedAt,
 		IP:        clientIP(c),
 		UA:        truncate(c.GetHeader("User-Agent"), qrMaxUALength),
 	}
@@ -132,11 +137,13 @@ func (h *QRHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
+	expiresAt := issuedAt.Add(qrDefaultTTL)
 	c.JSON(http.StatusOK, gin.H{
-		"id":          id,
-		"action":      string(action),
-		"qr_payload":  h.buildPayload(id, action),
-		"expires_in":  int(qrDefaultTTL.Seconds()),
+		"id":         id,
+		"action":     string(action),
+		"qr_payload": h.buildPayload(id, action, issuedAt),
+		"expires_in": int(qrDefaultTTL.Seconds()),
+		"expires_at": expiresAt.Format(time.RFC3339),
 	})
 }
 
@@ -146,7 +153,7 @@ func (h *QRHandler) CreateSession(c *gin.Context) {
 //
 // Pending → returns {"status":"pending"} when the poll window elapses.
 // Confirmed → atomically transitions to consumed and returns action-specific
-//             payload (login → {"status":"confirmed", "token": "..."}).
+// payload (login → {"status":"confirmed", "token": "..."}).
 // Consumed → 410 Gone.
 // Missing / TTL-expired → 404.
 func (h *QRHandler) PollStatus(c *gin.Context) {
@@ -266,6 +273,14 @@ type qrConfirmRequest struct {
 	// Requiring it on confirm ensures scanned payloads cannot be substituted
 	// for a fabricated id by a malicious app.
 	Sig string `json:"sig" binding:"required"`
+	// T is the unix-seconds issued-at timestamp parsed from the scanned payload
+	// (the "t" query param in the lurus://qr URI). Clients from 2026-04-24 onward
+	// MUST include it; absence triggers the legacy (id|action) verification path
+	// for backward compatibility with pre-B5 APP builds.
+	//
+	// TODO(2026-06-01): drop legacy path once all APP clients ship B5-aware scan
+	// code — then make `t` required and remove the fallback in verifyPayloadSig.
+	T int64 `json:"t,omitempty"`
 }
 
 // Confirm — POST /api/v2/qr/:id/confirm (auth required)
@@ -317,12 +332,27 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 		return
 	}
 
-	if !h.verifyPayloadSig(id, session.Action, req.Sig) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "invalid_signature",
-			"message": "QR payload signature did not match",
-		})
-		return
+	if req.T == 0 {
+		// Legacy pre-B5 client: fall back to the timestamp-less HMAC. Kept for
+		// backward compatibility with APP builds from before 2026-04-24.
+		// TODO(2026-06-01): remove once all clients upgrade.
+		slog.WarnContext(c.Request.Context(), "qr.legacy_payload_signature",
+			"id", id, "action", string(session.Action), "account_id", accountID)
+		if !h.verifyPayloadSigLegacy(id, session.Action, req.Sig) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid_signature",
+				"message": "QR payload signature did not match",
+			})
+			return
+		}
+	} else {
+		if !h.verifyPayloadSig(id, session.Action, req.T, req.Sig) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid_signature",
+				"message": "QR payload signature did not match or has expired",
+			})
+			return
+		}
 	}
 
 	if session.Status != entity.QRStatusPending {
@@ -370,14 +400,52 @@ func qrKey(id string) string { return qrKeyPrefix + id }
 
 // buildPayload assembles the scannable payload handed back to the client.
 //
-// Format: lurus://qr?v=1&id=<hex>&a=<action>&h=<hmac16>
-// Version prefix lets us evolve the payload shape without flag days.
-func (h *QRHandler) buildPayload(id string, action entity.QRAction) string {
-	sig := h.payloadSig(id, action)
-	return fmt.Sprintf("lurus://qr?v=1&id=%s&a=%s&h=%s", id, action, sig)
+// Format: lurus://qr?v=1&id=<hex>&a=<action>&t=<unix>&h=<hmac16>
+// The HMAC is over `id|action|unix(t)` so a screenshot QR cannot be replayed
+// past its issued-at window even if the server-side Redis key somehow lived
+// longer. Version prefix lets us evolve the payload shape without flag days.
+func (h *QRHandler) buildPayload(id string, action entity.QRAction, issuedAt time.Time) string {
+	t := issuedAt.Unix()
+	sig := h.payloadSig(id, action, t)
+	return fmt.Sprintf("lurus://qr?v=1&id=%s&a=%s&t=%d&h=%s", id, action, t, sig)
 }
 
-func (h *QRHandler) payloadSig(id string, action entity.QRAction) string {
+// payloadSig is the current (B5+) HMAC over id|action|issued_at.
+func (h *QRHandler) payloadSig(id string, action entity.QRAction, issuedAt int64) string {
+	mac := hmac.New(sha256.New, []byte(h.sessionSecret))
+	mac.Write([]byte(id))
+	mac.Write([]byte{0})
+	mac.Write([]byte(action))
+	mac.Write([]byte{0})
+	mac.Write([]byte(strconv.FormatInt(issuedAt, 10)))
+	return hex.EncodeToString(mac.Sum(nil))[:qrPayloadHMACLen]
+}
+
+// verifyPayloadSig validates a B5+ signature. Rejects when `t` is outside the
+// allowed window (TTL + small clock-skew buffer) so screenshot replay cannot
+// succeed even if the server Redis record somehow outlives its TTL.
+func (h *QRHandler) verifyPayloadSig(id string, action entity.QRAction, issuedAt int64, got string) bool {
+	// Bound the signing timestamp inside (issued_at - skew, issued_at + TTL + skew)
+	// around now. The upper bound protects against replay; the lower bound
+	// protects against a client sending a far-future t with a forged HMAC
+	// (would be impossible without the secret, but bounding is cheap insurance).
+	now := h.now().Unix()
+	if now-issuedAt > int64((qrDefaultTTL + qrTimestampSkew).Seconds()) {
+		return false
+	}
+	if issuedAt-now > int64(qrTimestampSkew.Seconds()) {
+		return false
+	}
+	want := h.payloadSig(id, action, issuedAt)
+	// Constant-time compare — id/action/t are known to the attacker but we
+	// shouldn't let timing leak whether an incorrect candidate was close.
+	return hmac.Equal([]byte(want), []byte(got))
+}
+
+// payloadSigLegacy is the pre-B5 HMAC over id|action only. Retained solely
+// for backward compatibility with APP builds that do not yet echo `t` on
+// confirm. Scheduled for removal on 2026-06-01 (see qrConfirmRequest.T TODO).
+func (h *QRHandler) payloadSigLegacy(id string, action entity.QRAction) string {
 	mac := hmac.New(sha256.New, []byte(h.sessionSecret))
 	mac.Write([]byte(id))
 	mac.Write([]byte{0})
@@ -385,10 +453,8 @@ func (h *QRHandler) payloadSig(id string, action entity.QRAction) string {
 	return hex.EncodeToString(mac.Sum(nil))[:qrPayloadHMACLen]
 }
 
-func (h *QRHandler) verifyPayloadSig(id string, action entity.QRAction, got string) bool {
-	want := h.payloadSig(id, action)
-	// Constant-time compare — id/action are known to the attacker but we
-	// shouldn't let timing leak whether an incorrect candidate was close.
+func (h *QRHandler) verifyPayloadSigLegacy(id string, action entity.QRAction, got string) bool {
+	want := h.payloadSigLegacy(id, action)
 	return hmac.Equal([]byte(want), []byte(got))
 }
 

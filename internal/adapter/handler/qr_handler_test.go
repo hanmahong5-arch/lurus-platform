@@ -3,11 +3,15 @@ package handler_test
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -58,8 +62,9 @@ func decode(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 	return out
 }
 
-// parsePayload extracts id, action, and h (sig) from the lurus://qr payload URI.
-func parsePayload(t *testing.T, payload string) (id, action, sig string) {
+// parsePayload extracts id, action, issued_at (t), and h (sig) from the
+// lurus://qr payload URI.
+func parsePayload(t *testing.T, payload string) (id, action, issuedAt, sig string) {
 	t.Helper()
 	if !strings.HasPrefix(payload, "lurus://qr?") {
 		t.Fatalf("payload missing scheme: %q", payload)
@@ -68,7 +73,7 @@ func parsePayload(t *testing.T, payload string) (id, action, sig string) {
 	if err != nil {
 		t.Fatalf("parse payload query: %v", err)
 	}
-	return q.Get("id"), q.Get("a"), q.Get("h")
+	return q.Get("id"), q.Get("a"), q.Get("t"), q.Get("h")
 }
 
 // ── CreateSession ───────────────────────────────────────────────────────────
@@ -93,10 +98,19 @@ func TestQR_Create_Login_HappyPath(t *testing.T) {
 	if resp["expires_in"].(float64) != 300 {
 		t.Errorf("expires_in = %v, want 300", resp["expires_in"])
 	}
+	expiresAt, _ := resp["expires_at"].(string)
+	if expiresAt == "" {
+		t.Error("expires_at missing from response")
+	} else if _, err := time.Parse(time.RFC3339, expiresAt); err != nil {
+		t.Errorf("expires_at not RFC3339: %q (%v)", expiresAt, err)
+	}
 	payload, _ := resp["qr_payload"].(string)
-	gotID, gotAction, sig := parsePayload(t, payload)
+	gotID, gotAction, gotT, sig := parsePayload(t, payload)
 	if gotID != id || gotAction != "login" || len(sig) != 16 {
 		t.Errorf("payload mismatch: id=%q a=%q sig=%q", gotID, gotAction, sig)
+	}
+	if gotT == "" {
+		t.Error("payload missing t= issued-at field")
 	}
 }
 
@@ -197,10 +211,10 @@ func TestQR_Poll_MissingID(t *testing.T) {
 func TestQR_Confirm_HappyPath(t *testing.T) {
 	h, _, _ := setupQR(t)
 
-	id, sig := createLoginSessionWithSig(t, h)
+	id, sig, issuedAt := createLoginSessionWithSig(t, h)
 
 	c, w := postJSON(http.MethodPost, fmt.Sprintf("/api/v2/qr/%s/confirm", id),
-		map[string]any{"sig": sig},
+		map[string]any{"sig": sig, "t": issuedAt},
 		gin.Param{Key: "id", Value: id},
 	)
 	c.Set("account_id", int64(42))
@@ -220,9 +234,9 @@ func TestQR_Confirm_HappyPath(t *testing.T) {
 
 func TestQR_Confirm_Unauthenticated(t *testing.T) {
 	h, _, _ := setupQR(t)
-	id, sig := createLoginSessionWithSig(t, h)
+	id, sig, issuedAt := createLoginSessionWithSig(t, h)
 	c, w := postJSON(http.MethodPost, fmt.Sprintf("/api/v2/qr/%s/confirm", id),
-		map[string]any{"sig": sig},
+		map[string]any{"sig": sig, "t": issuedAt},
 		gin.Param{Key: "id", Value: id},
 	)
 	// Note: no account_id set → requireAccountID should 401.
@@ -234,7 +248,7 @@ func TestQR_Confirm_Unauthenticated(t *testing.T) {
 
 func TestQR_Confirm_InvalidBody(t *testing.T) {
 	h, _, _ := setupQR(t)
-	id, _ := createLoginSessionWithSig(t, h)
+	id, _, _ := createLoginSessionWithSig(t, h)
 	c, w := postJSON(http.MethodPost, fmt.Sprintf("/api/v2/qr/%s/confirm", id),
 		map[string]any{},
 		gin.Param{Key: "id", Value: id},
@@ -258,10 +272,10 @@ func TestQR_Confirm_MissingID(t *testing.T) {
 
 func TestQR_Confirm_WrongSignature(t *testing.T) {
 	h, _, _ := setupQR(t)
-	id, _ := createLoginSessionWithSig(t, h)
+	id, _, issuedAt := createLoginSessionWithSig(t, h)
 
 	c, w := postJSON(http.MethodPost, fmt.Sprintf("/api/v2/qr/%s/confirm", id),
-		map[string]any{"sig": "0000000000000000"},
+		map[string]any{"sig": "0000000000000000", "t": issuedAt},
 		gin.Param{Key: "id", Value: id},
 	)
 	c.Set("account_id", int64(42))
@@ -290,15 +304,15 @@ func TestQR_Confirm_SessionNotFound(t *testing.T) {
 
 func TestQR_Confirm_DoubleConfirm_Conflict(t *testing.T) {
 	h, _, _ := setupQR(t)
-	id, sig := createLoginSessionWithSig(t, h)
+	id, sig, issuedAt := createLoginSessionWithSig(t, h)
 
 	// First confirm succeeds.
-	c1, _ := postJSON(http.MethodPost, "/", map[string]any{"sig": sig}, gin.Param{Key: "id", Value: id})
+	c1, _ := postJSON(http.MethodPost, "/", map[string]any{"sig": sig, "t": issuedAt}, gin.Param{Key: "id", Value: id})
 	c1.Set("account_id", int64(42))
 	h.Confirm(c1)
 
 	// Second confirm should 409.
-	c2, w2 := postJSON(http.MethodPost, "/", map[string]any{"sig": sig}, gin.Param{Key: "id", Value: id})
+	c2, w2 := postJSON(http.MethodPost, "/", map[string]any{"sig": sig, "t": issuedAt}, gin.Param{Key: "id", Value: id})
 	c2.Set("account_id", int64(7))
 	h.Confirm(c2)
 
@@ -317,10 +331,11 @@ func TestQR_LoginFlow_CreateConfirmPoll(t *testing.T) {
 	h.CreateSession(cCreate)
 	create := decode(t, wCreate)
 	id := create["id"].(string)
-	_, _, sig := parsePayload(t, create["qr_payload"].(string))
+	_, _, tStr, sig := parsePayload(t, create["qr_payload"].(string))
+	issuedAt, _ := strconv.ParseInt(tStr, 10, 64)
 
 	// 2. Confirm (acting as account 42)
-	cConfirm, wConfirm := postJSON(http.MethodPost, "/", map[string]any{"sig": sig}, gin.Param{Key: "id", Value: id})
+	cConfirm, wConfirm := postJSON(http.MethodPost, "/", map[string]any{"sig": sig, "t": issuedAt}, gin.Param{Key: "id", Value: id})
 	cConfirm.Set("account_id", int64(42))
 	h.Confirm(cConfirm)
 	if wConfirm.Code != http.StatusOK {
@@ -411,15 +426,95 @@ func TestQR_Create_CapturesForwardedIPAndTruncatesUA(t *testing.T) {
 	}
 }
 
+// ── B5: signed timestamp replay protection ─────────────────────────────────
+
+// TestQR_Confirm_RejectsExpiredTimestamp ensures that even if a Redis record
+// somehow survives its TTL (or a screenshot is replayed with the original t),
+// the signed-timestamp check rejects the request.
+func TestQR_Confirm_RejectsExpiredTimestamp(t *testing.T) {
+	h, _, _ := setupQR(t)
+	id, sig, issuedAt := createLoginSessionWithSig(t, h)
+
+	// Build the "correct" HMAC for a t that's 6 minutes in the past (> TTL 5m
+	// + 30s skew). This isolates the timestamp-window check from the HMAC
+	// check: the signature itself is valid for that t, but t is stale so the
+	// window check must reject it first.
+	stale := issuedAt - int64((6 * time.Minute).Seconds())
+	staleSig := currentHMACSig(qrTestSecret, id, "login", stale)
+	_ = sig // fresh sig not used here — we want a matching-MAC-but-stale-t case
+	c, w := postJSON(http.MethodPost, fmt.Sprintf("/api/v2/qr/%s/confirm", id),
+		map[string]any{"sig": staleSig, "t": stale},
+		gin.Param{Key: "id", Value: id},
+	)
+	c.Set("account_id", int64(42))
+	h.Confirm(c)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400 (expired/invalid)", w.Code)
+	}
+	if decode(t, w)["error"] != "invalid_signature" {
+		t.Errorf("error = %v; want invalid_signature", decode(t, w)["error"])
+	}
+}
+
+// TestQR_Confirm_AcceptsLegacyNoTimestamp exercises the backward-compat path:
+// an APP build that predates B5 will not include `t` in the confirm body and
+// will send the legacy id|action HMAC. The server must fall back gracefully
+// (and log a warning), not break old clients.
+func TestQR_Confirm_AcceptsLegacyNoTimestamp(t *testing.T) {
+	h, _, _ := setupQR(t)
+	id, _, _ := createLoginSessionWithSig(t, h)
+
+	// Compute the legacy HMAC(id|action) using a tiny duplicate of the server
+	// algorithm so we're independent of the handler's internals.
+	legacySig := legacyHMACSig(qrTestSecret, id, "login")
+
+	c, w := postJSON(http.MethodPost, fmt.Sprintf("/api/v2/qr/%s/confirm", id),
+		// Intentionally omit "t" to trigger the legacy path.
+		map[string]any{"sig": legacySig},
+		gin.Param{Key: "id", Value: id},
+	)
+	c.Set("account_id", int64(42))
+	h.Confirm(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s); legacy path should accept", w.Code, w.Body.String())
+	}
+	resp := decode(t, w)
+	if resp["confirmed"] != true {
+		t.Errorf("confirmed = %v, want true", resp["confirmed"])
+	}
+}
+
+// legacyHMACSig reproduces the pre-B5 id|action HMAC used only by the
+// backward-compat test above. Kept tiny and self-contained.
+func legacyHMACSig(secret, id, action string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(id))
+	mac.Write([]byte{0})
+	mac.Write([]byte(action))
+	return hex.EncodeToString(mac.Sum(nil))[:16]
+}
+
+// currentHMACSig reproduces the B5 id|action|t HMAC used by the
+// expired-timestamp test to synthesize a "valid MAC but stale t" input.
+func currentHMACSig(secret, id, action string, issuedAt int64) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(id))
+	mac.Write([]byte{0})
+	mac.Write([]byte(action))
+	mac.Write([]byte{0})
+	mac.Write([]byte(strconv.FormatInt(issuedAt, 10)))
+	return hex.EncodeToString(mac.Sum(nil))[:16]
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 func createLoginSession(t *testing.T, h *handler.QRHandler) string {
 	t.Helper()
-	id, _ := createLoginSessionWithSig(t, h)
+	id, _, _ := createLoginSessionWithSig(t, h)
 	return id
 }
 
-func createLoginSessionWithSig(t *testing.T, h *handler.QRHandler) (id, sig string) {
+func createLoginSessionWithSig(t *testing.T, h *handler.QRHandler) (id, sig string, issuedAt int64) {
 	t.Helper()
 	c, w := postJSON(http.MethodPost, "/api/v2/qr/session", map[string]any{"action": "login"})
 	h.CreateSession(c)
@@ -428,8 +523,13 @@ func createLoginSessionWithSig(t *testing.T, h *handler.QRHandler) (id, sig stri
 	}
 	resp := decode(t, w)
 	id = resp["id"].(string)
-	_, _, sig = parsePayload(t, resp["qr_payload"].(string))
-	return id, sig
+	_, _, tStr, sig := parsePayload(t, resp["qr_payload"].(string))
+	if tStr != "" {
+		if v, err := strconv.ParseInt(tStr, 10, 64); err == nil {
+			issuedAt = v
+		}
+	}
+	return id, sig, issuedAt
 }
 
 // defeat 'unused import' linter when miniredis/context paths narrow.

@@ -32,7 +32,7 @@ confirmers can't race into an inconsistent state.
 ## Payload format
 
 ```
-lurus://qr?v=1&id=<64-hex>&a=<action>&h=<16-hex>
+lurus://qr?v=1&id=<64-hex>&a=<action>&t=<unix>&h=<16-hex>
 ```
 
 | Field | Meaning |
@@ -40,10 +40,17 @@ lurus://qr?v=1&id=<64-hex>&a=<action>&h=<16-hex>
 | `v`   | Payload version. Reserved for shape evolution. |
 | `id`  | 256-bit random session id (hex-encoded). |
 | `a`   | Action name (`login` / `join_org` / `delegate`). |
-| `h`   | First 16 hex chars of `HMAC-SHA256(session_secret, id \|\| 0x00 \|\| action)`. Defeats id substitution attacks on the scanner side. |
+| `t`   | Server-issued creation timestamp (unix seconds). Part of the MAC — rebuilding the URL with a different `t` invalidates `h`. |
+| `h`   | First 16 hex chars of `HMAC-SHA256(session_secret, id \|\| 0x00 \|\| action \|\| 0x00 \|\| t)`. Defeats id substitution and bounds the replay window to `TTL + 30s skew` even if the server key somehow outlives its TTL. |
 
-The scanner app MUST send `h` back as `sig` in the confirm request; the server
-rejects mismatches with `invalid_signature`.
+The scanner app MUST send `h` back as `sig` **and** `t` back as `t` in the
+confirm request; the server rejects mismatches with `invalid_signature`.
+
+**Backward compatibility (window: until 2026-06-01)**: pre-B5 APP builds may
+send `sig` without `t` in the confirm body. The server falls back to the
+legacy `HMAC-SHA256(session_secret, id || 0x00 || action)` check and emits a
+`qr.legacy_payload_signature` warn log. The legacy path is scheduled for
+removal on 2026-06-01; after that, omitting `t` yields 400 `invalid_signature`.
 
 ---
 
@@ -64,14 +71,15 @@ Content-Type: application/json
 
 | Code | Body |
 |------|------|
-| 200 | `{ id, action, qr_payload, expires_in }` |
+| 200 | `{ id, action, qr_payload, expires_in, expires_at }` |
 | 400 | `invalid_request` — malformed JSON body |
 | 400 | `invalid_action` — unknown action |
 | 501 | `action_not_supported_yet` — valid but not-yet-wired action |
 | 500 | `id_generation_failed` / `store_failed` — infra failure |
 
 The `qr_payload` is the URI to encode into the QR image on the web side.
-`expires_in` is always 300 (seconds).
+`expires_in` is always 300 (seconds). `expires_at` is an RFC3339 UTC
+timestamp (`issued_at + 300s`) convenient for APP countdown UIs.
 
 ### 2. Poll status
 
@@ -101,7 +109,7 @@ POST /api/v2/qr/:id/confirm
 Authorization: Bearer <session-token or Zitadel JWT>
 Content-Type: application/json
 
-{ "sig": "<16-hex sig from scanned payload>" }
+{ "sig": "<16-hex sig from scanned payload>", "t": <unix seconds from scanned payload> }
 ```
 
 **Authenticated** (`/api/v2` group → `JWT.Auth()` → `tenant.Middleware()` →
@@ -159,10 +167,10 @@ Content-Type: application/json
 | Property | Mechanism |
 |----------|-----------|
 | Session id unguessable | 256-bit `crypto/rand` |
-| Payload tamper-proof | HMAC-SHA256 over `id‖0x00‖action` with `SESSION_SECRET` |
+| Payload tamper-proof | HMAC-SHA256 over `id‖0x00‖action‖0x00‖t` with `SESSION_SECRET` |
 | Confirm requires auth | `/api/v2` group is behind `JWT.Auth()` |
 | One-shot token delivery | CAS `confirmed→consumed` in Lua; second poller gets 410 |
-| No replay past TTL | Redis key TTL 300s; Redis-enforced |
+| No replay past TTL | Redis key TTL 300s (Redis-enforced) **and** signed-timestamp window `t ± (TTL + 30s skew)` (MAC-enforced — screenshot QRs can't outlive their window even if Redis record persists) |
 | Constant-time sig compare | `hmac.Equal` on server |
 | PerIP rate limit on create | Shared `deps.RateLimit.PerIP()` middleware |
 | PerUser rate limit on confirm | Shared `deps.RateLimit.PerUser()` middleware |
