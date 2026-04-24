@@ -29,6 +29,11 @@ import (
 // cycles and to make mocking trivial in tests.
 type QROrgService interface {
 	IsOwnerOrAdmin(ctx context.Context, orgID, callerID int64) (bool, error)
+	// GetCallerRole returns the caller's specific role ("owner" | "admin" |
+	// "member" | "") in the organization. Empty string means "no membership".
+	// Used by confirmJoinOrg to enforce privilege non-escalation: admins may
+	// only grant role=member, not role=admin.
+	GetCallerRole(ctx context.Context, orgID, callerID int64) (string, error)
 	AddMember(ctx context.Context, orgID, callerID, targetAccountID int64, role string) error
 }
 
@@ -735,6 +740,16 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 // confirmJoinOrg runs the join_org side effect (AddMember + event publish)
 // inline on the Confirm path and writes the enriched response. Called only
 // after tryConfirm succeeded, so state is pending→confirmed in Redis.
+//
+// Role authorization is enforced here (not at CreateSessionAuthed) so that
+// an admin who was downgraded between session creation and APP confirm
+// cannot still mint an admin-level membership. The rules are:
+//
+//  1. Whitelist — only {"member", "admin"} are grantable via QR. "owner"
+//     MUST be granted out-of-band and is rejected with role_forbidden.
+//  2. Non-escalation — only owners may grant role="admin"; admins are
+//     capped at role="member". Scanning the QR cannot elevate beyond the
+//     initiator's own authority.
 func (h *QRHandler) confirmJoinOrg(c *gin.Context, s *entity.QRSession) {
 	ctx := c.Request.Context()
 	if h.orgService == nil {
@@ -762,7 +777,54 @@ func (h *QRHandler) confirmJoinOrg(c *gin.Context, s *entity.QRSession) {
 	if p.Role == "" {
 		p.Role = "member"
 	}
-	// CreatedBy = initiator (must be owner/admin — rechecked by AddMember).
+
+	// 1. Whitelist check — "owner" is never grantable via QR. Unknown roles
+	//    are rejected too, so a typo can't silently store a junk role string.
+	if p.Role != "member" && p.Role != "admin" {
+		slog.WarnContext(ctx, "qr.join_org.role_rejected",
+			"org_id", p.OrgID, "initiator", s.CreatedBy,
+			"target", s.AccountID, "requested_role", p.Role)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "role_forbidden",
+			"message": fmt.Sprintf("Role %q cannot be granted via QR (allowed: member|admin)", p.Role),
+		})
+		return
+	}
+
+	// 2. Privilege non-escalation — re-check the initiator's role right now
+	//    (not at session creation) so a mid-flight demotion is honoured. An
+	//    admin initiator may only grant "member"; "admin" requires an owner.
+	callerRole, err := h.orgService.GetCallerRole(ctx, p.OrgID, s.CreatedBy)
+	if err != nil {
+		slog.WarnContext(ctx, "qr.join_org.caller_role_lookup_failed",
+			"org_id", p.OrgID, "initiator", s.CreatedBy, "err", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "permission_check_failed",
+			"message": "Failed to verify organization role",
+		})
+		return
+	}
+	if callerRole != "owner" && callerRole != "admin" {
+		// Initiator was stripped of admin/owner between session mint and
+		// scanner confirm — refuse rather than fall through to AddMember.
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "forbidden",
+			"message": "Session initiator is no longer owner or admin",
+		})
+		return
+	}
+	if p.Role == "admin" && callerRole != "owner" {
+		slog.WarnContext(ctx, "qr.join_org.escalation_blocked",
+			"org_id", p.OrgID, "initiator", s.CreatedBy,
+			"initiator_role", callerRole, "target", s.AccountID, "requested_role", p.Role)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "role_forbidden",
+			"message": "Only organization owners can grant role=admin via QR",
+		})
+		return
+	}
+
+	// CreatedBy = initiator (rechecked above; also re-enforced by AddMember).
 	// AccountID  = scanner/APP user confirming — this is the new member.
 	if err := h.orgService.AddMember(ctx, p.OrgID, s.CreatedBy, s.AccountID, p.Role); err != nil {
 		slog.WarnContext(ctx, "qr.join_org.add_member_failed",

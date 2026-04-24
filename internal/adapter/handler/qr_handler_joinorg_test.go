@@ -65,6 +65,15 @@ func (f *fakeOrgSvc) IsOwnerOrAdmin(_ context.Context, orgID, callerID int64) (b
 	return role == "owner" || role == "admin", nil
 }
 
+func (f *fakeOrgSvc) GetCallerRole(_ context.Context, orgID, callerID int64) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.members[orgID] == nil {
+		return "", nil
+	}
+	return f.members[orgID][callerID], nil
+}
+
 func (f *fakeOrgSvc) AddMember(_ context.Context, orgID, callerID, targetID int64, role string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -418,5 +427,139 @@ func TestQR_Confirm_JoinOrg_AddMemberFails_Forbidden(t *testing.T) {
 	h.Confirm(cConfirm)
 	if wConfirm.Code != http.StatusForbidden {
 		t.Fatalf("confirm (AddMember failed) = %d; want 403 (body=%s)", wConfirm.Code, wConfirm.Body.String())
+	}
+}
+
+// ── Role whitelist + privilege non-escalation (Track D / A3.1) ──────────────
+//
+// These guard the confirm path, not session creation, because an admin who
+// loses their role mid-flight must not still be able to mint a membership.
+
+// TestQR_Confirm_JoinOrg_RejectsOwnerRole verifies that even an org owner
+// cannot grant role="owner" through a QR — ownership transfer is reserved
+// for the out-of-band flow.
+func TestQR_Confirm_JoinOrg_RejectsOwnerRole(t *testing.T) {
+	h, org, pub := setupQRWithOrg(t)
+	const ownerID, orgID, scannerID int64 = 99, 42, 777
+	org.seedMember(orgID, ownerID, "owner")
+
+	createBody := map[string]any{
+		"action": "join_org",
+		"params": map[string]any{"org_id": orgID, "role": "owner"},
+	}
+	cCreate, wCreate := postJSON(http.MethodPost, "/api/v2/qr/session/authed", createBody)
+	cCreate.Set("account_id", ownerID)
+	h.CreateSessionAuthed(cCreate)
+	if wCreate.Code != http.StatusOK {
+		t.Fatalf("create failed: %d %s", wCreate.Code, wCreate.Body.String())
+	}
+	create := decode(t, wCreate)
+	id := create["id"].(string)
+	_, _, tStr, sig := parsePayload(t, create["qr_payload"].(string))
+	issuedAt, _ := strconv.ParseInt(tStr, 10, 64)
+
+	cConfirm, wConfirm := postJSON(http.MethodPost, "/api/v2/qr/"+id+"/confirm",
+		map[string]any{"sig": sig, "t": issuedAt},
+		gin.Param{Key: "id", Value: id},
+	)
+	cConfirm.Set("account_id", scannerID)
+	h.Confirm(cConfirm)
+
+	if wConfirm.Code != http.StatusBadRequest {
+		t.Fatalf("confirm = %d; want 400 (body=%s)", wConfirm.Code, wConfirm.Body.String())
+	}
+	if got := decode(t, wConfirm)["error"]; got != "role_forbidden" {
+		t.Errorf("error = %v; want role_forbidden", got)
+	}
+	// AddMember must NOT have been called — the check fires before the store
+	// hit so a malicious payload cannot slip owner rows in on retry.
+	if org.lastAdd != nil {
+		t.Errorf("AddMember should not be called for role=owner; got %+v", org.lastAdd)
+	}
+	// No event either — the DB write never happened.
+	if pub.last() != nil {
+		t.Error("publishMemberJoined fired despite role_forbidden")
+	}
+}
+
+// TestQR_Confirm_JoinOrg_AdminCantGrantAdmin verifies the non-escalation
+// rule: an admin may mint join codes, but any role=admin they request is
+// rejected — only owners can promote to admin via QR.
+func TestQR_Confirm_JoinOrg_AdminCantGrantAdmin(t *testing.T) {
+	h, org, _ := setupQRWithOrg(t)
+	const adminID, orgID, scannerID int64 = 99, 42, 777
+	org.seedMember(orgID, adminID, "admin")
+
+	createBody := map[string]any{
+		"action": "join_org",
+		"params": map[string]any{"org_id": orgID, "role": "admin"},
+	}
+	cCreate, wCreate := postJSON(http.MethodPost, "/api/v2/qr/session/authed", createBody)
+	cCreate.Set("account_id", adminID)
+	h.CreateSessionAuthed(cCreate)
+	if wCreate.Code != http.StatusOK {
+		t.Fatalf("create failed: %d %s", wCreate.Code, wCreate.Body.String())
+	}
+	create := decode(t, wCreate)
+	id := create["id"].(string)
+	_, _, tStr, sig := parsePayload(t, create["qr_payload"].(string))
+	issuedAt, _ := strconv.ParseInt(tStr, 10, 64)
+
+	cConfirm, wConfirm := postJSON(http.MethodPost, "/api/v2/qr/"+id+"/confirm",
+		map[string]any{"sig": sig, "t": issuedAt},
+		gin.Param{Key: "id", Value: id},
+	)
+	cConfirm.Set("account_id", scannerID)
+	h.Confirm(cConfirm)
+
+	if wConfirm.Code != http.StatusBadRequest {
+		t.Fatalf("confirm = %d; want 400 (body=%s)", wConfirm.Code, wConfirm.Body.String())
+	}
+	if got := decode(t, wConfirm)["error"]; got != "role_forbidden" {
+		t.Errorf("error = %v; want role_forbidden", got)
+	}
+	if org.lastAdd != nil {
+		t.Errorf("AddMember should not be called; got %+v", org.lastAdd)
+	}
+}
+
+// TestQR_Confirm_JoinOrg_OwnerCanGrantAdmin is the complement to the
+// non-escalation test: owners ARE allowed to promote scanners to admin via
+// QR, so this path must return 200 and actually call AddMember.
+func TestQR_Confirm_JoinOrg_OwnerCanGrantAdmin(t *testing.T) {
+	h, org, _ := setupQRWithOrg(t)
+	const ownerID, orgID, scannerID int64 = 99, 42, 777
+	org.seedMember(orgID, ownerID, "owner")
+
+	createBody := map[string]any{
+		"action": "join_org",
+		"params": map[string]any{"org_id": orgID, "role": "admin"},
+	}
+	cCreate, wCreate := postJSON(http.MethodPost, "/api/v2/qr/session/authed", createBody)
+	cCreate.Set("account_id", ownerID)
+	h.CreateSessionAuthed(cCreate)
+	if wCreate.Code != http.StatusOK {
+		t.Fatalf("create failed: %d %s", wCreate.Code, wCreate.Body.String())
+	}
+	create := decode(t, wCreate)
+	id := create["id"].(string)
+	_, _, tStr, sig := parsePayload(t, create["qr_payload"].(string))
+	issuedAt, _ := strconv.ParseInt(tStr, 10, 64)
+
+	cConfirm, wConfirm := postJSON(http.MethodPost, "/api/v2/qr/"+id+"/confirm",
+		map[string]any{"sig": sig, "t": issuedAt},
+		gin.Param{Key: "id", Value: id},
+	)
+	cConfirm.Set("account_id", scannerID)
+	h.Confirm(cConfirm)
+
+	if wConfirm.Code != http.StatusOK {
+		t.Fatalf("confirm = %d; want 200 (body=%s)", wConfirm.Code, wConfirm.Body.String())
+	}
+	if got := decode(t, wConfirm)["role"]; got != "admin" {
+		t.Errorf("role = %v; want admin", got)
+	}
+	if org.lastAdd == nil || org.lastAdd.Role != "admin" || org.lastAdd.TargetID != scannerID {
+		t.Errorf("AddMember = %+v; want OrgID=%d Target=%d Role=admin", org.lastAdd, orgID, scannerID)
 	}
 }
