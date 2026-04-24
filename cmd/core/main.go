@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,8 +25,8 @@ import (
 
 	identitygrpc "github.com/hanmahong5-arch/lurus-platform/internal/adapter/grpc"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/handler"
-	identitynats "github.com/hanmahong5-arch/lurus-platform/internal/adapter/nats"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/handler/router"
+	identitynats "github.com/hanmahong5-arch/lurus-platform/internal/adapter/nats"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/repo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
@@ -36,12 +37,12 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/config"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/email"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/idempotency"
-	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/sms"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/lurusapi"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/sms"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tracing"
-	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/lurusapi"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/zitadel"
 	lurustemporal "github.com/hanmahong5-arch/lurus-platform/internal/temporal"
 	"github.com/hanmahong5-arch/lurus-platform/internal/temporal/activities"
@@ -396,16 +397,16 @@ func run(ctx context.Context, cfg *config.Config) error {
 	adminOpsH := handler.NewAdminOpsHandler(referralSvc)
 	reportH := handler.NewReportHandler(db)
 	adminConfigH := handler.NewAdminConfigHandler(adminConfigSvc)
-	wechatAuthH  := handler.NewWechatAuthHandler(accountSvc, cfg.WechatServerAddress, cfg.WechatServerToken, cfg.SessionSecret)
+	wechatAuthH := handler.NewWechatAuthHandler(accountSvc, cfg.WechatServerAddress, cfg.WechatServerToken, cfg.SessionSecret)
 	wechatOAuthH := handler.NewWechatOAuthHandler(cfg.WechatServerAddress, cfg.WechatServerToken, cfg.WechatOAuthClientSecret, rdb)
-	zloginH      := handler.NewZLoginHandler(accountSvc, accountRepo, cfg.ZitadelIssuer, cfg.ZitadelServiceAccountPAT, cfg.SessionSecret)
+	zloginH := handler.NewZLoginHandler(accountSvc, accountRepo, cfg.ZitadelIssuer, cfg.ZitadelServiceAccountPAT, cfg.SessionSecret)
 	registrationH := handler.NewRegistrationHandler(registrationSvc)
-	checkinH     := handler.NewCheckinHandler(checkinSvc)
-	orgH         := handler.NewOrganizationHandler(orgSvc)
+	checkinH := handler.NewCheckinHandler(checkinSvc)
+	orgH := handler.NewOrganizationHandler(orgSvc)
 	qrLoginH := handler.NewQRLoginHandler(rdb, cfg.SessionSecret)
 	// The v2 QR handler fans out to OrganizationService for action=join_org
 	// and (best-effort) to the NATS publisher for identity.org.member_joined.
-	qrH := handler.NewQRHandler(rdb, cfg.SessionSecret).WithOrgService(orgSvc)
+	qrH := handler.NewQRHandlerWithKeyring(rdb, cfg.SessionSecret, cfg.QRSigningKeys).WithOrgService(orgSvc)
 	if publisher != nil {
 		// Avoid the typed-nil-pointer-in-interface trap — only wire when
 		// NATS init actually succeeded. Without this check, h.publisher==nil
@@ -426,29 +427,30 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	engine := router.Build(router.Deps{
-		Accounts:      accountH,
-		Subscriptions: subH,
-		Wallets:       walletH,
-		Products:      productH,
-		Internal:      internalH,
-		Webhooks:      webhookH,
-		Invoices:      invoiceH,
-		Refunds:       refundH,
-		AdminOps:      adminOpsH,
-		Reports:       reportH,
-		AdminConfig:   adminConfigH,
-		WechatAuth:    wechatAuthH,
-		WechatOAuth:   wechatOAuthH,
-		ZLogin:        zloginH,
-		Registration:  registrationH,
-		Checkin:       checkinH,
-		Organizations: orgH,
-		QRLogin:       qrLoginH,
-		QR:            qrH,
-		NewAPIProxy:   newAPIProxyH,
-		InternalKey:   cfg.InternalAPIKey,
-		JWT:           jwtMiddleware,
-		RateLimit:     rateLimiter,
+		Accounts:          accountH,
+		Subscriptions:     subH,
+		Wallets:           walletH,
+		Products:          productH,
+		Internal:          internalH,
+		Webhooks:          webhookH,
+		Invoices:          invoiceH,
+		Refunds:           refundH,
+		AdminOps:          adminOpsH,
+		Reports:           reportH,
+		AdminConfig:       adminConfigH,
+		WechatAuth:        wechatAuthH,
+		WechatOAuth:       wechatOAuthH,
+		ZLogin:            zloginH,
+		Registration:      registrationH,
+		Checkin:           checkinH,
+		Organizations:     orgH,
+		QRLogin:           qrLoginH,
+		QR:                qrH,
+		NewAPIProxy:       newAPIProxyH,
+		InternalKey:       cfg.InternalAPIKey,
+		JWT:               jwtMiddleware,
+		RateLimit:         rateLimiter,
+		TrustedProxyCIDRs: parseCSVList(cfg.TrustedProxiesCIDRs),
 		ExtraMiddleware: []gin.HandlerFunc{
 			metrics.HTTPMiddleware(),
 			otelgin.Middleware(cfg.OtelServiceName),
@@ -564,6 +566,24 @@ func getEnvDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseCSVList splits a comma-separated list, trimming whitespace and dropping
+// empty entries. Returns nil when the input is empty so callers can detect
+// "no value configured" separately from "explicit empty list".
+func parseCSVList(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // readCertContent reads a certificate file from the given path.

@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -60,8 +62,18 @@ const (
 	qrMaxPollWait    = 30 * time.Second
 	qrPollInterval   = time.Second
 	qrLoginTTL       = 7 * 24 * time.Hour // session token TTL after login consume
-	qrPayloadHMACLen = 16                 // hex chars kept from HMAC-SHA256 (64 bits — enough for anti-tamper)
-	qrMaxUALength    = 256                // truncate user-agent so Redis value stays small
+	qrPayloadHMACLen = 24                 // hex chars kept from HMAC-SHA256 (96 bits — well beyond rate-limit-bounded brute force)
+	// qrLegacyHMACLen is the pre-B5 truncation length. Pinned to 16 hex chars
+	// (64 bits) because APPs built before 2026-04-24 shipped QRs signed at
+	// that length; widening qrPayloadHMACLen above did not change their sigs.
+	// Retained only until the 2026-06-01 legacy removal window.
+	qrLegacyHMACLen = 16
+	// qrHMACDomainSeparator is prepended to the HMAC input so a master secret
+	// that also signs JWTs cannot be confused across purposes. Zero bytes are
+	// already used between fields (id\0action\0t); the leading 0x01 marks
+	// "QR v2 payload" specifically.
+	qrHMACDomainSeparator = 0x01
+	qrMaxUALength         = 256 // truncate user-agent so Redis value stays small
 	// qrTimestampSkew tolerates small client/server clock drift when validating
 	// the issued-at (t) parameter. TTL + skew is the full replay window.
 	qrTimestampSkew = 30 * time.Second
@@ -70,10 +82,57 @@ const (
 	qrEventPublishTimeout = 2 * time.Second
 )
 
+// qrKeyring holds one or more HMAC secrets for QR payload signing. Signing
+// always uses the highest-kid key; verification accepts ANY key in the ring,
+// which lets operators rotate without dropping in-flight sessions: add a new
+// key (it becomes the signer), wait ≥TTL (5 min by default) for any QRs
+// signed with the old key to drain, then remove the old key from the ring.
+type qrKeyring struct {
+	keys []qrKeyEntry // ordered by kid ascending; last entry is current
+}
+
+type qrKeyEntry struct {
+	kid    string
+	secret []byte
+}
+
+// newQRKeyring builds a keyring. When `keysSpec` is non-empty it is parsed as
+// `kid:hex32[,kid:hex32...]`. Otherwise the function falls back to a single
+// key with kid "default" derived from `fallback`, preserving the single-secret
+// deployment mode. Returns an error only on malformed spec; empty fallback
+// with empty spec yields an empty ring (caller is responsible for rejecting).
+func newQRKeyring(keysSpec, fallback string) (*qrKeyring, error) {
+	kr := &qrKeyring{}
+	if s := strings.TrimSpace(keysSpec); s != "" {
+		for _, pair := range strings.Split(s, ",") {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			parts := strings.SplitN(pair, ":", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return nil, fmt.Errorf("qr keyring: malformed entry %q (want kid:secret)", pair)
+			}
+			kr.keys = append(kr.keys, qrKeyEntry{kid: parts[0], secret: []byte(parts[1])})
+		}
+		sort.Slice(kr.keys, func(i, j int) bool { return kr.keys[i].kid < kr.keys[j].kid })
+		return kr, nil
+	}
+	if fallback != "" {
+		kr.keys = append(kr.keys, qrKeyEntry{kid: "default", secret: []byte(fallback)})
+	}
+	return kr, nil
+}
+
+// current returns the active signing key (highest kid). Never called when the
+// ring is empty because handler construction validates non-empty.
+func (k *qrKeyring) current() qrKeyEntry { return k.keys[len(k.keys)-1] }
+
 // QRHandler owns the v2 QR primitive.
 type QRHandler struct {
 	rdb           *redis.Client
-	sessionSecret string           // signs payload HMAC and issued session tokens
+	keyring       *qrKeyring
+	sessionSecret string           // retained for auth.IssueSessionToken (login action)
 	now           func() time.Time // injectable for deterministic tests
 	// orgService is required for action=join_org (both create and confirm).
 	// nil when wiring has not yet set it — those code paths error out at 501
@@ -84,11 +143,27 @@ type QRHandler struct {
 	publisher QREventPublisher
 }
 
-// NewQRHandler wires a handler. sessionSecret must be the same secret used by
-// auth.IssueSessionToken (already validated ≥32 bytes at boot by Config.Validate).
+// NewQRHandler wires a handler. sessionSecret signs login-action JWTs and
+// also feeds the QR signing keyring as a single-key fallback when
+// QR_SIGNING_KEYS is unset.
 func NewQRHandler(rdb *redis.Client, sessionSecret string) *QRHandler {
+	return NewQRHandlerWithKeyring(rdb, sessionSecret, "")
+}
+
+// NewQRHandlerWithKeyring is the explicit form accepting a QR_SIGNING_KEYS
+// spec (`kid:hex32[,kid:hex32...]`). Pass an empty spec to use sessionSecret
+// as a single implicit key (kid "default").
+func NewQRHandlerWithKeyring(rdb *redis.Client, sessionSecret, keysSpec string) *QRHandler {
+	kr, err := newQRKeyring(keysSpec, sessionSecret)
+	if err != nil {
+		// Fail loud at construction so bad config surfaces at boot, not on
+		// the first QR request. main.go already validates Config — this
+		// branch catches spec drift after Config.Load succeeded.
+		panic(fmt.Sprintf("qr: invalid QR_SIGNING_KEYS: %v", err))
+	}
 	return &QRHandler{
 		rdb:           rdb,
+		keyring:       kr,
 		sessionSecret: sessionSecret,
 		now:           time.Now,
 	}
@@ -180,7 +255,7 @@ func (h *QRHandler) CreateSession(c *gin.Context) {
 		Params:    req.Params,
 		Status:    entity.QRStatusPending,
 		CreatedAt: issuedAt,
-		IP:        clientIP(c),
+		IP:        c.ClientIP(),
 		UA:        truncate(c.GetHeader("User-Agent"), qrMaxUALength),
 	}
 
@@ -327,7 +402,7 @@ func (h *QRHandler) CreateSessionAuthed(c *gin.Context) {
 		Status:    entity.QRStatusPending,
 		CreatedBy: callerID,
 		CreatedAt: issuedAt,
-		IP:        clientIP(c),
+		IP:        c.ClientIP(),
 		UA:        truncate(c.GetHeader("User-Agent"), qrMaxUALength),
 	}
 
@@ -734,20 +809,17 @@ func (h *QRHandler) buildPayload(id string, action entity.QRAction, issuedAt tim
 	return fmt.Sprintf("lurus://qr?v=1&id=%s&a=%s&t=%d&h=%s", id, action, t, sig)
 }
 
-// payloadSig is the current (B5+) HMAC over id|action|issued_at.
+// payloadSig signs id|action|issued_at with the keyring's current (highest-kid)
+// key. The 0x01 domain-separator byte prevents cross-purpose confusion if the
+// same master secret is ever reused for JWT or other HMAC primitives.
 func (h *QRHandler) payloadSig(id string, action entity.QRAction, issuedAt int64) string {
-	mac := hmac.New(sha256.New, []byte(h.sessionSecret))
-	mac.Write([]byte(id))
-	mac.Write([]byte{0})
-	mac.Write([]byte(action))
-	mac.Write([]byte{0})
-	mac.Write([]byte(strconv.FormatInt(issuedAt, 10)))
-	return hex.EncodeToString(mac.Sum(nil))[:qrPayloadHMACLen]
+	return hmacHex(h.keyring.current().secret, id, action, issuedAt)
 }
 
-// verifyPayloadSig validates a B5+ signature. Rejects when `t` is outside the
-// allowed window (TTL + small clock-skew buffer) so screenshot replay cannot
-// succeed even if the server Redis record somehow outlives its TTL.
+// verifyPayloadSig validates a B5+ signature, trying each key in the keyring.
+// Rejects when `t` is outside the allowed window (TTL + small clock-skew
+// buffer) so screenshot replay cannot succeed even if the server Redis
+// record somehow outlives its TTL.
 func (h *QRHandler) verifyPayloadSig(id string, action entity.QRAction, issuedAt int64, got string) bool {
 	// Bound the signing timestamp inside (issued_at - skew, issued_at + TTL + skew)
 	// around now. The upper bound protects against replay; the lower bound
@@ -760,33 +832,57 @@ func (h *QRHandler) verifyPayloadSig(id string, action entity.QRAction, issuedAt
 	if issuedAt-now > int64(qrTimestampSkew.Seconds()) {
 		return false
 	}
-	want := h.payloadSig(id, action, issuedAt)
-	// Constant-time compare — id/action/t are known to the attacker but we
-	// shouldn't let timing leak whether an incorrect candidate was close.
-	return hmac.Equal([]byte(want), []byte(got))
+	// Try every key in the ring so mid-rotation sessions still validate.
+	// hmac.Equal is constant-time per comparison; the total runtime leaks
+	// only the keyring size, which is a static operational parameter.
+	gotBytes := []byte(got)
+	matched := false
+	for _, k := range h.keyring.keys {
+		want := hmacHex(k.secret, id, action, issuedAt)
+		if hmac.Equal([]byte(want), gotBytes) {
+			matched = true
+		}
+	}
+	return matched
+}
+
+// hmacHex is the shared signing primitive. Format:
+//
+//	0x01 || id || 0x00 || action || 0x00 || decimal(issuedAt)
+//
+// The 0x01 prefix is a domain separator (see qrHMACDomainSeparator); the
+// 0x00 bytes between fields prevent concatenation ambiguity.
+func hmacHex(secret []byte, id string, action entity.QRAction, issuedAt int64) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte{qrHMACDomainSeparator})
+	mac.Write([]byte(id))
+	mac.Write([]byte{0})
+	mac.Write([]byte(action))
+	mac.Write([]byte{0})
+	mac.Write([]byte(strconv.FormatInt(issuedAt, 10)))
+	return hex.EncodeToString(mac.Sum(nil))[:qrPayloadHMACLen]
 }
 
 // payloadSigLegacy is the pre-B5 HMAC over id|action only. Retained solely
 // for backward compatibility with APP builds that do not yet echo `t` on
 // confirm. Scheduled for removal on 2026-06-01 (see qrConfirmRequest.T TODO).
-func (h *QRHandler) payloadSigLegacy(id string, action entity.QRAction) string {
-	mac := hmac.New(sha256.New, []byte(h.sessionSecret))
-	mac.Write([]byte(id))
-	mac.Write([]byte{0})
-	mac.Write([]byte(action))
-	return hex.EncodeToString(mac.Sum(nil))[:qrPayloadHMACLen]
-}
-
+// Tries each key in the ring so a key rotation during the legacy window is
+// still consistent with the B5 verification path.
 func (h *QRHandler) verifyPayloadSigLegacy(id string, action entity.QRAction, got string) bool {
-	want := h.payloadSigLegacy(id, action)
-	return hmac.Equal([]byte(want), []byte(got))
-}
-
-func clientIP(c *gin.Context) string {
-	if ip := c.GetHeader("X-Forwarded-For"); ip != "" {
-		return ip
+	gotBytes := []byte(got)
+	matched := false
+	for _, k := range h.keyring.keys {
+		mac := hmac.New(sha256.New, k.secret)
+		mac.Write([]byte(id))
+		mac.Write([]byte{0})
+		mac.Write([]byte(action))
+		// Pin to qrLegacyHMACLen (16) — pre-B5 APPs signed at that truncation.
+		want := hex.EncodeToString(mac.Sum(nil))[:qrLegacyHMACLen]
+		if hmac.Equal([]byte(want), gotBytes) {
+			matched = true
+		}
 	}
-	return c.ClientIP()
+	return matched
 }
 
 func truncate(s string, n int) string {

@@ -106,7 +106,7 @@ func TestQR_Create_Login_HappyPath(t *testing.T) {
 	}
 	payload, _ := resp["qr_payload"].(string)
 	gotID, gotAction, gotT, sig := parsePayload(t, payload)
-	if gotID != id || gotAction != "login" || len(sig) != 16 {
+	if gotID != id || gotAction != "login" || len(sig) != 24 {
 		t.Errorf("payload mismatch: id=%q a=%q sig=%q", gotID, gotAction, sig)
 	}
 	if gotT == "" {
@@ -496,14 +496,16 @@ func legacyHMACSig(secret, id, action string) string {
 
 // currentHMACSig reproduces the B5 id|action|t HMAC used by the
 // expired-timestamp test to synthesize a "valid MAC but stale t" input.
+// Domain-separator byte (0x01) + 24-hex truncation must match handler.hmacHex.
 func currentHMACSig(secret, id, action string, issuedAt int64) string {
 	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte{0x01})
 	mac.Write([]byte(id))
 	mac.Write([]byte{0})
 	mac.Write([]byte(action))
 	mac.Write([]byte{0})
 	mac.Write([]byte(strconv.FormatInt(issuedAt, 10)))
-	return hex.EncodeToString(mac.Sum(nil))[:16]
+	return hex.EncodeToString(mac.Sum(nil))[:24]
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -532,5 +534,90 @@ func createLoginSessionWithSig(t *testing.T, h *handler.QRHandler) (id, sig stri
 	return id, sig, issuedAt
 }
 
-// defeat 'unused import' linter when miniredis/context paths narrow.
+// ── Keyring rotation (R1.2) ────────────────────────────────────────────────
+
+// TestQR_Keyring_Rotation_OldKeyStillValid proves that a QR minted while the
+// ring holds {k1} can be verified by a pod holding {k1, k2}, and that a QR
+// minted by {k1, k2} (current=k2) fails against a pod that has rotated to
+// {k2} only. This is the mid-rotation invariant we rely on: add a new key,
+// wait ≥TTL, then drop the old one.
+func TestQR_Keyring_Rotation_OldKeyStillValid(t *testing.T) {
+	const (
+		k1 = "00000000000000000000000000000001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		k2 = "99999999999999999999999999999999bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	gin.SetMode(gin.TestMode)
+
+	hOld := handler.NewQRHandlerWithKeyring(rdb, qrTestSecret, "k1:"+k1)           // pre-rotation
+	hMid := handler.NewQRHandlerWithKeyring(rdb, qrTestSecret, "k1:"+k1+",k2:"+k2) // during
+	hNew := handler.NewQRHandlerWithKeyring(rdb, qrTestSecret, "k2:"+k2)           // post
+
+	// 1. Old handler mints → sig signed under k1. Mid handler (has k1+k2) accepts.
+	id1, sig1, t1 := mintAndExtractPayload(t, hOld)
+	if !confirmAccepts(t, hMid, id1, sig1, t1) {
+		t.Error("mid-rotation pod must accept sig signed under k1 (still in ring)")
+	}
+
+	// 2. Old handler mints fresh session. New handler (only k2) rejects it.
+	id2, sig2, t2 := mintAndExtractPayload(t, hOld)
+	if confirmAccepts(t, hNew, id2, sig2, t2) {
+		t.Error("post-rotation pod must REJECT sig signed under removed k1")
+	}
+
+	// 3. Inverse: sig signed by k2 (current on hNew) verifies on hMid.
+	id3, sig3, t3 := mintAndExtractPayload(t, hNew)
+	if !confirmAccepts(t, hMid, id3, sig3, t3) {
+		t.Error("mid-rotation pod must accept sig signed under k2")
+	}
+}
+
+// TestQR_Keyring_MalformedSpec_Panics catches config-drift cases where the
+// env var value is syntactically invalid. Better to fail at boot than at
+// first user request.
+func TestQR_Keyring_MalformedSpec_Panics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on malformed QR_SIGNING_KEYS")
+		}
+	}()
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	_ = handler.NewQRHandlerWithKeyring(rdb, qrTestSecret, "no-colon-anywhere")
+}
+
+// mintAndExtractPayload creates a session via the given handler and returns
+// (id, sig, issuedAt) extracted from the QR payload string. Caller can then
+// feed this triple to any other handler to assert whether its keyring accepts
+// the signature.
+func mintAndExtractPayload(t *testing.T, h *handler.QRHandler) (string, string, int64) {
+	t.Helper()
+	c, w := postJSON("POST", "/api/v2/qr/session", map[string]any{"action": "login"})
+	h.CreateSession(c)
+	if w.Code != 200 {
+		t.Fatalf("create session: %d %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	id, _, tStr, sig := parsePayload(t, resp["qr_payload"].(string))
+	issuedAt, _ := strconv.ParseInt(tStr, 10, 64)
+	return id, sig, issuedAt
+}
+
+// confirmAccepts posts to Confirm and returns true iff the handler returned
+// 200. account_id is injected directly (bypassing JWT middleware in tests).
+func confirmAccepts(t *testing.T, h *handler.QRHandler, id, sig string, tUnix int64) bool {
+	t.Helper()
+	c, w := postJSON("POST", "/api/v2/qr/"+id+"/confirm",
+		map[string]any{"sig": sig, "t": tUnix},
+		gin.Param{Key: "id", Value: id},
+	)
+	c.Set("account_id", int64(42))
+	h.Confirm(c)
+	return w.Code == 200
+}
+
 var _ = context.Background

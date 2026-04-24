@@ -17,42 +17,60 @@ import (
 
 // Deps holds all handler dependencies injected at startup.
 type Deps struct {
-	Accounts      *handler.AccountHandler
-	Subscriptions *handler.SubscriptionHandler
-	Wallets       *handler.WalletHandler
-	Products      *handler.ProductHandler
-	Internal      *handler.InternalHandler
-	Webhooks      *handler.WebhookHandler
-	Invoices      *handler.InvoiceHandler
-	Refunds       *handler.RefundHandler
-	AdminOps      *handler.AdminOpsHandler
-	Reports       *handler.ReportHandler
-	AdminConfig   *handler.AdminConfigHandler
-	WechatAuth    *handler.WechatAuthHandler        // nil when WeChat login is not configured
-	WechatOAuth   *handler.WechatOAuthHandler       // nil when WeChat OAuth2 adapter is not configured
-	ZLogin        *handler.ZLoginHandler            // nil when custom OIDC login is not configured
-	Registration  *handler.RegistrationHandler      // nil when registration is not configured
-	Checkin       *handler.CheckinHandler           // daily check-in
-	Organizations *handler.OrganizationHandler      // organization management
-	QRLogin         *handler.QRLoginHandler            // v1 QR login (login-only, legacy)
-	QR              *handler.QRHandler                 // v2 multi-action QR primitive (login → join_org/delegate pending)
-	NewAPIProxy     *handler.NewAPIProxyHandler       // nil when newapi proxy is not configured
-	ServiceKeyAdmin *handler.AdminServiceKeyHandler  // nil when service key management not wired
-	InternalKey     string                            // legacy INTERNAL_API_KEY (fallback during migration)
-	ServiceKeys     *app.ServiceKeyStore              // scoped service key resolver (nil = legacy-only mode)
-	JWT           *auth.JWTMiddleware
-	RateLimit     *ratelimit.Limiter
-	ExtraMiddleware []gin.HandlerFunc               // metrics, tracing, etc. (applied before routes)
+	Accounts        *handler.AccountHandler
+	Subscriptions   *handler.SubscriptionHandler
+	Wallets         *handler.WalletHandler
+	Products        *handler.ProductHandler
+	Internal        *handler.InternalHandler
+	Webhooks        *handler.WebhookHandler
+	Invoices        *handler.InvoiceHandler
+	Refunds         *handler.RefundHandler
+	AdminOps        *handler.AdminOpsHandler
+	Reports         *handler.ReportHandler
+	AdminConfig     *handler.AdminConfigHandler
+	WechatAuth      *handler.WechatAuthHandler      // nil when WeChat login is not configured
+	WechatOAuth     *handler.WechatOAuthHandler     // nil when WeChat OAuth2 adapter is not configured
+	ZLogin          *handler.ZLoginHandler          // nil when custom OIDC login is not configured
+	Registration    *handler.RegistrationHandler    // nil when registration is not configured
+	Checkin         *handler.CheckinHandler         // daily check-in
+	Organizations   *handler.OrganizationHandler    // organization management
+	QRLogin         *handler.QRLoginHandler         // v1 QR login (login-only, legacy)
+	QR              *handler.QRHandler              // v2 multi-action QR primitive (login → join_org/delegate pending)
+	NewAPIProxy     *handler.NewAPIProxyHandler     // nil when newapi proxy is not configured
+	ServiceKeyAdmin *handler.AdminServiceKeyHandler // nil when service key management not wired
+	InternalKey     string                          // legacy INTERNAL_API_KEY (fallback during migration)
+	ServiceKeys     *app.ServiceKeyStore            // scoped service key resolver (nil = legacy-only mode)
+	JWT             *auth.JWTMiddleware
+	RateLimit       *ratelimit.Limiter
+	ExtraMiddleware []gin.HandlerFunc // metrics, tracing, etc. (applied before routes)
+
+	// TrustedProxyCIDRs restricts which X-Forwarded-For headers Gin's
+	// c.ClientIP() will honour. Empty slice = trust nothing (safe default
+	// only when no reverse-proxy sits in front). Ingresses are usually
+	// in cluster private ranges.
+	TrustedProxyCIDRs []string
 }
 
 // Build constructs and returns the root Gin engine.
 func Build(deps Deps) *gin.Engine {
 	r := gin.New()
-	r.Use(slogctx.Middleware())                                      // Assign request_id early for log correlation.
+
+	// Configure which upstream proxies may set X-Forwarded-For. Without this
+	// Gin trusts every client's self-declared X-Forwarded-For, which makes
+	// ratelimit.PerIP trivially bypassable and pollutes audit logs with
+	// attacker-chosen addresses. Empty CIDR list ⇒ trust nothing (direct
+	// connections only).
+	if len(deps.TrustedProxyCIDRs) == 0 {
+		_ = r.SetTrustedProxies(nil)
+	} else {
+		_ = r.SetTrustedProxies(deps.TrustedProxyCIDRs)
+	}
+
+	r.Use(slogctx.Middleware()) // Assign request_id early for log correlation.
 	r.Use(gin.Logger())
-	r.Use(gin.Recovery())                                            // Catch panics, return 500 instead of crash.
-	r.Use(handler.MaxBodySize(handler.DefaultMaxRequestBodyBytes))   // Reject >2 MB request bodies (413).
-	r.Use(handler.RequestTimeout(handler.DefaultRequestTimeout))     // Cancel stuck requests after 30s (504).
+	r.Use(gin.Recovery())                                          // Catch panics, return 500 instead of crash.
+	r.Use(handler.MaxBodySize(handler.DefaultMaxRequestBodyBytes)) // Reject >2 MB request bodies (413).
+	r.Use(handler.RequestTimeout(handler.DefaultRequestTimeout))   // Cancel stuck requests after 30s (504).
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"https://admin.lurus.cn", "https://identity.lurus.cn", "https://auth.lurus.cn", "https://lucrum.lurus.cn", "https://www.lurus.cn"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -335,11 +353,11 @@ func Build(deps Deps) *gin.Engine {
 		webhooks.Use(deps.RateLimit.PerIP())
 	}
 	{
-		webhooks.GET("/epay", deps.Webhooks.EpayNotify)     // 易支付 uses GET callbacks
+		webhooks.GET("/epay", deps.Webhooks.EpayNotify) // 易支付 uses GET callbacks
 		webhooks.POST("/stripe", deps.Webhooks.StripeWebhook)
 		webhooks.POST("/creem", deps.Webhooks.CreemWebhook)
-		webhooks.POST("/alipay", deps.Webhooks.AlipayNotify)      // Alipay async notification
-		webhooks.POST("/wechat", deps.Webhooks.WechatPayNotify)   // WeChat Pay v3 notification
+		webhooks.POST("/alipay", deps.Webhooks.AlipayNotify)         // Alipay async notification
+		webhooks.POST("/wechat", deps.Webhooks.WechatPayNotify)      // WeChat Pay v3 notification
 		webhooks.POST("/worldfirst", deps.Webhooks.WorldFirstNotify) // WorldFirst (万里汇) notification
 	}
 
