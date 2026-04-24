@@ -211,18 +211,18 @@ func Load() (*Config, error) {
 		// ShutdownTimeout must exceed qrMaxPollWait (30s) by a healthy margin so
 		// in-flight QR long-poll connections can drain naturally on SIGTERM rather
 		// than being torn down mid-poll and returning a spurious 5xx to the client.
-		ShutdownTimeout:          parseDuration("SHUTDOWN_TIMEOUT", 45*time.Second),
-		CacheEntitlementTTL:      parseDuration("CACHE_ENTITLEMENT_TTL", 5*time.Minute),
-		NewAPIInternalURL:        getEnv("NEWAPI_INTERNAL_URL", ""),
-		NewAPIAdminAccessToken:   getEnv("NEWAPI_ADMIN_ACCESS_TOKEN", ""),
-		NewAPIAdminUserID:        getEnv("NEWAPI_ADMIN_USER_ID", ""),
-		LurusAPIInternalURL:      getEnv("LURUS_API_INTERNAL_URL", "http://lurus-api.lurus-system.svc:8850"),
-		LurusAPIInternalKey:      getEnv("LURUS_API_INTERNAL_KEY", ""),
-		SMSProvider:              getEnv("SMS_PROVIDER", ""),
-		OtelEndpoint:             getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-		OtelServiceName:          getEnv("OTEL_SERVICE_NAME", "lurus-platform"),
-		TemporalHostPort:         getEnv("TEMPORAL_HOST_PORT", ""),
-		TemporalNamespace:        getEnv("TEMPORAL_NAMESPACE", "default"),
+		ShutdownTimeout:        parseDuration("SHUTDOWN_TIMEOUT", 45*time.Second),
+		CacheEntitlementTTL:    parseDuration("CACHE_ENTITLEMENT_TTL", 5*time.Minute),
+		NewAPIInternalURL:      getEnv("NEWAPI_INTERNAL_URL", ""),
+		NewAPIAdminAccessToken: getEnv("NEWAPI_ADMIN_ACCESS_TOKEN", ""),
+		NewAPIAdminUserID:      getEnv("NEWAPI_ADMIN_USER_ID", ""),
+		LurusAPIInternalURL:    getEnv("LURUS_API_INTERNAL_URL", "http://lurus-api.lurus-system.svc:8850"),
+		LurusAPIInternalKey:    getEnv("LURUS_API_INTERNAL_KEY", ""),
+		SMSProvider:            getEnv("SMS_PROVIDER", ""),
+		OtelEndpoint:           getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OtelServiceName:        getEnv("OTEL_SERVICE_NAME", "lurus-platform"),
+		TemporalHostPort:       getEnv("TEMPORAL_HOST_PORT", ""),
+		TemporalNamespace:      getEnv("TEMPORAL_NAMESPACE", "default"),
 	}
 
 	if err := cfg.Validate(); err != nil {

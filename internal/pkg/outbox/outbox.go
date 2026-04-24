@@ -283,7 +283,7 @@ func detachContext(parent context.Context) context.Context {
 
 type detached struct{ parent context.Context }
 
-func (d detached) Deadline() (time.Time, bool)  { return time.Time{}, false }
-func (d detached) Done() <-chan struct{}        { return nil }
-func (d detached) Err() error                   { return nil }
-func (d detached) Value(k any) any              { return d.parent.Value(k) }
+func (d detached) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (d detached) Done() <-chan struct{}       { return nil }
+func (d detached) Err() error                  { return nil }
+func (d detached) Value(k any) any             { return d.parent.Value(k) }
