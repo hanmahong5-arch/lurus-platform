@@ -546,9 +546,16 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return nil
 	})
 
-	// Graceful shutdown trigger
+	// Graceful shutdown trigger. The grace window must exceed the 30s QR
+	// long-poll cap (see qrMaxPollWait) so in-flight long polls can return
+	// naturally instead of being severed mid-flight. gRPC shutdown piggybacks
+	// on gctx cancellation inside identitygrpc.Server.ListenAndServe.
 	g.Go(func() error {
 		<-gctx.Done()
+		slog.Info("http: draining long-poll connections before shutdown",
+			"timeout", cfg.ShutdownTimeout,
+			"long_poll_cap", "30s",
+		)
 		shutCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		return srv.Shutdown(shutCtx)

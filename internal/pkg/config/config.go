@@ -208,7 +208,10 @@ func Load() (*Config, error) {
 		EmailSMTPUser:            getEnv("EMAIL_SMTP_USER", ""),
 		EmailSMTPPass:            getEnv("EMAIL_SMTP_PASS", ""),
 		EmailFrom:                getEnv("EMAIL_FROM", ""),
-		ShutdownTimeout:          parseDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
+		// ShutdownTimeout must exceed qrMaxPollWait (30s) by a healthy margin so
+		// in-flight QR long-poll connections can drain naturally on SIGTERM rather
+		// than being torn down mid-poll and returning a spurious 5xx to the client.
+		ShutdownTimeout:          parseDuration("SHUTDOWN_TIMEOUT", 45*time.Second),
 		CacheEntitlementTTL:      parseDuration("CACHE_ENTITLEMENT_TTL", 5*time.Minute),
 		NewAPIInternalURL:        getEnv("NEWAPI_INTERNAL_URL", ""),
 		NewAPIAdminAccessToken:   getEnv("NEWAPI_ADMIN_ACCESS_TOKEN", ""),
