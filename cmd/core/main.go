@@ -33,12 +33,14 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/buildinfo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/cache"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/config"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/email"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/idempotency"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/lurusapi"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/outbox"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/sms"
@@ -78,6 +80,16 @@ func main() {
 }
 
 func run(ctx context.Context, cfg *config.Config) error {
+	// Log the build provenance as the very first line so an operator can
+	// correlate a crash-looping pod, a trace, or a support ticket with an
+	// exact ghcr.io/.../lurus-platform-core:main-<sha7> image.
+	bi := buildinfo.Get()
+	slog.Info("lurus-platform build",
+		"sha", bi.SHA,
+		"built_at", bi.BuiltAt,
+		"env", cfg.Env,
+	)
+
 	// --- OpenTelemetry tracing ---
 	tracingShutdown, err := tracing.Init(ctx, cfg.OtelServiceName, cfg.OtelEndpoint)
 	if err != nil {
@@ -204,9 +216,21 @@ func run(ctx context.Context, cfg *config.Config) error {
 	slog.Info("module registry initialized", "hooks", registry.HookCount())
 
 	// --- NATS Publisher (non-fatal: degrade gracefully if NATS unavailable) ---
-	publisher, err := identitynats.NewPublisher(nc)
+	// Wrap the raw publisher with the DLQ-monitored outbox so transient NATS
+	// outages cause events to be parked in a Redis DLQ list rather than
+	// silently dropped. Downstream consumers (qr_handler, refund_service,
+	// temporal activities) see an interface-compatible Publisher and need no
+	// code change. When NATS init fails we still install the outbox with a
+	// nil upstream so all events go straight to the DLQ until NATS recovers.
+	natsPub, err := identitynats.NewPublisher(nc)
 	if err != nil {
-		slog.Warn("nats publisher init failed, event publishing disabled", "err", err)
+		slog.Warn("nats publisher init failed, events will be parked in DLQ", "err", err)
+	}
+	var publisher *outbox.DLQPublisher
+	if natsPub != nil {
+		publisher = outbox.New(natsPub, rdb, outbox.Config{})
+	} else {
+		publisher = outbox.New(nil, rdb, outbox.Config{})
 	}
 	refundSvc := app.NewRefundService(refundRepo, walletRepo, publisher, nil).WithSubscriptionCanceller(subSvc)
 
@@ -546,9 +570,16 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return nil
 	})
 
-	// Graceful shutdown trigger
+	// Graceful shutdown trigger. The grace window must exceed the 30s QR
+	// long-poll cap (see qrMaxPollWait) so in-flight long polls can return
+	// naturally instead of being severed mid-flight. gRPC shutdown piggybacks
+	// on gctx cancellation inside identitygrpc.Server.ListenAndServe.
 	g.Go(func() error {
 		<-gctx.Done()
+		slog.Info("http: draining long-poll connections before shutdown",
+			"timeout", cfg.ShutdownTimeout,
+			"long_poll_cap", "30s",
+		)
 		shutCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		defer cancel()
 		return srv.Shutdown(shutCtx)

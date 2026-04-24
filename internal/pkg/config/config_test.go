@@ -32,7 +32,7 @@ func setEnv(t *testing.T, kvs map[string]string) {
 func requiredEnvs() map[string]string {
 	return map[string]string{
 		"DATABASE_DSN":     "postgres://test:test@localhost/test",
-		"ZITADEL_ISSUER":  "https://auth.example.com",
+		"ZITADEL_ISSUER":   "https://auth.example.com",
 		"ZITADEL_JWKS_URL": "https://auth.example.com/oauth/v2/keys",
 		"INTERNAL_API_KEY": "test-internal-key",
 		"SESSION_SECRET":   "dGVzdC1zZXNzaW9uLXNlY3JldC1rZXktMzItYnl0ZXMh", // "test-session-secret-key-32-bytes!" base64
@@ -80,7 +80,7 @@ func TestConfig_Load_DefaultValues(t *testing.T) {
 		{"RateLimitIPPerMinute", cfg.RateLimitIPPerMinute, 120},
 		{"RateLimitUserPerMinute", cfg.RateLimitUserPerMinute, 300},
 		{"GracePeriodDays", cfg.GracePeriodDays, 3},
-		{"ShutdownTimeout", cfg.ShutdownTimeout, 30 * time.Second},
+		{"ShutdownTimeout", cfg.ShutdownTimeout, 45 * time.Second},
 		{"CacheEntitlementTTL", cfg.CacheEntitlementTTL, 5 * time.Minute},
 		{"EmailSMTPPort", cfg.EmailSMTPPort, 587},
 		{"OtelServiceName", cfg.OtelServiceName, "lurus-platform"},
@@ -155,8 +155,8 @@ func TestConfig_Load_InvalidDuration_UsesDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.ShutdownTimeout != 30*time.Second {
-		t.Errorf("invalid SHUTDOWN_TIMEOUT should use default 30s, got %v", cfg.ShutdownTimeout)
+	if cfg.ShutdownTimeout != 45*time.Second {
+		t.Errorf("invalid SHUTDOWN_TIMEOUT should use default 45s, got %v", cfg.ShutdownTimeout)
 	}
 }
 
@@ -238,6 +238,31 @@ var errNilConfig = errorString("Load() returned nil config")
 type errorString string
 
 func (e errorString) Error() string { return string(e) }
+
+// TestConfig_Load_ShutdownTimeout_ExceedsLongPollCap verifies that the default
+// shutdown grace period is strictly greater than the 30s QR long-poll cap so
+// in-flight long polls can complete naturally during a rolling restart.
+func TestConfig_Load_ShutdownTimeout_ExceedsLongPollCap(t *testing.T) {
+	setEnv(t, requiredEnvs())
+	os.Unsetenv("SHUTDOWN_TIMEOUT")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// qrMaxPollWait in internal/adapter/handler/qr_handler.go is 30s. Shutdown
+	// must exceed that by a healthy margin (≥15s) so even a poll that just
+	// started when SIGTERM arrived has time to return naturally.
+	const longPollCap = 30 * time.Second
+	if cfg.ShutdownTimeout <= longPollCap {
+		t.Errorf("ShutdownTimeout (%v) must exceed long-poll cap (%v)", cfg.ShutdownTimeout, longPollCap)
+	}
+	if cfg.ShutdownTimeout < longPollCap+15*time.Second {
+		t.Errorf("ShutdownTimeout (%v) should leave ≥15s margin over long-poll cap (%v)",
+			cfg.ShutdownTimeout, longPollCap)
+	}
+}
 
 // TestConfig_OptionalPaymentFields verifies payment-related optional fields default to empty.
 func TestConfig_OptionalPaymentFields(t *testing.T) {
