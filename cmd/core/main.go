@@ -39,6 +39,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/idempotency"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/lurusapi"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/outbox"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/sms"
@@ -204,9 +205,21 @@ func run(ctx context.Context, cfg *config.Config) error {
 	slog.Info("module registry initialized", "hooks", registry.HookCount())
 
 	// --- NATS Publisher (non-fatal: degrade gracefully if NATS unavailable) ---
-	publisher, err := identitynats.NewPublisher(nc)
+	// Wrap the raw publisher with the DLQ-monitored outbox so transient NATS
+	// outages cause events to be parked in a Redis DLQ list rather than
+	// silently dropped. Downstream consumers (qr_handler, refund_service,
+	// temporal activities) see an interface-compatible Publisher and need no
+	// code change. When NATS init fails we still install the outbox with a
+	// nil upstream so all events go straight to the DLQ until NATS recovers.
+	natsPub, err := identitynats.NewPublisher(nc)
 	if err != nil {
-		slog.Warn("nats publisher init failed, event publishing disabled", "err", err)
+		slog.Warn("nats publisher init failed, events will be parked in DLQ", "err", err)
+	}
+	var publisher *outbox.DLQPublisher
+	if natsPub != nil {
+		publisher = outbox.New(natsPub, rdb, outbox.Config{})
+	} else {
+		publisher = outbox.New(nil, rdb, outbox.Config{})
 	}
 	refundSvc := app.NewRefundService(refundRepo, walletRepo, publisher, nil).WithSubscriptionCanceller(subSvc)
 
