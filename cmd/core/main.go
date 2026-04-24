@@ -42,6 +42,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/outbox"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/readiness"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/sms"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tracing"
@@ -452,6 +453,16 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("newapi admin proxy enabled", "target", cfg.NewAPIInternalURL)
 	}
 
+	// Readiness probe set — wired with the live infra clients so /readyz
+	// actively verifies each dependency per request. NATSChecker tolerates
+	// a nil conn (when init above failed), so a partially-up pod still
+	// reports Postgres/Redis correctly.
+	readinessSet := readiness.NewSet(
+		readiness.RedisChecker(rdb),
+		readiness.PostgresChecker(sqlDB),
+		readiness.NATSChecker(nc),
+	)
+
 	engine := router.Build(router.Deps{
 		Accounts:          accountH,
 		Subscriptions:     subH,
@@ -477,6 +488,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		JWT:               jwtMiddleware,
 		RateLimit:         rateLimiter,
 		TrustedProxyCIDRs: parseCSVList(cfg.TrustedProxiesCIDRs),
+		Readiness:         readinessSet,
 		ExtraMiddleware: []gin.HandlerFunc{
 			metrics.HTTPMiddleware(),
 			otelgin.Middleware(cfg.OtelServiceName),

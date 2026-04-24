@@ -87,6 +87,22 @@ func (s *OrganizationService) IsOwnerOrAdmin(ctx context.Context, orgID, callerI
 	return m.Role == "owner" || m.Role == "admin", nil
 }
 
+// GetCallerRole returns the caller's specific role in the organization, or
+// "" when there is no membership row. Callers that only need the boolean
+// owner/admin answer should prefer IsOwnerOrAdmin; this is for flows that
+// need to distinguish "owner" from "admin" (e.g. QR join_org privilege
+// non-escalation: only owners may grant role=admin).
+func (s *OrganizationService) GetCallerRole(ctx context.Context, orgID, callerID int64) (string, error) {
+	m, err := s.store.GetMember(ctx, orgID, callerID)
+	if err != nil {
+		return "", fmt.Errorf("get membership: %w", err)
+	}
+	if m == nil {
+		return "", nil
+	}
+	return m.Role, nil
+}
+
 // AddMember adds targetAccountID to the organization. callerID must be owner or admin.
 func (s *OrganizationService) AddMember(ctx context.Context, orgID, callerID, targetAccountID int64, role string) error {
 	caller, err := s.store.GetMember(ctx, orgID, callerID)

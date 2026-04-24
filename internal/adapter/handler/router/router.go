@@ -11,6 +11,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/readiness"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/slogctx"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/tenant"
 )
@@ -49,6 +50,11 @@ type Deps struct {
 	// only when no reverse-proxy sits in front). Ingresses are usually
 	// in cluster private ranges.
 	TrustedProxyCIDRs []string
+
+	// Readiness is the pluggable readiness probe set. nil = /readyz is
+	// wired with an empty set (always 200), which matches the pre-PT7.4
+	// behaviour of a naked /health probe.
+	Readiness *readiness.Set
 }
 
 // Build constructs and returns the root Gin engine.
@@ -85,10 +91,22 @@ func Build(deps Deps) *gin.Engine {
 		r.Use(mw)
 	}
 
-	// Health check — unauthenticated
+	// Health check — unauthenticated liveness probe. Answers only "the
+	// process is up and serving". Does NOT verify dependencies — that's
+	// /readyz below.
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "lurus-platform"})
 	})
+
+	// Readiness probe — unauthenticated. Distinct from /health so that a
+	// dependency outage pulls the pod out of the Service endpoints
+	// (503 → NotReady) without also flapping liveness (which would
+	// trigger a pod restart). See internal/pkg/readiness for the set.
+	readinessSet := deps.Readiness
+	if readinessSet == nil {
+		readinessSet = readiness.NewSet() // empty set = always ready
+	}
+	r.GET("/readyz", readinessSet.HTTPHandler())
 
 	// WeChat OAuth routes — no JWT auth (handles the browser redirect dance).
 	if deps.WechatAuth != nil {
