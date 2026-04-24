@@ -108,6 +108,39 @@
         "pieType": "pie",
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       }
+    },
+    {
+      "title": "Legacy Signature Share",
+      "type": "timeseries",
+      "description": "Fraction of confirm requests still using the pre-B5 (timestamp-less) HMAC payload, measured as legacy / (legacy + new). Deprecation target 2026-06-01 — if this stays above ~1% near the cutover, delay removal and re-check APP version rollout.",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 18 },
+      "targets": [
+        {
+          "expr": "sum(rate(lurus_platform_qr_legacy_signatures_total[15m])) / clamp_min(sum(rate(lurus_platform_qr_confirmed_total[15m])) + sum(rate(lurus_platform_qr_signature_rejected_total[15m])), 0.0001)",
+          "legendFormat": "legacy share",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(lurus_platform_qr_legacy_signatures_total[5m])",
+          "legendFormat": "legacy/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          },
+          "custom.thresholdsStyle": { "mode": "line" }
+        }
+      }
     }
   ],
   "schemaVersion": 39,

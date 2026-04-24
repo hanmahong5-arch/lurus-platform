@@ -153,6 +153,49 @@ var (
 		},
 		[]string{"action"},
 	)
+
+	qrLegacySignaturesTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "qr_legacy_signatures_total",
+			Help:      "Total QR confirm calls that fell back to the pre-B5 (timestamp-less) signature path. Used to monitor the legacy deprecation window — spikes near removal date should block the cutover.",
+		},
+	)
+
+	// Rate limiter fallback: counts every request routed through the local
+	// in-process token bucket because Redis was unreachable. A non-zero
+	// rate indicates a Redis outage and should page; sustained firing of
+	// this counter is also the signal that the fallback's 2x quota is
+	// actually protecting the service instead of fail-open letting
+	// everything through.
+	ratelimitFallbackEngagedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "ratelimit_fallback_engaged_total",
+			Help:      "Total rate-limit checks served by the in-process fallback bucket because Redis was unreachable.",
+		},
+		[]string{"scope"}, // scope: "ip" | "user"
+	)
+
+	// QR long-poll concurrency: current in-flight long-poll goroutines
+	// and cumulative rejections due to the max-inflight semaphore being
+	// saturated. Gauge + counter pair mirrors the usual "queue depth" /
+	// "drop rate" shape so a saturation alert can be built from either.
+	qrPollsInflight = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "qr_polls_inflight",
+			Help:      "Number of /api/v2/qr/:id/status long-poll requests currently holding a semaphore slot.",
+		},
+	)
+
+	qrPollsRejectedOverloadTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "qr_polls_rejected_overload_total",
+			Help:      "Total /api/v2/qr/:id/status requests rejected with 503 because the long-poll semaphore was saturated.",
+		},
+	)
 )
 
 // Handler returns the standard Prometheus /metrics HTTP handler.
@@ -251,4 +294,35 @@ func RecordQRSignatureRejected() {
 // RecordQRConfirmLatency records the wall-clock latency of a confirm handler call.
 func RecordQRConfirmLatency(action string, elapsed time.Duration) {
 	qrConfirmLatency.WithLabelValues(action).Observe(elapsed.Seconds())
+}
+
+// RecordQRLegacySignature records a confirm request that took the pre-B5
+// (timestamp-less) HMAC verification path. Incremented regardless of whether
+// the legacy signature itself validated — the counter measures *usage* of
+// the deprecated format so we can decide when it is safe to remove.
+func RecordQRLegacySignature() {
+	qrLegacySignaturesTotal.Inc()
+}
+
+// RecordRateLimitFallbackEngaged increments when a rate-limit check ran
+// against the in-process fallback bucket (Redis was unreachable).
+// scope: "ip" | "user".
+func RecordRateLimitFallbackEngaged(scope string) {
+	ratelimitFallbackEngagedTotal.WithLabelValues(scope).Inc()
+}
+
+// IncQRPollsInflight marks that a new long-poll started holding a slot.
+func IncQRPollsInflight() {
+	qrPollsInflight.Inc()
+}
+
+// DecQRPollsInflight marks that a long-poll released its slot.
+func DecQRPollsInflight() {
+	qrPollsInflight.Dec()
+}
+
+// RecordQRPollRejectedOverload increments when a long-poll was refused
+// because the concurrency semaphore was full.
+func RecordQRPollRejectedOverload() {
+	qrPollsRejectedOverloadTotal.Inc()
 }

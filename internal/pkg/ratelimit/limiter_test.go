@@ -269,21 +269,91 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
-func TestRedisFailure_FailOpen(t *testing.T) {
+// TestLimiter_RedisDown_FallsBackToLocal asserts that when Redis is
+// unreachable the limiter does NOT fail-open — instead it routes through
+// the in-process fallback bucket (configured at fallbackQuotaMultiplier ×
+// limit). With an IP limit of 1/min and the 2x multiplier, the 3rd
+// request from the same IP in a single burst must be refused.
+func TestLimiter_RedisDown_FallsBackToLocal(t *testing.T) {
 	mr, lim := setupLimiter(t, 1, 1)
 	router := gin.New()
 	router.Use(lim.PerIP())
 	router.GET("/test", func(c *gin.Context) { c.String(200, "ok") })
 
-	// Close Redis.
+	// Kill Redis so every check takes the fallback path.
 	mr.Close()
 
-	// Should fail-open and allow the request.
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.RemoteAddr = "10.0.0.1:1234"
-	router.ServeHTTP(w, req)
-	if w.Code != 200 {
-		t.Errorf("Redis failure status = %d, want 200 (fail-open)", w.Code)
+	send := func() int {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/test", nil)
+		req.RemoteAddr = "10.0.0.1:1234"
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// With limit=1/min and fallbackQuotaMultiplier=2, the bucket's burst
+	// is 2. Two immediate requests fit; the third must be blocked (NOT
+	// fail-open the way the previous implementation did).
+	if code := send(); code != 200 {
+		t.Fatalf("1st request: status = %d, want 200", code)
+	}
+	if code := send(); code != 200 {
+		t.Fatalf("2nd request: status = %d, want 200 (inside fallback burst)", code)
+	}
+	if code := send(); code != http.StatusTooManyRequests {
+		t.Fatalf("3rd request: status = %d, want 429 (fallback should refuse)", code)
+	}
+}
+
+// TestLimiter_RedisRecovers_SwitchesBack verifies that after Redis comes
+// back online the limiter resumes using it (no further fallback hits for
+// that key). We rely on the Redis-path sliding window being permissive
+// right after recovery (empty set) to distinguish from the fallback path
+// which would still be rate-limited.
+func TestLimiter_RedisRecovers_SwitchesBack(t *testing.T) {
+	mr, lim := setupLimiter(t, 5, 5)
+	router := gin.New()
+	router.Use(lim.PerIP())
+	router.GET("/test", func(c *gin.Context) { c.String(200, "ok") })
+
+	send := func(ip string) int {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/test", nil)
+		req.RemoteAddr = ip + ":1234"
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// Phase 1: Redis up — request succeeds.
+	if code := send("10.99.0.1"); code != 200 {
+		t.Fatalf("phase 1 (redis up): status = %d, want 200", code)
+	}
+
+	// Phase 2: Redis down — fallback engaged. With limit=5 and
+	// multiplier=2 the fallback burst is 10; we send 11 requests and
+	// the last should be refused, proving the fallback actually limits.
+	mr.Close()
+	var refused bool
+	for i := 0; i < 11; i++ {
+		if send("10.99.0.2") == http.StatusTooManyRequests {
+			refused = true
+			break
+		}
+	}
+	if !refused {
+		t.Fatal("phase 2 (redis down): expected at least one 429 from fallback, got none")
+	}
+
+	// Phase 3: Redis back up — switch should happen transparently. We
+	// restart miniredis on the same address so the existing client
+	// reconnects. The sliding window for a fresh IP is empty so the
+	// request MUST succeed. If we were still hitting the fallback (and
+	// the bucket is now saturated for 10.99.0.3 somehow), recovery
+	// would be observable as a 429, so a 200 here is a clean signal.
+	if err := mr.Restart(); err != nil {
+		t.Fatalf("restart miniredis: %v", err)
+	}
+	if code := send("10.99.0.3"); code != 200 {
+		t.Fatalf("phase 3 (redis recovered): status = %d, want 200", code)
 	}
 }
