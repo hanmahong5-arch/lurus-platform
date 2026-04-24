@@ -128,6 +128,11 @@ func newQRKeyring(keysSpec, fallback string) (*qrKeyring, error) {
 // ring is empty because handler construction validates non-empty.
 func (k *qrKeyring) current() qrKeyEntry { return k.keys[len(k.keys)-1] }
 
+// qrDefaultMaxInflightPolls caps concurrent /status long-poll goroutines
+// when no per-handler value was wired. Must stay in sync with
+// config.Config.QRMaxInflightPolls default so tests and prod agree.
+const qrDefaultMaxInflightPolls = 50000
+
 // QRHandler owns the v2 QR primitive.
 type QRHandler struct {
 	rdb           *redis.Client
@@ -141,6 +146,12 @@ type QRHandler struct {
 	// publisher is best-effort: join_org confirm emits identity.org.member_joined
 	// to IDENTITY_EVENTS. nil = publish skipped (never blocks the confirm).
 	publisher QREventPublisher
+	// pollSem bounds the number of concurrent long-poll goroutines held by
+	// PollStatus. A full buffered channel means "no slot available"; the
+	// handler returns 503 immediately so upstream load balancers can shed.
+	// Buffered struct{} channel is used instead of a semaphore package to
+	// keep zero external deps and a cheap non-blocking select.
+	pollSem chan struct{}
 }
 
 // NewQRHandler wires a handler. sessionSecret signs login-action JWTs and
@@ -166,7 +177,21 @@ func NewQRHandlerWithKeyring(rdb *redis.Client, sessionSecret, keysSpec string) 
 		keyring:       kr,
 		sessionSecret: sessionSecret,
 		now:           time.Now,
+		pollSem:       make(chan struct{}, qrDefaultMaxInflightPolls),
 	}
+}
+
+// WithMaxInflightPolls sets the ceiling on concurrent /status long-poll
+// goroutines. A value ≤ 0 falls back to qrDefaultMaxInflightPolls so a
+// misconfigured env (e.g. "0") still produces a usable handler. Chainable.
+// Reallocating the semaphore is safe only at construction time; callers
+// must wire this before the router starts serving.
+func (h *QRHandler) WithMaxInflightPolls(n int) *QRHandler {
+	if n <= 0 {
+		n = qrDefaultMaxInflightPolls
+	}
+	h.pollSem = make(chan struct{}, n)
+	return h
 }
 
 // WithOrgService wires the organization use case used by action=join_org.
@@ -435,7 +460,31 @@ func (h *QRHandler) CreateSessionAuthed(c *gin.Context) {
 // payload (login → {"status":"confirmed", "token": "..."}).
 // Consumed → 410 Gone.
 // Missing / TTL-expired → 404.
+//
+// Concurrency: the first action is a non-blocking acquire on pollSem; if
+// the semaphore is full we 503 immediately so the pod stays responsive
+// instead of piling up 30s goroutines.
 func (h *QRHandler) PollStatus(c *gin.Context) {
+	// Bound the number of in-flight long-poll goroutines. A saturated
+	// semaphore → 503 rather than a blocked acquire: the client should
+	// back off and retry, not stack another 30s hold on this pod.
+	select {
+	case h.pollSem <- struct{}{}:
+		metrics.IncQRPollsInflight()
+		defer func() {
+			<-h.pollSem
+			metrics.DecQRPollsInflight()
+		}()
+	default:
+		metrics.RecordQRPollRejectedOverload()
+		c.Header("Retry-After", "1")
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   "server_overloaded",
+			"message": "Long-poll capacity temporarily exhausted; retry shortly",
+		})
+		return
+	}
+
 	id := c.Param("id")
 	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{

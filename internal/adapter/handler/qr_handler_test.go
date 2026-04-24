@@ -206,6 +206,65 @@ func TestQR_Poll_MissingID(t *testing.T) {
 	}
 }
 
+// TestQR_Poll_ConcurrencyLimit verifies that PollStatus enforces the
+// max-inflight semaphore: with a sema size of 2, three concurrent pollers
+// must see exactly one 503 server_overloaded rejection.
+func TestQR_Poll_ConcurrencyLimit(t *testing.T) {
+	h, _, _ := setupQR(t)
+	h = h.WithMaxInflightPolls(2)
+
+	// Create a pending login session the pollers can target.
+	id := createLoginSession(t, h)
+
+	const concurrent = 3
+	type result struct {
+		code int
+		body string
+	}
+	results := make(chan result, concurrent)
+
+	// Fire `concurrent` pollers, each with a long-ish timeout so two of
+	// them block holding the semaphore slots while the 3rd arrives.
+	// The 3rd must immediately return 503 without waiting.
+	start := make(chan struct{})
+	for i := 0; i < concurrent; i++ {
+		go func() {
+			<-start
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v2/qr/%s/status?timeout=2", id), nil)
+			c.Params = gin.Params{{Key: "id", Value: id}}
+			h.PollStatus(c)
+			results <- result{code: w.Code, body: w.Body.String()}
+		}()
+	}
+	close(start)
+
+	codes := make([]int, 0, concurrent)
+	deadline := time.After(5 * time.Second)
+	for i := 0; i < concurrent; i++ {
+		select {
+		case r := <-results:
+			codes = append(codes, r.code)
+		case <-deadline:
+			t.Fatalf("timed out waiting for pollers; got %d responses", len(codes))
+		}
+	}
+
+	// Exactly one 503 should appear; the other two are either 200
+	// (pending timeout) or 410/404 depending on interleaving — any
+	// non-503 code proves the poller held a slot.
+	var overloaded int
+	for _, c := range codes {
+		if c == http.StatusServiceUnavailable {
+			overloaded++
+		}
+	}
+	if overloaded != 1 {
+		t.Fatalf("expected exactly 1 server_overloaded 503, got %d (codes=%v)", overloaded, codes)
+	}
+}
+
 // ── Confirm ─────────────────────────────────────────────────────────────────
 
 func TestQR_Confirm_HappyPath(t *testing.T) {

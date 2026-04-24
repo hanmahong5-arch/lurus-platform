@@ -119,6 +119,14 @@ type Config struct {
 	// K8s/Docker/loopback ranges; override if your ingress runs elsewhere.
 	TrustedProxiesCIDRs string // TRUSTED_PROXIES
 
+	// Max concurrent long-poll (/api/v2/qr/:id/status) goroutines across
+	// this process. Each in-flight request holds a slot for up to 30s;
+	// without a cap a surge can exhaust the goroutine scheduler /
+	// TCP accept queue. Default 50000 leaves comfortable headroom on
+	// a 1-2 core pod. Requests arriving while the semaphore is full
+	// receive 503 server_overloaded so upstreams can shed load.
+	QRMaxInflightPolls int // QR_MAX_INFLIGHT_POLLS (default 50000)
+
 	// Timeouts
 	ShutdownTimeout     time.Duration
 	CacheEntitlementTTL time.Duration
@@ -201,6 +209,7 @@ func Load() (*Config, error) {
 		SessionSecret:            getEnv("SESSION_SECRET", ""),
 		QRSigningKeys:            getEnv("QR_SIGNING_KEYS", ""),
 		TrustedProxiesCIDRs:      getEnv("TRUSTED_PROXIES", "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32,100.64.0.0/10"),
+		QRMaxInflightPolls:       parseInt("QR_MAX_INFLIGHT_POLLS", 50000),
 		ZitadelServiceAccountPAT: getEnv("ZITADEL_SERVICE_ACCOUNT_PAT", ""),
 		WechatOAuthClientSecret:  getEnv("WECHAT_OAUTH_CLIENT_SECRET", ""),
 		EmailSMTPHost:            getEnv("EMAIL_SMTP_HOST", ""),
