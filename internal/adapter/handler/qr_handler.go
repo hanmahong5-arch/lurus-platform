@@ -442,9 +442,10 @@ func (h *QRHandler) PollStatus(c *gin.Context) {
 	}
 }
 
-// writeConfirmResult dispatches per-action confirm-time payload.
+// writeConfirmResult dispatches per-action confirm-time payload on the
+// status-poll path. Actions whose side effects belong to the APP (Confirm)
+// path instead return a descriptive 400 here.
 func (h *QRHandler) writeConfirmResult(c *gin.Context, s *entity.QRSession) {
-	ctx := c.Request.Context()
 	switch s.Action {
 	case entity.QRActionLogin:
 		token, err := auth.IssueSessionToken(s.AccountID, qrLoginTTL, h.sessionSecret)
@@ -463,55 +464,14 @@ func (h *QRHandler) writeConfirmResult(c *gin.Context, s *entity.QRSession) {
 		})
 
 	case entity.QRActionJoinOrg:
-		// Invariants — created by CreateSessionAuthed and enforced there.
-		// Defensive-only guards: a missing initiator or orgService on the
-		// confirm side means the deployment config drifted between create
-		// and consume and we refuse to move.
-		if h.orgService == nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "action_unsupported",
-				"message": "join_org requires organization service, not wired",
-			})
-			return
-		}
-		if s.CreatedBy == 0 {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "invalid_session",
-				"message": "join_org session missing initiator",
-			})
-			return
-		}
-		var p qrJoinOrgParams
-		if err := json.Unmarshal(s.Params, &p); err != nil || p.OrgID == 0 {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "invalid_session",
-				"message": "join_org session has malformed params",
-			})
-			return
-		}
-		if p.Role == "" {
-			p.Role = "member"
-		}
-		// CreatedBy = initiator (must be owner/admin — rechecked by AddMember).
-		// AccountID  = scanner/APP user confirming — this is the new member.
-		if err := h.orgService.AddMember(ctx, p.OrgID, s.CreatedBy, s.AccountID, p.Role); err != nil {
-			slog.WarnContext(ctx, "qr.join_org.add_member_failed",
-				"org_id", p.OrgID, "initiator", s.CreatedBy,
-				"target", s.AccountID, "err", err)
-			c.JSON(http.StatusForbidden, gin.H{
-				"error":   "forbidden",
-				"message": "Failed to add member to organization",
-			})
-			return
-		}
-		joinedAt := h.now().UTC()
-		h.publishMemberJoined(p.OrgID, s.AccountID, p.Role, joinedAt)
-		c.JSON(http.StatusOK, gin.H{
-			"status":    string(entity.QRStatusConfirmed),
-			"action":    string(s.Action),
-			"org_id":    p.OrgID,
-			"role":      p.Role,
-			"joined_at": joinedAt.Format(time.RFC3339),
+		// join_org's side effect runs on the Confirm (APP) path, not here —
+		// there is no Web long-poller waiting for the result. This branch is
+		// only reached if some legacy code path still polls status for a
+		// join_org session; return a descriptive 400 rather than silently
+		// running AddMember twice.
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "action_uses_confirm_path",
+			"message": "join_org is completed on the APP confirm path; status polling is not applicable",
 		})
 
 	default:
@@ -677,9 +637,76 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 	}
 
 	metrics.RecordQRConfirmed(string(session.Action))
+
+	// tryConfirm stored accountID in Redis; mirror it onto our local copy so
+	// downstream side effects (e.g. AddMember target) see the right user.
+	session.AccountID = accountID
+
+	// Per-action side effects on the APP confirm path. login is a no-op here
+	// because the token is issued to the Web client via writeConfirmResult
+	// when it polls /status. join_org needs to run AddMember synchronously
+	// before the APP sees success, since the scanner IS the new member.
+	if session.Action == entity.QRActionJoinOrg {
+		h.confirmJoinOrg(c, session)
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"confirmed": true,
 		"action":    string(session.Action),
+	})
+}
+
+// confirmJoinOrg runs the join_org side effect (AddMember + event publish)
+// inline on the Confirm path and writes the enriched response. Called only
+// after tryConfirm succeeded, so state is pending→confirmed in Redis.
+func (h *QRHandler) confirmJoinOrg(c *gin.Context, s *entity.QRSession) {
+	ctx := c.Request.Context()
+	if h.orgService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "action_unsupported",
+			"message": "join_org requires organization service, not wired",
+		})
+		return
+	}
+	if s.CreatedBy == 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "invalid_session",
+			"message": "join_org session missing initiator",
+		})
+		return
+	}
+	var p qrJoinOrgParams
+	if err := json.Unmarshal(s.Params, &p); err != nil || p.OrgID == 0 {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "invalid_session",
+			"message": "join_org session has malformed params",
+		})
+		return
+	}
+	if p.Role == "" {
+		p.Role = "member"
+	}
+	// CreatedBy = initiator (must be owner/admin — rechecked by AddMember).
+	// AccountID  = scanner/APP user confirming — this is the new member.
+	if err := h.orgService.AddMember(ctx, p.OrgID, s.CreatedBy, s.AccountID, p.Role); err != nil {
+		slog.WarnContext(ctx, "qr.join_org.add_member_failed",
+			"org_id", p.OrgID, "initiator", s.CreatedBy,
+			"target", s.AccountID, "err", err)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "forbidden",
+			"message": "Failed to add member to organization",
+		})
+		return
+	}
+	joinedAt := h.now().UTC()
+	h.publishMemberJoined(p.OrgID, s.AccountID, p.Role, joinedAt)
+	c.JSON(http.StatusOK, gin.H{
+		"confirmed": true,
+		"action":    string(s.Action),
+		"org_id":    p.OrgID,
+		"role":      p.Role,
+		"joined_at": joinedAt.Format(time.RFC3339),
 	})
 }
 
