@@ -5,9 +5,28 @@ Web/desktop "initiator" generates a QR; the APP "confirmer" (authenticated)
 scans it; the initiator polls for the result. Same primitive serves multiple
 actions (login today; join-org and delegate in a later phase).
 
-> Status — **Phase 1 shipped**: `action=login` only.
-> `action=join_org` and `action=delegate` return 501 `action_not_supported_yet`
-> by design until they are wired with authenticated create endpoints.
+> Status — **Phase 2 shipped**: `action=login` + `action=join_org` are wired.
+> `action=delegate` still returns 501 `action_not_supported_yet`.
+> `join_org` sessions must be created via `POST /api/v2/qr/session/authed`
+> (JWT-protected, caller must be `owner`/`admin` of the target org).
+
+### Action catalog
+
+| Action | Create endpoint | Side effect | Confirm response |
+|--------|----------------|-------------|------------------|
+| `login` | `POST /api/v2/qr/session` (unauthed) | None on Confirm; token issued to Web poller on `/status` | `{confirmed, action}` (token delivered separately via status poll) |
+| `join_org` | `POST /api/v2/qr/session/authed` (JWT; caller = org owner/admin) | `OrganizationService.AddMember(orgID, initiator, scanner, role)` inline on Confirm | `{confirmed, action, org_id, role, joined_at}` |
+| `delegate` | *not implemented* | *n/a* | 501 |
+
+### Why actions split the Confirm / PollStatus path
+
+- **login**: the Web initiator is the token recipient, so the side effect
+  (issuing a session token) runs on the `/status` poll path inside
+  `writeConfirmResult`. The APP `POST /confirm` just flips Redis state.
+- **join_org**: the APP scanner IS the new member; there is no Web poller
+  that needs a result. The side effect (`AddMember` + NATS event) runs
+  inline on `POST /confirm` inside `confirmJoinOrg` and the enriched
+  response goes back to the APP immediately.
 
 ---
 
