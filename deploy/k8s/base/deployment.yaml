@@ -28,7 +28,7 @@ spec:
         prometheus.io/path: "/metrics"
         # Bump to force rollout when image tag :main moves. Value is
         # the short SHA of the last commit we want this deploy to track.
-        rollout.lurus.cn/revision: "3afa291"
+        rollout.lurus.cn/revision: "3cec138"
     spec:
       nodeSelector:
         lurus.cn/vpn: "true"
