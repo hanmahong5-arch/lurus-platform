@@ -21,7 +21,7 @@ type fakeChecker struct {
 	err  error
 }
 
-func (f *fakeChecker) Name() string { return f.name }
+func (f *fakeChecker) Name() string                  { return f.name }
 func (f *fakeChecker) Check(_ context.Context) error { return f.err }
 
 // serve executes the handler against a fresh Gin test context and returns
