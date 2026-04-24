@@ -1,0 +1,122 @@
+{
+  "annotations": { "list": [] },
+  "description": "Lurus Platform — v2 QR primitive (/api/v2/qr/*). Session lifecycle, confirm latency, signature rejection, and per-action breakdown.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "Session Lifecycle Rate",
+      "type": "timeseries",
+      "description": "Per-second rate of session creations, confirmations, and expiry/not-found lookups. A healthy system has created ≈ confirmed; a growing gap points to user drop-off.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(lurus_platform_qr_sessions_created_total[5m]))",
+          "legendFormat": "created",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(lurus_platform_qr_confirmed_total[5m]))",
+          "legendFormat": "confirmed",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(lurus_platform_qr_expired_total[5m])",
+          "legendFormat": "expired/404",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "title": "Confirm Latency (p50 / p95 / p99)",
+      "type": "timeseries",
+      "description": "End-to-end latency of /api/v2/qr/:id/confirm. Dominated by Redis round-trips; p99 > 250 ms suggests Redis latency or a stuck Lua script.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(lurus_platform_qr_confirm_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(lurus_platform_qr_confirm_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(lurus_platform_qr_confirm_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10 },
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "title": "Signature Rejection Rate",
+      "type": "timeseries",
+      "description": "Confirm calls rejected for HMAC mismatch or stale timestamp. Sustained rate > 0.1/s may indicate tampering, a rogue client, or an APP/backend SESSION_SECRET mismatch after deploy.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "targets": [
+        {
+          "expr": "rate(lurus_platform_qr_signature_rejected_total[5m])",
+          "legendFormat": "rejected/s",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 20 },
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.1 }
+            ]
+          },
+          "custom.thresholdsStyle": { "mode": "line" }
+        }
+      }
+    },
+    {
+      "title": "Confirmed by Action (last 1h)",
+      "type": "piechart",
+      "description": "Relative mix of confirmed QR actions over the last hour. Today only `login` is wired; join_org / delegate will appear once their endpoints ship.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "targets": [
+        {
+          "expr": "sum by(action) (increase(lurus_platform_qr_confirmed_total[1h]))",
+          "legendFormat": "{{action}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] },
+        "pieType": "pie",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["lurus", "platform-core", "qr"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "Asia/Shanghai",
+  "title": "Lurus Platform — QR Primitive",
+  "uid": "lurus-platform-qr",
+  "version": 1
+}
