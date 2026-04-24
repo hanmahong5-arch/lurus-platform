@@ -33,6 +33,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/buildinfo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/cache"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/config"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/email"
@@ -79,6 +80,16 @@ func main() {
 }
 
 func run(ctx context.Context, cfg *config.Config) error {
+	// Log the build provenance as the very first line so an operator can
+	// correlate a crash-looping pod, a trace, or a support ticket with an
+	// exact ghcr.io/.../lurus-platform-core:main-<sha7> image.
+	bi := buildinfo.Get()
+	slog.Info("lurus-platform build",
+		"sha", bi.SHA,
+		"built_at", bi.BuiltAt,
+		"env", cfg.Env,
+	)
+
 	// --- OpenTelemetry tracing ---
 	tracingShutdown, err := tracing.Init(ctx, cfg.OtelServiceName, cfg.OtelEndpoint)
 	if err != nil {
