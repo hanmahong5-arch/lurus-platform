@@ -40,7 +40,7 @@ func TestRateLimiter_Allow_UnderLimit(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
-		if !limiter.allow(ctx, "test:key", 5, time.Minute) {
+		if !limiter.allow(ctx, "test:key", "ip", "test:key", 5, time.Minute) {
 			t.Errorf("request %d should be allowed (under limit)", i+1)
 		}
 	}
@@ -56,12 +56,12 @@ func TestRateLimiter_Block_OverLimit(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		time.Sleep(time.Millisecond) // guarantee unique UnixNano per entry
-		limiter.allow(ctx, "block:key", 3, time.Minute)
+		limiter.allow(ctx, "block:key", "ip", "block:key", 3, time.Minute)
 	}
 
 	time.Sleep(time.Millisecond)
 	// 4th request should be blocked.
-	if limiter.allow(ctx, "block:key", 3, time.Minute) {
+	if limiter.allow(ctx, "block:key", "ip", "block:key", 3, time.Minute) {
 		t.Error("4th request should be blocked (over limit)")
 	}
 }
@@ -76,11 +76,11 @@ func TestRateLimiter_WindowExpiry(t *testing.T) {
 	// Exhaust the limit. Sleep 1ms between calls to guarantee unique UnixNano members
 	// in the sorted set (duplicate timestamps overwrite the same entry).
 	time.Sleep(time.Millisecond)
-	limiter.allow(ctx, "expiry:key", 2, window)
+	limiter.allow(ctx, "expiry:key", "ip", "expiry:key", 2, window)
 	time.Sleep(time.Millisecond)
-	limiter.allow(ctx, "expiry:key", 2, window)
+	limiter.allow(ctx, "expiry:key", "ip", "expiry:key", 2, window)
 	time.Sleep(time.Millisecond)
-	if limiter.allow(ctx, "expiry:key", 2, window) {
+	if limiter.allow(ctx, "expiry:key", "ip", "expiry:key", 2, window) {
 		t.Fatal("3rd request should be blocked")
 	}
 
@@ -88,7 +88,7 @@ func TestRateLimiter_WindowExpiry(t *testing.T) {
 	time.Sleep(window + 20*time.Millisecond)
 
 	// Now all previous entries are outside the window; requests should be allowed again.
-	if !limiter.allow(ctx, "expiry:key", 2, window) {
+	if !limiter.allow(ctx, "expiry:key", "ip", "expiry:key", 2, window) {
 		t.Error("after window expiry, request should be allowed")
 	}
 }
@@ -99,11 +99,11 @@ func TestRateLimiter_DifferentKeys_Independent(t *testing.T) {
 	ctx := context.Background()
 
 	// Exhaust key1.
-	limiter.allow(ctx, "key1", 2, time.Minute)
-	limiter.allow(ctx, "key1", 2, time.Minute)
+	limiter.allow(ctx, "key1", "ip", "key1", 2, time.Minute)
+	limiter.allow(ctx, "key1", "ip", "key1", 2, time.Minute)
 
 	// key2 should still be allowed.
-	if !limiter.allow(ctx, "key2", 2, time.Minute) {
+	if !limiter.allow(ctx, "key2", "ip", "key2", 2, time.Minute) {
 		t.Error("key2 should be independent of key1")
 	}
 }
@@ -123,7 +123,7 @@ func TestRateLimiter_ConcurrentRequests(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			results[idx] = limiter.allow(ctx, "concurrent:key", limit, time.Minute)
+			results[idx] = limiter.allow(ctx, "concurrent:key", "ip", "concurrent:key", limit, time.Minute)
 		}(i)
 	}
 	wg.Wait()
