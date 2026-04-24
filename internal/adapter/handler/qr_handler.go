@@ -466,6 +466,12 @@ func (h *QRHandler) CreateSessionAuthed(c *gin.Context) {
 // Consumed → 410 Gone.
 // Missing / TTL-expired → 404.
 //
+// Wait mechanism: subscribes to Redis Pub/Sub channel `qr-events:<id>` and
+// blocks on the message stream instead of polling every second. Confirm
+// publishes to that channel after a successful state flip, waking any
+// waiting poller immediately. Falls back to the legacy 1s polling loop if
+// Subscribe fails (e.g. transient Redis hiccup).
+//
 // Concurrency: the first action is a non-blocking acquire on pollSem; if
 // the semaphore is full we 503 immediately so the pod stays responsive
 // instead of piling up 30s goroutines.
@@ -510,54 +516,127 @@ func (h *QRHandler) PollStatus(c *gin.Context) {
 	deadline := h.now().Add(timeout)
 	key := qrKey(id)
 
-	for {
-		session, err := h.readSession(ctx, key)
-		if err == redis.Nil {
-			metrics.RecordQRExpired()
-			c.JSON(http.StatusNotFound, gin.H{
-				"error":   "session_not_found",
-				"message": "QR session expired or does not exist",
-			})
-			return
-		}
-		if err != nil {
+	// Fast path: first read. Most of the time the session is already pending
+	// (client just opened the login page) but we must also cheaply answer
+	// 404/410 without entering the subscribe dance.
+	session, err := h.readSession(ctx, key)
+	if handled := h.writePollResult(c, ctx, key, session, err); handled {
+		return
+	}
+
+	// Pending → subscribe and wait for a Confirm to publish.
+	//
+	// Subscribe BEFORE the second read so the Subscribe/Publish rendezvous
+	// closes the race: if Confirm publishes between our first read and
+	// subscription, the second read catches it; if it publishes after the
+	// subscription is active, the Channel() delivers it.
+	sub := h.rdb.Subscribe(ctx, pubsubChannel(id))
+	defer func() { _ = sub.Close() }()
+
+	// Wait until the subscription is actually registered with the Redis
+	// server; Subscribe() is asynchronous, so Receive() serves as the
+	// "ready" signal. Any transport error here falls back to the legacy
+	// 1s polling loop so a flaky Pub/Sub doesn't break login.
+	if _, err := sub.Receive(ctx); err != nil {
+		metrics.RecordQRPollFallback()
+		slog.WarnContext(ctx, "qr.pubsub_subscribe_failed_fallback_to_poll",
+			"id", id, "err", err)
+		h.pollStatusPollingFallback(c, ctx, key, deadline)
+		return
+	}
+
+	// Second read — catches Confirm events that fired between our first
+	// read and the subscription going live.
+	session, err = h.readSession(ctx, key)
+	if handled := h.writePollResult(c, ctx, key, session, err); handled {
+		return
+	}
+
+	// Still pending: block on Channel() until deadline / ctx cancel / event.
+	msgCh := sub.Channel()
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		c.JSON(http.StatusOK, gin.H{"status": string(entity.QRStatusPending)})
+		return
+	}
+	select {
+	case <-msgCh:
+		// Someone confirmed (or a stray PUBLISH landed) — re-read and dispatch.
+		session, err = h.readSession(ctx, key)
+		h.writePollResult(c, ctx, key, session, err)
+		return
+	case <-time.After(remaining):
+		c.JSON(http.StatusOK, gin.H{"status": string(entity.QRStatusPending)})
+		return
+	case <-ctx.Done():
+		c.JSON(http.StatusOK, gin.H{"status": string(entity.QRStatusPending)})
+		return
+	}
+}
+
+// writePollResult inspects a freshly-read session and writes the matching
+// HTTP response. Returns true when a response was written (caller should
+// stop processing), false when the session is still pending (caller
+// should keep waiting).
+func (h *QRHandler) writePollResult(c *gin.Context, ctx context.Context, key string, session *entity.QRSession, err error) bool {
+	if err == redis.Nil {
+		metrics.RecordQRExpired()
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   "session_not_found",
+			"message": "QR session expired or does not exist",
+		})
+		return true
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "read_failed",
+			"message": "Failed to read QR session",
+		})
+		return true
+	}
+
+	switch session.Status {
+	case entity.QRStatusConfirmed:
+		consumed, cerr := h.tryConsume(ctx, key)
+		if cerr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "read_failed",
-				"message": "Failed to read QR session",
+				"error":   "consume_failed",
+				"message": "Failed to consume QR session",
 			})
-			return
+			return true
 		}
-
-		switch session.Status {
-		case entity.QRStatusConfirmed:
-			consumed, err := h.tryConsume(ctx, key)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error":   "consume_failed",
-					"message": "Failed to consume QR session",
-				})
-				return
-			}
-			if !consumed {
-				// Another poller beat us to the transition — treat as consumed.
-				c.JSON(http.StatusGone, gin.H{
-					"error":   "session_consumed",
-					"message": "Session has already been consumed",
-				})
-				return
-			}
-			h.writeConfirmResult(c, session)
-			return
-
-		case entity.QRStatusConsumed:
+		if !consumed {
+			// Another poller beat us to the transition — treat as consumed.
 			c.JSON(http.StatusGone, gin.H{
 				"error":   "session_consumed",
 				"message": "Session has already been consumed",
 			})
+			return true
+		}
+		h.writeConfirmResult(c, session)
+		return true
+
+	case entity.QRStatusConsumed:
+		c.JSON(http.StatusGone, gin.H{
+			"error":   "session_consumed",
+			"message": "Session has already been consumed",
+		})
+		return true
+	}
+
+	// Still pending.
+	return false
+}
+
+// pollStatusPollingFallback runs the pre-Pub/Sub 1s polling loop. Invoked
+// only when the Pub/Sub subscribe fails so long-poll keeps working even
+// when the broker is degraded.
+func (h *QRHandler) pollStatusPollingFallback(c *gin.Context, ctx context.Context, key string, deadline time.Time) {
+	for {
+		session, err := h.readSession(ctx, key)
+		if handled := h.writePollResult(c, ctx, key, session, err); handled {
 			return
 		}
-
-		// Still pending — honour the poll deadline or ctx cancel.
 		if !h.now().Before(deadline) {
 			c.JSON(http.StatusOK, gin.H{"status": string(entity.QRStatusPending)})
 			return
@@ -570,6 +649,11 @@ func (h *QRHandler) PollStatus(c *gin.Context) {
 		}
 	}
 }
+
+// pubsubChannel is the Redis Pub/Sub channel name for a session's state
+// transition events. Confirm publishes here on successful pending→confirmed;
+// PollStatus subscribes here to wake up instantly.
+func pubsubChannel(id string) string { return "qr-events:" + id }
 
 // writeConfirmResult dispatches per-action confirm-time payload on the
 // status-poll path. Actions whose side effects belong to the APP (Confirm)
@@ -767,6 +851,15 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 	}
 
 	metrics.RecordQRConfirmed(string(session.Action))
+
+	// Wake any waiting PollStatus subscribers so the Web side sees the
+	// confirmation without having to poll again. Best-effort: a publish
+	// failure only delays pollers until their own deadline — they will
+	// re-read and discover the confirmed state on their next cycle.
+	if perr := h.rdb.Publish(ctx, pubsubChannel(id), "confirmed").Err(); perr != nil {
+		slog.WarnContext(ctx, "qr.pubsub_publish_failed",
+			"id", id, "action", string(session.Action), "err", perr)
+	}
 
 	// tryConfirm stored accountID in Redis; mirror it onto our local copy so
 	// downstream side effects (e.g. AddMember target) see the right user.

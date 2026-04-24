@@ -196,6 +196,17 @@ var (
 			Help:      "Total /api/v2/qr/:id/status requests rejected with 503 because the long-poll semaphore was saturated.",
 		},
 	)
+
+	// Counts long-polls that degraded from the Pub/Sub wait to the legacy
+	// 1s polling loop because Redis Pub/Sub subscribe failed. A non-zero
+	// rate is an early warning that Pub/Sub on the broker is degraded.
+	qrPollFallbackTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "qr_poll_fallback_total",
+			Help:      "Total long-poll requests that fell back to the 1s polling loop after Pub/Sub subscribe failed.",
+		},
+	)
 )
 
 // Handler returns the standard Prometheus /metrics HTTP handler.
@@ -325,4 +336,10 @@ func DecQRPollsInflight() {
 // because the concurrency semaphore was full.
 func RecordQRPollRejectedOverload() {
 	qrPollsRejectedOverloadTotal.Inc()
+}
+
+// RecordQRPollFallback increments when a long-poll degraded from the
+// Pub/Sub wait to the 1s polling loop (Redis Pub/Sub subscribe failure).
+func RecordQRPollFallback() {
+	qrPollFallbackTotal.Inc()
 }

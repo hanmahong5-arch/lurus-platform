@@ -593,6 +593,72 @@ func createLoginSessionWithSig(t *testing.T, h *handler.QRHandler) (id, sig stri
 	return id, sig, issuedAt
 }
 
+// ── Pub/Sub wake-up (Track P) ──────────────────────────────────────────────
+
+// TestQR_Poll_WakesOnConfirm proves the Pub/Sub fast-path: a long-poll
+// with 10s timeout should return within ~1s when Confirm fires, not after
+// the full 10s. Regression guard for the poll→pub/sub conversion.
+func TestQR_Poll_WakesOnConfirm(t *testing.T) {
+	h, _, _ := setupQR(t)
+	id, sig, issuedAt := createLoginSessionWithSig(t, h)
+
+	// Kick the poll in a goroutine — it will subscribe, read pending, wait.
+	done := make(chan struct {
+		code int
+		body map[string]any
+	}, 1)
+	go func() {
+		_, w := postJSON(http.MethodGet, fmt.Sprintf("/api/v2/qr/%s/status?timeout=10", id),
+			nil, gin.Param{Key: "id", Value: id})
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet,
+			fmt.Sprintf("/api/v2/qr/%s/status?timeout=10", id), nil)
+		c.Params = gin.Params{{Key: "id", Value: id}}
+		h.PollStatus(c)
+		done <- struct {
+			code int
+			body map[string]any
+		}{w.Code, decode(t, w)}
+	}()
+
+	// Give the poller a moment to subscribe before we confirm. 150ms is
+	// comfortably above the ~10ms subscribe roundtrip on miniredis.
+	time.Sleep(150 * time.Millisecond)
+
+	c, w := postJSON(http.MethodPost, fmt.Sprintf("/api/v2/qr/%s/confirm", id),
+		map[string]any{"sig": sig, "t": issuedAt},
+		gin.Param{Key: "id", Value: id},
+	)
+	c.Set("account_id", int64(42))
+	h.Confirm(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("confirm failed: %d %s", w.Code, w.Body.String())
+	}
+
+	// Poll must return within ~3s (well under the 10s timeout) via
+	// Pub/Sub wake-up. If this test times out past 10s it means the
+	// Publish never landed or the Subscribe never received it.
+	start := time.Now()
+	select {
+	case res := <-done:
+		elapsed := time.Since(start)
+		if elapsed > 3*time.Second {
+			t.Errorf("poll returned after %v; Pub/Sub wake-up should have been <1s", elapsed)
+		}
+		if res.code != http.StatusOK {
+			t.Fatalf("poll code = %d; want 200 (body=%v)", res.code, res.body)
+		}
+		if res.body["status"] != "confirmed" {
+			t.Errorf("poll status = %v; want confirmed", res.body["status"])
+		}
+		if res.body["token"] == nil {
+			t.Error("poll must include session token on confirmed login")
+		}
+	case <-time.After(12 * time.Second):
+		t.Fatal("poll did not return within 12s — Pub/Sub wake-up broken")
+	}
+}
+
 // ── Keyring rotation (R1.2) ────────────────────────────────────────────────
 
 // TestQR_Keyring_Rotation_OldKeyStillValid proves that a QR minted while the
