@@ -454,13 +454,17 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// Readiness probe set — wired with the live infra clients so /readyz
-	// actively verifies each dependency per request. NATSChecker tolerates
-	// a nil conn (when init above failed), so a partially-up pod still
-	// reports Postgres/Redis correctly.
+	// actively verifies critical dependencies per request.
+	//
+	// NATS is intentionally NOT in the set: outbox falls back to a Redis DLQ
+	// when NATS is unreachable (see internal/pkg/outbox) and all HTTP
+	// handlers that don't publish events stay fully functional, so a NATS
+	// outage should NOT remove pods from the Service endpoints. Only
+	// hard dependencies (Redis + Postgres — every request hits one or both)
+	// belong here.
 	readinessSet := readiness.NewSet(
 		readiness.RedisChecker(rdb),
 		readiness.PostgresChecker(sqlDB),
-		readiness.NATSChecker(nc),
 	)
 
 	engine := router.Build(router.Deps{
