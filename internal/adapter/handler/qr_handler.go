@@ -714,6 +714,7 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 		// Legacy pre-B5 client: fall back to the timestamp-less HMAC. Kept for
 		// backward compatibility with APP builds from before 2026-04-24.
 		// TODO(2026-06-01): remove once all clients upgrade.
+		metrics.RecordQRLegacySignature()
 		slog.WarnContext(c.Request.Context(), "qr.legacy_payload_signature",
 			"id", id, "action", string(session.Action), "account_id", accountID)
 		if !h.verifyPayloadSigLegacy(id, session.Action, req.Sig) {

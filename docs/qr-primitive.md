@@ -269,6 +269,9 @@ All metrics are emitted from `internal/pkg/metrics/metrics.go` under the
 | `lurus_platform_qr_expired_total` | Counter | — | 404 from status or confirm (TTL expired or id never existed) |
 | `lurus_platform_qr_signature_rejected_total` | Counter | — | Confirm rejected for invalid HMAC or stale timestamp |
 | `lurus_platform_qr_confirm_latency_seconds` | Histogram | `action` | Observed on every confirm handler exit |
+| `lurus_platform_qr_legacy_signatures_total` | Counter | — | Confirm took the pre-B5 timestamp-less HMAC path. Tracks the deprecation window — near 2026-06-01, if the legacy share exceeds ~1%, delay the cutover. |
+| `lurus_platform_qr_polls_inflight` | Gauge | — | Active `/status` long-poll goroutines currently holding a concurrency-semaphore slot. |
+| `lurus_platform_qr_polls_rejected_overload_total` | Counter | — | `/status` requests shed with 503 because `QR_MAX_INFLIGHT_POLLS` was saturated. |
 
 `action` is one of `login` / `join_org` / `delegate` / `unknown` (the last
 only for confirm latency when the session read failed before the action was known).
