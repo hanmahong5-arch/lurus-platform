@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { Button, Card, Form, TabPane, Tabs, Toast, Typography } from '@douyinfe/semi-ui'
 import { storeLurusToken, isLoggedIn } from '../../auth'
 import { useStore } from '../../store'
+import QRLoginPanel from '../../components/QRLoginPanel'
 
 const { Title, Text } = Typography
 
@@ -50,6 +51,14 @@ export default function LoginPage() {
   function handleWechatLogin() {
     sessionStorage.setItem('login_return', sessionStorage.getItem('login_return') || '/hub')
     window.location.href = '/api/v1/auth/wechat'
+  }
+
+  async function handleQRLogin(token) {
+    storeLurusToken(token)
+    await init()
+    const returnTo = sessionStorage.getItem('login_return') || '/hub'
+    sessionStorage.removeItem('login_return')
+    navigate(returnTo, { replace: true })
   }
 
   return (
@@ -101,6 +110,11 @@ export default function LoginPage() {
                 去注册
               </Link>
             </div>
+          </TabPane>
+
+          {/* APP QR login tab */}
+          <TabPane itemKey="app" tab="APP 扫码">
+            {activeTab === 'app' && <QRLoginPanel onLogin={handleQRLogin} />}
           </TabPane>
 
           {/* WeChat QR tab */}
