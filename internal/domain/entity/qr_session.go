@@ -42,10 +42,15 @@ type QRSession struct {
 	Action    QRAction        `json:"action"`
 	Params    json.RawMessage `json:"params,omitempty"`
 	Status    QRStatus        `json:"status"`
-	AccountID int64           `json:"account_id,omitempty"` // set when confirmed
-	CreatedAt time.Time       `json:"created_at"`
-	IP        string          `json:"ip,omitempty"` // createSession remote IP, for audit
-	UA        string          `json:"ua,omitempty"` // createSession UA, shown on Confirm UI
+	AccountID int64           `json:"account_id,omitempty"` // set when confirmed (scanner/APP user)
+	// CreatedBy identifies the initiator of the session when create requires auth
+	// (e.g. join_org / delegate). Zero for unauthenticated actions like login.
+	// Required when the confirm-time side effect needs to act "on behalf of" the
+	// initiator — e.g. for join_org it is the org admin who minted the code.
+	CreatedBy int64     `json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	IP        string    `json:"ip,omitempty"` // createSession remote IP, for audit
+	UA        string    `json:"ua,omitempty"` // createSession UA, shown on Confirm UI
 }
 
 // IsValidQRAction reports whether an incoming action string matches a known kind.

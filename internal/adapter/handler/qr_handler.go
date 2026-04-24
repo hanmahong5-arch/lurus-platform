@@ -21,6 +21,14 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
 )
 
+// QROrgService is the subset of OrganizationService required by the QR primitive.
+// Declared here (not in app/) to keep the handler free of transport-↔-usecase
+// cycles and to make mocking trivial in tests.
+type QROrgService interface {
+	IsOwnerOrAdmin(ctx context.Context, orgID, callerID int64) (bool, error)
+	AddMember(ctx context.Context, orgID, callerID, targetAccountID int64, role string) error
+}
+
 // qr_handler implements the v2 multi-action QR primitive.
 //
 // Contract (all routes mounted under /api/v2/qr):
@@ -57,6 +65,10 @@ type QRHandler struct {
 	rdb           *redis.Client
 	sessionSecret string           // signs payload HMAC and issued session tokens
 	now           func() time.Time // injectable for deterministic tests
+	// orgService is required for action=join_org (both create and confirm).
+	// nil when wiring has not yet set it — those code paths error out at 501
+	// instead of panicking. login does not depend on it.
+	orgService QROrgService
 }
 
 // NewQRHandler wires a handler. sessionSecret must be the same secret used by
@@ -69,11 +81,34 @@ func NewQRHandler(rdb *redis.Client, sessionSecret string) *QRHandler {
 	}
 }
 
+// WithOrgService wires the organization use case used by action=join_org.
+// Chainable; safe to call with nil (leaves the action gated).
+func (h *QRHandler) WithOrgService(svc QROrgService) *QRHandler {
+	h.orgService = svc
+	return h
+}
+
 // ── Create ──────────────────────────────────────────────────────────────────
 
 type qrCreateRequest struct {
 	Action string          `json:"action" binding:"required"`
 	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// qrJoinOrgParams is the expected shape of session.Params for action=join_org.
+// The org admin names the org_id the scanner will be added to; role defaults
+// to "member" when omitted — admins can elevate separately.
+type qrJoinOrgParams struct {
+	OrgID int64  `json:"org_id" binding:"required"`
+	Role  string `json:"role,omitempty"`
+}
+
+// qrDelegateParams is a placeholder for Phase 2 — the delegate action is not
+// wired yet (CreateSessionAuthed returns 501). Kept here as the canonical
+// shape so clients / tests can evolve against a stable type once enabled.
+type qrDelegateParams struct {
+	Scopes     []string `json:"scopes" binding:"required"`
+	TTLSeconds int      `json:"ttl_seconds,omitempty"`
 }
 
 // CreateSession — POST /api/v2/qr/session (unauthenticated)
@@ -131,6 +166,153 @@ func (h *QRHandler) CreateSession(c *gin.Context) {
 
 	data, _ := json.Marshal(session)
 	if err := h.rdb.Set(c.Request.Context(), qrKey(id), data, qrDefaultTTL).Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "store_failed",
+			"message": "Failed to persist QR session",
+		})
+		return
+	}
+
+	metrics.RecordQRSessionCreated(string(action))
+	expiresAt := issuedAt.Add(qrDefaultTTL)
+	c.JSON(http.StatusOK, gin.H{
+		"id":         id,
+		"action":     string(action),
+		"qr_payload": h.buildPayload(id, action, issuedAt),
+		"expires_in": int(qrDefaultTTL.Seconds()),
+		"expires_at": expiresAt.Format(time.RFC3339),
+	})
+}
+
+// CreateSessionAuthed — POST /api/v2/qr/session/authed (JWT-authenticated)
+//
+// Companion to CreateSession for actions that require the initiator's identity
+// up-front. Accepts only {join_org, delegate}; login stays on the public door
+// where no caller identity is needed. Caller authorization is pre-flighted
+// here so we return 403 immediately instead of deferring to confirm-time.
+func (h *QRHandler) CreateSessionAuthed(c *gin.Context) {
+	callerID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
+
+	var req qrCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid_request",
+			"message": "Body must be JSON with an 'action' field",
+		})
+		return
+	}
+
+	action := entity.QRAction(req.Action)
+	if !entity.IsValidQRAction(action) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid_action",
+			"message": fmt.Sprintf("Unknown QR action %q (expected: join_org|delegate)", req.Action),
+		})
+		return
+	}
+
+	// login belongs on the unauthenticated door — rejecting it here prevents
+	// an authed client from accidentally minting a login code "as themselves".
+	if action == entity.QRActionLogin {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "action_not_allowed_on_authed_endpoint",
+			"message": "action=login must use POST /api/v2/qr/session (unauthenticated)",
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	switch action {
+	case entity.QRActionJoinOrg:
+		if h.orgService == nil {
+			c.JSON(http.StatusNotImplemented, gin.H{
+				"error":   "action_not_supported_yet",
+				"message": "join_org is not wired on this deployment",
+			})
+			return
+		}
+		var p qrJoinOrgParams
+		if len(req.Params) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid_params",
+				"message": "join_org requires params={org_id, role?}",
+			})
+			return
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil || p.OrgID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid_params",
+				"message": "join_org params must include a non-zero org_id",
+			})
+			return
+		}
+		if p.Role == "" {
+			p.Role = "member"
+		}
+		// Authorize the initiator: only owners/admins may mint a join code.
+		allowed, err := h.orgService.IsOwnerOrAdmin(ctx, p.OrgID, callerID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "permission_check_failed",
+				"message": "Failed to verify organization membership",
+			})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":   "forbidden",
+				"message": "Only organization owners or admins can create a join code",
+			})
+			return
+		}
+		// Re-serialize params with defaulted role so the confirm side sees the
+		// authoritative role even if the caller omitted it.
+		canonical, err := json.Marshal(p)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "marshal_failed",
+				"message": "Failed to serialize params",
+			})
+			return
+		}
+		req.Params = canonical
+
+	case entity.QRActionDelegate:
+		// Phase 2 — shape reserved, handler not wired.
+		c.JSON(http.StatusNotImplemented, gin.H{
+			"error":   "action_not_supported_yet",
+			"message": "delegate will ship in a later phase",
+		})
+		return
+	}
+
+	id, err := newQRID()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "id_generation_failed",
+			"message": "Failed to generate QR session id",
+		})
+		return
+	}
+
+	issuedAt := h.now().UTC()
+	session := entity.QRSession{
+		ID:        id,
+		Action:    action,
+		Params:    req.Params,
+		Status:    entity.QRStatusPending,
+		CreatedBy: callerID,
+		CreatedAt: issuedAt,
+		IP:        clientIP(c),
+		UA:        truncate(c.GetHeader("User-Agent"), qrMaxUALength),
+	}
+
+	data, _ := json.Marshal(session)
+	if err := h.rdb.Set(ctx, qrKey(id), data, qrDefaultTTL).Err(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "store_failed",
 			"message": "Failed to persist QR session",

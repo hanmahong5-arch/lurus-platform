@@ -213,6 +213,10 @@ func Build(deps Deps) *gin.Engine {
 			v2.Use(deps.RateLimit.PerUser())
 		}
 		v2.POST("/qr/:id/confirm", deps.QR.Confirm)
+		// Authed create — caller identity is required for non-login actions
+		// (join_org, delegate). The public POST /qr/session door stays
+		// login-only; this sibling door handles the rest.
+		v2.POST("/qr/session/authed", deps.QR.CreateSessionAuthed)
 	}
 
 	// Internal service-to-service API — scoped bearer token auth.

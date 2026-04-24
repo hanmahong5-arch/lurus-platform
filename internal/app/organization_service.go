@@ -70,6 +70,23 @@ func (s *OrganizationService) ListMine(ctx context.Context, accountID int64) ([]
 	return s.store.ListByAccountID(ctx, accountID)
 }
 
+// IsOwnerOrAdmin reports whether callerID is currently a member of orgID with
+// role "owner" or "admin". Used by gates that need to pre-flight a mutation
+// (e.g. QR join_org create) without the caller having to synthesize an error.
+//
+// Returns (false, nil) when there is no membership row — callers should treat
+// this as "permission denied" rather than an error.
+func (s *OrganizationService) IsOwnerOrAdmin(ctx context.Context, orgID, callerID int64) (bool, error) {
+	m, err := s.store.GetMember(ctx, orgID, callerID)
+	if err != nil {
+		return false, fmt.Errorf("get membership: %w", err)
+	}
+	if m == nil {
+		return false, nil
+	}
+	return m.Role == "owner" || m.Role == "admin", nil
+}
+
 // AddMember adds targetAccountID to the organization. callerID must be owner or admin.
 func (s *OrganizationService) AddMember(ctx context.Context, orgID, callerID, targetAccountID int64, role string) error {
 	caller, err := s.store.GetMember(ctx, orgID, callerID)

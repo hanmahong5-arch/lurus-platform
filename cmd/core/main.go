@@ -402,8 +402,9 @@ func run(ctx context.Context, cfg *config.Config) error {
 	registrationH := handler.NewRegistrationHandler(registrationSvc)
 	checkinH     := handler.NewCheckinHandler(checkinSvc)
 	orgH         := handler.NewOrganizationHandler(orgSvc)
-	qrLoginH     := handler.NewQRLoginHandler(rdb, cfg.SessionSecret)
-	qrH          := handler.NewQRHandler(rdb, cfg.SessionSecret)
+	qrLoginH := handler.NewQRLoginHandler(rdb, cfg.SessionSecret)
+	// The v2 QR handler fans out to OrganizationService for action=join_org.
+	qrH := handler.NewQRHandler(rdb, cfg.SessionSecret).WithOrgService(orgSvc)
 
 	// --- NewAPI Admin Proxy (optional) ---
 	var newAPIProxyH *handler.NewAPIProxyHandler
