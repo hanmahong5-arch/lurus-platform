@@ -60,14 +60,29 @@ lurus://qr?v=1&id=<64-hex>&a=<action>&t=<unix>&h=<16-hex>
 | `id`  | 256-bit random session id (hex-encoded). |
 | `a`   | Action name (`login` / `join_org` / `delegate`). |
 | `t`   | Server-issued creation timestamp (unix seconds). Part of the MAC — rebuilding the URL with a different `t` invalidates `h`. |
-| `h`   | First 16 hex chars of `HMAC-SHA256(session_secret, id \|\| 0x00 \|\| action \|\| 0x00 \|\| t)`. Defeats id substitution and bounds the replay window to `TTL + 30s skew` even if the server key somehow outlives its TTL. |
+| `h`   | First **24** hex chars of `HMAC-SHA256(signing_key, 0x01 \|\| id \|\| 0x00 \|\| action \|\| 0x00 \|\| t)`. The leading `0x01` is a domain-separator byte isolating QR HMACs from any other uses of the same master secret. 24 hex = 96 bits = brute force unreachable under rate-limited 5-min TTL. |
 
 The scanner app MUST send `h` back as `sig` **and** `t` back as `t` in the
 confirm request; the server rejects mismatches with `invalid_signature`.
 
+**Signing key selection (key rotation, R1.2)**: the server maintains a
+**keyring** of one or more (kid, secret) entries. Signing always uses the
+highest-kid key; verification accepts any key in the ring, which lets
+operators rotate without dropping in-flight sessions:
+
+```text
+1. Add new key → QR_SIGNING_KEYS="1:<old>,2:<new>" (both valid, 2 signs)
+2. Wait ≥ 5 min (TTL)  → no more QRs signed with kid=1 exist in the wild
+3. Remove old key     → QR_SIGNING_KEYS="2:<new>"
+```
+
+When `QR_SIGNING_KEYS` is unset, `SESSION_SECRET` becomes the single implicit
+key with kid `"default"` (preserves the single-secret deploy mode).
+
 **Backward compatibility (window: until 2026-06-01)**: pre-B5 APP builds may
-send `sig` without `t` in the confirm body. The server falls back to the
-legacy `HMAC-SHA256(session_secret, id || 0x00 || action)` check and emits a
+send `sig` without `t` in the confirm body. The server falls back to a
+legacy `HMAC-SHA256(signing_key, id || 0x00 || action)` check **truncated
+to 16 hex chars** (the pre-2026-04-24 length) and emits a
 `qr.legacy_payload_signature` warn log. The legacy path is scheduled for
 removal on 2026-06-01; after that, omitting `t` yields 400 `invalid_signature`.
 
@@ -186,12 +201,13 @@ Content-Type: application/json
 | Property | Mechanism |
 |----------|-----------|
 | Session id unguessable | 256-bit `crypto/rand` |
-| Payload tamper-proof | HMAC-SHA256 over `id‖0x00‖action‖0x00‖t` with `SESSION_SECRET` |
+| Payload tamper-proof | HMAC-SHA256 over `0x01‖id‖0x00‖action‖0x00‖t`, truncated to **96 bits**. Domain-separator byte isolates QR HMACs from other HMACs that might share the master secret. |
+| Key rotation without downtime | Keyring (`QR_SIGNING_KEYS=kid:hex32[,kid:hex32...]`) — signing uses highest kid, verification accepts any active key |
 | Confirm requires auth | `/api/v2` group is behind `JWT.Auth()` |
 | One-shot token delivery | CAS `confirmed→consumed` in Lua; second poller gets 410 |
 | No replay past TTL | Redis key TTL 300s (Redis-enforced) **and** signed-timestamp window `t ± (TTL + 30s skew)` (MAC-enforced — screenshot QRs can't outlive their window even if Redis record persists) |
-| Constant-time sig compare | `hmac.Equal` on server |
-| PerIP rate limit on create | Shared `deps.RateLimit.PerIP()` middleware |
+| Constant-time sig compare | `hmac.Equal` on server (tried per active key in keyring) |
+| PerIP rate limit on create | Shared `deps.RateLimit.PerIP()` middleware — `TRUSTED_PROXIES` CIDR list controls which upstreams can set `X-Forwarded-For`, so per-IP limits cannot be bypassed by XFF spoofing |
 | PerUser rate limit on confirm | Shared `deps.RateLimit.PerUser()` middleware |
 
 **Non-goals (by design):**
