@@ -669,6 +669,15 @@ func (h *QRHandler) writeConfirmResult(c *gin.Context, s *entity.QRSession) {
 			})
 			return
 		}
+		// Structured success audit — paired with the failure-path warn logs so
+		// Loki queries can compute confirm rate / geo distribution / unusual
+		// location patterns without parsing Gin access logs.
+		slog.InfoContext(c.Request.Context(), "qr.confirm.login",
+			"account_id", s.AccountID,
+			"session_id", s.ID,
+			"ip", c.ClientIP(),
+			"ua", s.UA,
+			"created_ip", s.IP)
 		c.JSON(http.StatusOK, gin.H{
 			"status":     string(entity.QRStatusConfirmed),
 			"action":     string(s.Action),
@@ -981,6 +990,17 @@ func (h *QRHandler) confirmJoinOrg(c *gin.Context, s *entity.QRSession) {
 	}
 	joinedAt := h.now().UTC()
 	h.publishMemberJoined(p.OrgID, s.AccountID, p.Role, joinedAt)
+	// Structured success audit — org membership is a privileged, irreversible
+	// state transition, so every successful confirm goes to the audit stream
+	// regardless of downstream NATS reachability.
+	slog.InfoContext(ctx, "qr.confirm.join_org",
+		"org_id", p.OrgID,
+		"initiator", s.CreatedBy,
+		"new_member", s.AccountID,
+		"role", p.Role,
+		"ip", c.ClientIP(),
+		"ua", s.UA,
+		"created_ip", s.IP)
 	c.JSON(http.StatusOK, gin.H{
 		"confirmed": true,
 		"action":    string(s.Action),
