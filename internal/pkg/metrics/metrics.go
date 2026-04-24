@@ -105,6 +105,54 @@ var (
 			Help:      "Total reconciliation issues detected by the worker.",
 		},
 	)
+
+	// ── QR primitive (v2) metrics ──────────────────────────────────────────
+	// See docs/qr-primitive.md §Metrics and deploy/grafana/dashboards/qr-primitive.json.
+
+	qrSessionsCreatedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "qr_sessions_created_total",
+			Help:      "Total QR sessions successfully created, partitioned by action.",
+		},
+		[]string{"action"},
+	)
+
+	qrConfirmedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "qr_confirmed_total",
+			Help:      "Total QR sessions successfully confirmed by the APP, partitioned by action.",
+		},
+		[]string{"action"},
+	)
+
+	qrExpiredTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "qr_expired_total",
+			Help:      "Total QR session lookups that 404'd due to TTL expiry or never-existing id (from status or confirm endpoints).",
+		},
+	)
+
+	qrSignatureRejectedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "qr_signature_rejected_total",
+			Help:      "Total confirm requests rejected for invalid or expired HMAC signature. Spikes likely indicate tampering attempts or APP/backend secret mismatch.",
+		},
+	)
+
+	qrConfirmLatency = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "qr_confirm_latency_seconds",
+			Help:      "End-to-end latency of the /api/v2/qr/:id/confirm handler, partitioned by action.",
+			// Confirm is mostly Redis IO — use tight buckets.
+			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5},
+		},
+		[]string{"action"},
+	)
 )
 
 // Handler returns the standard Prometheus /metrics HTTP handler.
@@ -178,4 +226,29 @@ func RecordRefundOperation(action, result string) {
 // RecordReconciliationIssues records the number of issues found in a single tick.
 func RecordReconciliationIssues(count int) {
 	reconciliationIssuesFound.Add(float64(count))
+}
+
+// RecordQRSessionCreated records a successful QR session creation.
+func RecordQRSessionCreated(action string) {
+	qrSessionsCreatedTotal.WithLabelValues(action).Inc()
+}
+
+// RecordQRConfirmed records a successful confirm (pending → confirmed transition).
+func RecordQRConfirmed(action string) {
+	qrConfirmedTotal.WithLabelValues(action).Inc()
+}
+
+// RecordQRExpired records a status/confirm lookup that 404'd (TTL expired or id never existed).
+func RecordQRExpired() {
+	qrExpiredTotal.Inc()
+}
+
+// RecordQRSignatureRejected records a confirm request that failed HMAC / timestamp validation.
+func RecordQRSignatureRejected() {
+	qrSignatureRejectedTotal.Inc()
+}
+
+// RecordQRConfirmLatency records the wall-clock latency of a confirm handler call.
+func RecordQRConfirmLatency(action string, elapsed time.Duration) {
+	qrConfirmLatency.WithLabelValues(action).Observe(elapsed.Seconds())
 }

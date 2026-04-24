@@ -219,6 +219,29 @@ v1 will be retired once nothing calls it.
   working. Document on the status page accordingly.
 - **TTL economics**: each pending session is ~200 bytes. 10 K concurrent
   sessions ≈ 2 MB Redis.
-- **Metrics to add later**: `qr_sessions_created_total{action}`,
-  `qr_sessions_confirmed_total{action}`, `qr_sessions_expired_total`,
-  `qr_confirm_latency_seconds`.
+
+---
+
+## Metrics
+
+All metrics are emitted from `internal/pkg/metrics/metrics.go` under the
+`lurus_platform_` namespace and exposed via `/metrics`.
+
+| Metric | Type | Labels | Incremented on |
+|--------|------|--------|----------------|
+| `lurus_platform_qr_sessions_created_total` | Counter | `action` | Successful `POST /api/v2/qr/session` |
+| `lurus_platform_qr_confirmed_total` | Counter | `action` | Successful `POST /api/v2/qr/:id/confirm` (pending → confirmed CAS win) |
+| `lurus_platform_qr_expired_total` | Counter | — | 404 from status or confirm (TTL expired or id never existed) |
+| `lurus_platform_qr_signature_rejected_total` | Counter | — | Confirm rejected for invalid HMAC or stale timestamp |
+| `lurus_platform_qr_confirm_latency_seconds` | Histogram | `action` | Observed on every confirm handler exit |
+
+`action` is one of `login` / `join_org` / `delegate` / `unknown` (the last
+only for confirm latency when the session read failed before the action was known).
+
+## Grafana
+
+Dashboard JSON: [`deploy/grafana/dashboards/qr-primitive.json`](../deploy/grafana/dashboards/qr-primitive.json).
+
+Import into Grafana (datasource must be named `prometheus`). Four panels:
+session-lifecycle rate, confirm-latency p50/p95/p99, signature-rejection
+rate (with a 0.1/sec alert line), and a 1h action-breakdown pie.

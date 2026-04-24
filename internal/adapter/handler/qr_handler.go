@@ -18,6 +18,7 @@ import (
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
 )
 
 // qr_handler implements the v2 multi-action QR primitive.
@@ -137,6 +138,7 @@ func (h *QRHandler) CreateSession(c *gin.Context) {
 		return
 	}
 
+	metrics.RecordQRSessionCreated(string(action))
 	expiresAt := issuedAt.Add(qrDefaultTTL)
 	c.JSON(http.StatusOK, gin.H{
 		"id":         id,
@@ -180,6 +182,7 @@ func (h *QRHandler) PollStatus(c *gin.Context) {
 	for {
 		session, err := h.readSession(ctx, key)
 		if err == redis.Nil {
+			metrics.RecordQRExpired()
 			c.JSON(http.StatusNotFound, gin.H{
 				"error":   "session_not_found",
 				"message": "QR session expired or does not exist",
@@ -290,6 +293,14 @@ type qrConfirmRequest struct {
 // is rejected to prevent blind-confirm attacks where a malicious app tricks
 // the user into confirming an attacker-chosen id.
 func (h *QRHandler) Confirm(c *gin.Context) {
+	// Observe latency for every request that makes it past auth; "unknown"
+	// action label until we learn the session's action from Redis.
+	start := h.now()
+	labelAction := "unknown"
+	defer func() {
+		metrics.RecordQRConfirmLatency(labelAction, h.now().Sub(start))
+	}()
+
 	accountID, ok := requireAccountID(c)
 	if !ok {
 		return
@@ -318,6 +329,7 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 
 	session, err := h.readSession(ctx, key)
 	if err == redis.Nil {
+		metrics.RecordQRExpired()
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "session_not_found",
 			"message": "QR session expired or does not exist",
@@ -331,6 +343,7 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 		})
 		return
 	}
+	labelAction = string(session.Action)
 
 	if req.T == 0 {
 		// Legacy pre-B5 client: fall back to the timestamp-less HMAC. Kept for
@@ -339,6 +352,7 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 		slog.WarnContext(c.Request.Context(), "qr.legacy_payload_signature",
 			"id", id, "action", string(session.Action), "account_id", accountID)
 		if !h.verifyPayloadSigLegacy(id, session.Action, req.Sig) {
+			metrics.RecordQRSignatureRejected()
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "invalid_signature",
 				"message": "QR payload signature did not match",
@@ -347,6 +361,7 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 		}
 	} else {
 		if !h.verifyPayloadSig(id, session.Action, req.T, req.Sig) {
+			metrics.RecordQRSignatureRejected()
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "invalid_signature",
 				"message": "QR payload signature did not match or has expired",
@@ -380,6 +395,7 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 		return
 	}
 
+	metrics.RecordQRConfirmed(string(session.Action))
 	c.JSON(http.StatusOK, gin.H{
 		"confirmed": true,
 		"action":    string(session.Action),
