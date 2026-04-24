@@ -403,8 +403,15 @@ func run(ctx context.Context, cfg *config.Config) error {
 	checkinH     := handler.NewCheckinHandler(checkinSvc)
 	orgH         := handler.NewOrganizationHandler(orgSvc)
 	qrLoginH := handler.NewQRLoginHandler(rdb, cfg.SessionSecret)
-	// The v2 QR handler fans out to OrganizationService for action=join_org.
+	// The v2 QR handler fans out to OrganizationService for action=join_org
+	// and (best-effort) to the NATS publisher for identity.org.member_joined.
 	qrH := handler.NewQRHandler(rdb, cfg.SessionSecret).WithOrgService(orgSvc)
+	if publisher != nil {
+		// Avoid the typed-nil-pointer-in-interface trap — only wire when
+		// NATS init actually succeeded. Without this check, h.publisher==nil
+		// evaluates to false inside the handler and Publish would panic.
+		qrH = qrH.WithPublisher(publisher)
+	}
 
 	// --- NewAPI Admin Proxy (optional) ---
 	var newAPIProxyH *handler.NewAPIProxyHandler

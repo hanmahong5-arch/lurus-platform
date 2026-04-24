@@ -18,6 +18,7 @@ const (
 	SubjectTopupCompleted        = "identity.topup.completed"
 	SubjectEntitlementUpdated    = "identity.entitlement.updated"
 	SubjectVIPLevelChanged       = "identity.vip.level_changed"
+	SubjectOrgMemberJoined       = "identity.org.member_joined"
 
 	// Consumed from LLM_EVENTS (published by lurus-api)
 	SubjectLLMUsageReported = "llm.usage.reported"
@@ -74,6 +75,17 @@ type EntitlementUpdatedPayload struct {
 type VIPLevelChangedPayload struct {
 	OldLevel int `json:"old_level"`
 	NewLevel int `json:"new_level"`
+}
+
+// OrgMemberJoinedPayload is the payload for identity.org.member_joined.
+// Emitted when an account is added to an org; ConfirmedViaQR is true when the
+// add was driven by the v2 QR primitive (authed create + scan confirm).
+type OrgMemberJoinedPayload struct {
+	OrgID          int64  `json:"org_id"`
+	AccountID      int64  `json:"account_id"`
+	Role           string `json:"role"`
+	JoinedAt       string `json:"joined_at"` // RFC3339
+	ConfirmedViaQR bool   `json:"confirmed_via_qr"`
 }
 
 // LLMUsageReportedPayload is the payload consumed from llm.usage.reported.

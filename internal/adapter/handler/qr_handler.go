@@ -18,6 +18,7 @@ import (
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
 )
 
@@ -27,6 +28,12 @@ import (
 type QROrgService interface {
 	IsOwnerOrAdmin(ctx context.Context, orgID, callerID int64) (bool, error)
 	AddMember(ctx context.Context, orgID, callerID, targetAccountID int64, role string) error
+}
+
+// QREventPublisher is the minimal NATS publish surface used for member-join events.
+// Accepts nil at wiring time — publish failures never block the user-visible path.
+type QREventPublisher interface {
+	Publish(ctx context.Context, ev *event.IdentityEvent) error
 }
 
 // qr_handler implements the v2 multi-action QR primitive.
@@ -58,6 +65,9 @@ const (
 	// qrTimestampSkew tolerates small client/server clock drift when validating
 	// the issued-at (t) parameter. TTL + skew is the full replay window.
 	qrTimestampSkew = 30 * time.Second
+	// qrEventPublishTimeout bounds the side-channel NATS publish on confirm so
+	// a slow/unavailable broker cannot wedge the user-visible confirm response.
+	qrEventPublishTimeout = 2 * time.Second
 )
 
 // QRHandler owns the v2 QR primitive.
@@ -69,6 +79,9 @@ type QRHandler struct {
 	// nil when wiring has not yet set it — those code paths error out at 501
 	// instead of panicking. login does not depend on it.
 	orgService QROrgService
+	// publisher is best-effort: join_org confirm emits identity.org.member_joined
+	// to IDENTITY_EVENTS. nil = publish skipped (never blocks the confirm).
+	publisher QREventPublisher
 }
 
 // NewQRHandler wires a handler. sessionSecret must be the same secret used by
@@ -85,6 +98,13 @@ func NewQRHandler(rdb *redis.Client, sessionSecret string) *QRHandler {
 // Chainable; safe to call with nil (leaves the action gated).
 func (h *QRHandler) WithOrgService(svc QROrgService) *QRHandler {
 	h.orgService = svc
+	return h
+}
+
+// WithPublisher wires best-effort NATS publishing for confirm-time events.
+// Chainable; safe to call with nil.
+func (h *QRHandler) WithPublisher(p QREventPublisher) *QRHandler {
+	h.publisher = p
 	return h
 }
 
@@ -424,6 +444,7 @@ func (h *QRHandler) PollStatus(c *gin.Context) {
 
 // writeConfirmResult dispatches per-action confirm-time payload.
 func (h *QRHandler) writeConfirmResult(c *gin.Context, s *entity.QRSession) {
+	ctx := c.Request.Context()
 	switch s.Action {
 	case entity.QRActionLogin:
 		token, err := auth.IssueSessionToken(s.AccountID, qrLoginTTL, h.sessionSecret)
@@ -441,6 +462,58 @@ func (h *QRHandler) writeConfirmResult(c *gin.Context, s *entity.QRSession) {
 			"expires_in": int(qrLoginTTL.Seconds()),
 		})
 
+	case entity.QRActionJoinOrg:
+		// Invariants — created by CreateSessionAuthed and enforced there.
+		// Defensive-only guards: a missing initiator or orgService on the
+		// confirm side means the deployment config drifted between create
+		// and consume and we refuse to move.
+		if h.orgService == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "action_unsupported",
+				"message": "join_org requires organization service, not wired",
+			})
+			return
+		}
+		if s.CreatedBy == 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "invalid_session",
+				"message": "join_org session missing initiator",
+			})
+			return
+		}
+		var p qrJoinOrgParams
+		if err := json.Unmarshal(s.Params, &p); err != nil || p.OrgID == 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "invalid_session",
+				"message": "join_org session has malformed params",
+			})
+			return
+		}
+		if p.Role == "" {
+			p.Role = "member"
+		}
+		// CreatedBy = initiator (must be owner/admin — rechecked by AddMember).
+		// AccountID  = scanner/APP user confirming — this is the new member.
+		if err := h.orgService.AddMember(ctx, p.OrgID, s.CreatedBy, s.AccountID, p.Role); err != nil {
+			slog.WarnContext(ctx, "qr.join_org.add_member_failed",
+				"org_id", p.OrgID, "initiator", s.CreatedBy,
+				"target", s.AccountID, "err", err)
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":   "forbidden",
+				"message": "Failed to add member to organization",
+			})
+			return
+		}
+		joinedAt := h.now().UTC()
+		h.publishMemberJoined(p.OrgID, s.AccountID, p.Role, joinedAt)
+		c.JSON(http.StatusOK, gin.H{
+			"status":    string(entity.QRStatusConfirmed),
+			"action":    string(s.Action),
+			"org_id":    p.OrgID,
+			"role":      p.Role,
+			"joined_at": joinedAt.Format(time.RFC3339),
+		})
+
 	default:
 		// Reached only if an action is added to entity.IsValidQRAction but not
 		// plumbed here. Fail loudly rather than returning an empty success body.
@@ -448,6 +521,32 @@ func (h *QRHandler) writeConfirmResult(c *gin.Context, s *entity.QRSession) {
 			"error":   "action_unsupported",
 			"message": fmt.Sprintf("Action %q has no confirm handler", s.Action),
 		})
+	}
+}
+
+// publishMemberJoined emits identity.org.member_joined best-effort. Failures
+// are logged but never fail the confirm response — the DB write is the source
+// of truth; NATS is a downstream notification channel.
+func (h *QRHandler) publishMemberJoined(orgID, accountID int64, role string, joinedAt time.Time) {
+	if h.publisher == nil {
+		return
+	}
+	payload := event.OrgMemberJoinedPayload{
+		OrgID:          orgID,
+		AccountID:      accountID,
+		Role:           role,
+		JoinedAt:       joinedAt.Format(time.RFC3339),
+		ConfirmedViaQR: true,
+	}
+	ev, err := event.NewEvent(event.SubjectOrgMemberJoined, accountID, "", "", payload)
+	if err != nil {
+		slog.Warn("qr.join_org.event_build_failed", "org_id", orgID, "account_id", accountID, "err", err)
+		return
+	}
+	pubCtx, cancel := context.WithTimeout(context.Background(), qrEventPublishTimeout)
+	defer cancel()
+	if err := h.publisher.Publish(pubCtx, ev); err != nil {
+		slog.Warn("qr.join_org.event_publish_failed", "org_id", orgID, "account_id", accountID, "err", err)
 	}
 }
 
