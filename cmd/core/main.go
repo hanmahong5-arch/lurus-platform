@@ -468,6 +468,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 		readiness.PostgresChecker(sqlDB),
 	)
 
+	// App registry reconciler: built up-front so the AppsAdmin handler
+	// can share the instance for manual /rotate-secret calls. The
+	// goroutine that runs the periodic loop is spawned later in the
+	// errgroup section. nil-safe: when apps.yaml is absent or we're not
+	// in a K8s pod the reconciler is left nil and the rotate endpoint
+	// returns 503.
+	appRegRecon := buildAppRegistryReconciler(rdb, zitadelClient)
+
 	engine := router.Build(router.Deps{
 		Accounts:          accountH,
 		Subscriptions:     subH,
@@ -488,7 +496,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		Organizations:     orgH,
 		QRLogin:           qrLoginH,
 		QR:                qrH,
-		AppsAdmin:         handler.NewAppsAdminHandler(getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath), zitadelClient),
+		AppsAdmin:         handler.NewAppsAdminHandler(getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath), zitadelClient, appRegRecon),
 		NewAPIProxy:       newAPIProxyH,
 		InternalKey:       cfg.InternalAPIKey,
 		JWT:               jwtMiddleware,
@@ -591,27 +599,13 @@ func run(ctx context.Context, cfg *config.Config) error {
 	})
 
 	// App registry reconciler: converges apps.yaml → Zitadel OIDC apps +
-	// K8s Secrets. No-op when the config file is absent (single-app
-	// deployments continue as before) or when the ServiceAccount token
-	// is not mounted (running outside a K8s pod).
-	if appRegSpec, err := app_registry.LoadSpec(getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath)); err == nil {
-		if k8sClient, err := app_registry.NewK8sClient(); err == nil {
-			appRegRecon, err := app_registry.NewReconciler(appRegSpec, zitadelClient, k8sClient, app_registry.Options{})
-			if err != nil {
-				slog.Warn("app_registry: construct failed, skipping", "err", err)
-			} else {
-				g.Go(func() error {
-					appRegRecon.Run(gctx)
-					return nil
-				})
-			}
-		} else if errors.Is(err, app_registry.ErrNotInCluster) {
-			slog.Info("app_registry: not in a K8s pod, reconciler disabled")
-		} else {
-			slog.Warn("app_registry: k8s client init failed, reconciler disabled", "err", err)
-		}
-	} else if !os.IsNotExist(errors.Unwrap(err)) {
-		slog.Warn("app_registry: load spec failed, reconciler disabled", "err", err)
+	// K8s Secrets. The instance was built earlier (so AppsAdmin can share
+	// it for manual /rotate-secret); here we just spawn the periodic loop.
+	if appRegRecon != nil {
+		g.Go(func() error {
+			appRegRecon.Run(gctx)
+			return nil
+		})
 	}
 
 	// Graceful shutdown trigger. The grace window must exceed the 30s QR
@@ -704,4 +698,40 @@ func buildAccountLookup(rdb *redis.Client, accountSvc *app.AccountService) auth.
 
 		return account.ID, nil
 	}
+}
+
+// buildAppRegistryReconciler constructs the app_registry reconciler from
+// apps.yaml + the in-cluster ServiceAccount + Redis. Returns nil — and
+// logs a single explanatory line — for any of the well-known "not
+// configured" reasons (file missing, not in a K8s pod, Zitadel PAT
+// unset). Any nil return short-circuits both the periodic loop *and*
+// the manual /rotate-secret endpoint, since the latter cannot do its
+// job without the same dependencies.
+func buildAppRegistryReconciler(rdb *redis.Client, zitadelClient *zitadel.Client) *app_registry.Reconciler {
+	configPath := getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath)
+	spec, err := app_registry.LoadSpec(configPath)
+	if err != nil {
+		if os.IsNotExist(errors.Unwrap(err)) {
+			slog.Info("app_registry: apps.yaml not present, reconciler disabled", "path", configPath)
+			return nil
+		}
+		slog.Warn("app_registry: load spec failed, reconciler disabled", "err", err)
+		return nil
+	}
+	k8sClient, err := app_registry.NewK8sClient()
+	if err != nil {
+		if errors.Is(err, app_registry.ErrNotInCluster) {
+			slog.Info("app_registry: not in a K8s pod, reconciler disabled")
+		} else {
+			slog.Warn("app_registry: k8s client init failed, reconciler disabled", "err", err)
+		}
+		return nil
+	}
+	rotation := app_registry.NewRotationState(rdb)
+	recon, err := app_registry.NewReconciler(spec, zitadelClient, k8sClient, rotation, app_registry.Options{})
+	if err != nil {
+		slog.Warn("app_registry: construct failed, reconciler disabled", "err", err)
+		return nil
+	}
+	return recon
 }

@@ -51,6 +51,28 @@ type App struct {
 
 	// OIDC carries flow-level settings shared across environments.
 	OIDC OIDCSettings `yaml:"oidc"`
+
+	// SecretRotation is the optional auto-rotation policy for confidential
+	// clients (auth_method=basic). Ignored for PKCE/public clients which
+	// have no client_secret. When Enabled is false (or the whole stanza
+	// is omitted) the reconciler never touches client_secret after the
+	// initial provisioning — operators rotate manually via the admin UI.
+	SecretRotation SecretRotation `yaml:"secret_rotation,omitempty"`
+}
+
+// SecretRotation declares the auto-rotation policy for an App's
+// client_secret. Only consulted when OIDC.AuthMethod == "basic".
+type SecretRotation struct {
+	// Enabled gates the auto-rotation loop. When false the reconciler
+	// leaves the existing secret in place; manual rotation via the admin
+	// endpoint still works.
+	Enabled bool `yaml:"enabled,omitempty"`
+
+	// IntervalDays is the maximum age allowed for a client_secret before
+	// the reconciler rotates it on the next tick. Required when Enabled.
+	// Validation enforces > 0 to avoid an accidental rotate-every-tick
+	// runaway.
+	IntervalDays int `yaml:"interval_days,omitempty"`
 }
 
 // Environment is one stage of an App — a unique domain + Secret location

@@ -62,6 +62,9 @@ func validateApp(a App) error {
 	if err := validateOIDC(a.OIDC, a.Name); err != nil {
 		return err
 	}
+	if err := validateRotation(a.SecretRotation, a.OIDC, a.Name); err != nil {
+		return err
+	}
 	seenEnvs := map[string]bool{}
 	seenDomains := map[string]bool{}
 	for i, env := range a.Environments {
@@ -125,6 +128,27 @@ func validateOIDC(o OIDCSettings, appName string) error {
 	}
 	if !strings.HasPrefix(o.PostLogoutPath, "/") {
 		return fmt.Errorf("oidc.post_logout_path must start with / (app=%s)", appName)
+	}
+	return nil
+}
+
+// validateRotation enforces the secret_rotation invariants.
+//
+//   - Rotation is only meaningful for confidential clients. Declaring it
+//     on a PKCE app is almost certainly a config bug — fail-fast at load
+//     time rather than silently ignore at runtime.
+//   - When rotation is enabled, interval_days must be a positive integer.
+//     A zero or negative interval would either trip the rotate-every-tick
+//     trap or be a clear oversight in the YAML.
+func validateRotation(r SecretRotation, o OIDCSettings, appName string) error {
+	if !r.Enabled && r.IntervalDays == 0 {
+		return nil
+	}
+	if r.Enabled && o.AuthMethod != "basic" {
+		return fmt.Errorf("secret_rotation.enabled requires oidc.auth_method=basic (app=%s)", appName)
+	}
+	if r.Enabled && r.IntervalDays <= 0 {
+		return fmt.Errorf("secret_rotation.interval_days must be > 0 when enabled (app=%s)", appName)
 	}
 	return nil
 }

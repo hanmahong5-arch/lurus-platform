@@ -22,15 +22,22 @@ import (
 type AppsAdminHandler struct {
 	configPath string
 	zitadel    *zitadel.Client
+	// recon is optional — when nil the rotate endpoint short-circuits
+	// to 503. Read-only listing still works because List uses the
+	// declarative loader directly.
+	recon *app_registry.Reconciler
 }
 
 // NewAppsAdminHandler wires the handler. When zitadel is nil (PAT not
 // configured) the handler still serves the declarative view but omits
-// the live-state columns.
-func NewAppsAdminHandler(configPath string, zit *zitadel.Client) *AppsAdminHandler {
+// the live-state columns. When recon is nil the rotate endpoint returns
+// 503 — the dependency tree (Zitadel + K8s + Redis) wasn't fully wired,
+// usually because the pod isn't in K8s or apps.yaml is missing.
+func NewAppsAdminHandler(configPath string, zit *zitadel.Client, recon *app_registry.Reconciler) *AppsAdminHandler {
 	return &AppsAdminHandler{
 		configPath: configPath,
 		zitadel:    zit,
+		recon:      recon,
 	}
 }
 
