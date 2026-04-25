@@ -30,6 +30,9 @@ spec:
         # the short SHA of the last commit we want this deploy to track.
         rollout.lurus.cn/revision: "8fa56a6"
     spec:
+      # ServiceAccount grants scoped Secret/Deployment RBAC needed by the
+      # app_registry reconciler (see rbac-app-registry.yaml).
+      serviceAccountName: platform-core
       nodeSelector:
         lurus.cn/vpn: "true"
       affinity:
@@ -289,6 +292,16 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            # apps.yaml is mounted read-only so the reconciler can load it.
+            # Kustomize generates the ConfigMap from config/apps.yaml.
+            - name: apps-registry
+              mountPath: /etc/lurus-platform
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: apps-registry
+          configMap:
+            name: platform-core-apps-registry
+            optional: true  # legacy deployments without the ConfigMap keep booting
+

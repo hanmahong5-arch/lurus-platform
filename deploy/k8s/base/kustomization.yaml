@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - configmap.yaml
   - secrets.yaml
+  - rbac-app-registry.yaml
   - deployment.yaml
   - service.yaml
   - ingressroute.yaml
@@ -12,3 +13,12 @@ resources:
   - pdb.yaml
   - servicemonitor.yaml
   - zitadel.yaml
+
+# apps.yaml is mounted into platform-core at /etc/lurus-platform/apps.yaml
+# so the app_registry reconciler can read it. Declared as a ConfigMap
+# generator (not a static manifest) so Kustomize-level hashing auto-
+# triggers a rollout when the file changes.
+configMapGenerator:
+  - name: platform-core-apps-registry
+    files:
+      - apps.yaml=../../../config/apps.yaml

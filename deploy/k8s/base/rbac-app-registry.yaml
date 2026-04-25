@@ -1,0 +1,83 @@
+# ServiceAccount + RBAC for the app_registry reconciler.
+#
+# The reconciler reads apps.yaml (mounted as a ConfigMap), provisions
+# OIDC applications in Zitadel, and writes the returned client_id into
+# K8s Secrets in app-owned namespaces, then triggers a rolling restart
+# on the target Deployments.
+#
+# Principle of least privilege:
+#   - Secret get/patch/create is scoped via RoleBindings to the specific
+#     namespaces listed in apps.yaml (currently: lurus-tally,
+#     lurus-admin). platform-core does NOT get cluster-wide Secret
+#     access.
+#   - Deployment patch is scoped the same way.
+#   - Reading its own Pod / Namespace is not needed — all inputs come
+#     from the mounted config file.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-core
+  namespace: lurus-platform
+---
+# ── lurus-tally: Secret + Deployment rollout permission ─────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: platform-core-app-registry
+  namespace: lurus-tally
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "patch", "update"]
+    # Restrict by resourceNames so a misconfigured apps.yaml can't
+    # accidentally touch unrelated secrets in this namespace.
+    resourceNames: ["tally-secrets", "tally-secrets-prod"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+    resourceNames: ["tally-web"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: platform-core-app-registry
+  namespace: lurus-tally
+subjects:
+  - kind: ServiceAccount
+    name: platform-core
+    namespace: lurus-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: platform-core-app-registry
+---
+# ── lurus-admin: Secret + Deployment rollout permission ─────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: platform-core-app-registry
+  namespace: lurus-admin
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "patch", "update"]
+    resourceNames: ["admin-secrets"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+    resourceNames: ["lurus-admin"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: platform-core-app-registry
+  namespace: lurus-admin
+subjects:
+  - kind: ServiceAccount
+    name: platform-core
+    namespace: lurus-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: platform-core-app-registry

@@ -207,6 +207,18 @@ var (
 			Help:      "Total long-poll requests that fell back to the 1s polling loop after Pub/Sub subscribe failed.",
 		},
 	)
+
+	// App registry reconciler: per-environment outcome counter. Labels
+	// stay stable and low-cardinality (handful of enum values) so this
+	// is safe to use for alerting rules.
+	appRegistryReconcileTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "app_registry_reconcile_total",
+			Help:      "App registry reconcile results per (app, env) pair. Outcomes: noop, secret_updated, rollout_triggered, oidc_ensure_failed, secret_write_failed, rollout_failed, project_ensure_failed, skipped_disabled.",
+		},
+		[]string{"outcome"},
+	)
 )
 
 // Handler returns the standard Prometheus /metrics HTTP handler.
@@ -342,4 +354,11 @@ func RecordQRPollRejectedOverload() {
 // Pub/Sub wait to the 1s polling loop (Redis Pub/Sub subscribe failure).
 func RecordQRPollFallback() {
 	qrPollFallbackTotal.Inc()
+}
+
+// RecordAppRegistryReconcile increments the reconciler outcome counter
+// for a single (app, env) unit of work. `outcome` must come from the
+// fixed vocabulary documented in the metric help text.
+func RecordAppRegistryReconcile(outcome string) {
+	appRegistryReconcileTotal.WithLabelValues(outcome).Inc()
 }

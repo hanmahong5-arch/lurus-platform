@@ -32,6 +32,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module"
+	"github.com/hanmahong5-arch/lurus-platform/internal/module/app_registry"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/buildinfo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/cache"
@@ -587,6 +588,30 @@ func run(ctx context.Context, cfg *config.Config) error {
 		reconciler.Start(gctx)
 		return nil
 	})
+
+	// App registry reconciler: converges apps.yaml → Zitadel OIDC apps +
+	// K8s Secrets. No-op when the config file is absent (single-app
+	// deployments continue as before) or when the ServiceAccount token
+	// is not mounted (running outside a K8s pod).
+	if appRegSpec, err := app_registry.LoadSpec(getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath)); err == nil {
+		if k8sClient, err := app_registry.NewK8sClient(); err == nil {
+			appRegRecon, err := app_registry.NewReconciler(appRegSpec, zitadelClient, k8sClient, app_registry.Options{})
+			if err != nil {
+				slog.Warn("app_registry: construct failed, skipping", "err", err)
+			} else {
+				g.Go(func() error {
+					appRegRecon.Run(gctx)
+					return nil
+				})
+			}
+		} else if errors.Is(err, app_registry.ErrNotInCluster) {
+			slog.Info("app_registry: not in a K8s pod, reconciler disabled")
+		} else {
+			slog.Warn("app_registry: k8s client init failed, reconciler disabled", "err", err)
+		}
+	} else if !os.IsNotExist(errors.Unwrap(err)) {
+		slog.Warn("app_registry: load spec failed, reconciler disabled", "err", err)
+	}
 
 	// Graceful shutdown trigger. The grace window must exceed the 30s QR
 	// long-poll cap (see qrMaxPollWait) so in-flight long polls can return

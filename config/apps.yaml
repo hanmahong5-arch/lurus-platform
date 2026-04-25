@@ -1,0 +1,80 @@
+# Lurus platform — declarative app registry
+#
+# Each entry here is reconciled by internal/module/app_registry against:
+#   1. Zitadel (via Management API — ensures an OIDC application exists
+#      with the declared redirect URIs, grant types, auth method).
+#   2. Kubernetes (writes the issued client_id into the named Secret and
+#      triggers a rolling restart so the target deployment picks it up).
+#
+# Safe to edit by hand; reconciler is idempotent (no-ops when live state
+# already matches) and runs on a periodic loop + on startup.
+#
+# Adding a new app requires NO manual Zitadel clicks, NO kubectl patch.
+# Remove an entry → reconciler does NOT delete the live Zitadel app (we
+# don't do destructive ops without human approval; that's Phase 2 via
+# QR delegate action).
+
+# Organization slug as it appears inside Zitadel. All managed projects
+# live under this org; no cross-org reconciliation.
+org: lurus
+
+# Project grouping inside Zitadel — one project, many applications.
+# Phase 1 uses a single project for all platform apps; can split later
+# if RBAC boundaries need it.
+project: lurus-platform
+
+apps:
+  # ── tally (Lurus Tally — AI 进销存 SaaS) ──────────────────────────────
+  - name: tally
+    display_name: Lurus Tally
+    # Stage-specific domains; each produces its own OIDC app since
+    # Zitadel requires distinct redirect URI sets per env.
+    environments:
+      - env: stage
+        domain: tally-stage.lurus.cn
+        secret:
+          namespace: lurus-tally
+          name: tally-secrets
+          client_id_key: ZITADEL_CLIENT_ID
+        # Deployment to bounce after Secret change. Empty = no restart.
+        restart_deployment: tally-web
+      - env: prod
+        domain: tally.lurus.cn
+        secret:
+          namespace: lurus-tally
+          name: tally-secrets-prod
+          client_id_key: ZITADEL_CLIENT_ID
+        restart_deployment: tally-web
+    # OIDC flow: Web app + PKCE (Auth Method = NONE). The previous manual
+    # dance had operators remember "don't pick Basic" — now it's declared.
+    oidc:
+      app_type: web
+      auth_method: none
+      grant_types: [authorization_code, refresh_token]
+      response_types: [code]
+      redirect_path: /api/auth/callback/zitadel
+      post_logout_path: /
+
+  # ── admin (2l-bs-admin — Elixir LiveView admin dashboard) ────────────
+  # Still pending initial deploy. Listed here so first apply lands
+  # cleanly; remove "enabled: false" when Zitadel confidential client
+  # is ready.
+  - name: admin
+    display_name: Lurus Admin Console
+    enabled: false  # pending Zitadel confidential client setup
+    environments:
+      - env: prod
+        domain: admin.lurus.cn
+        secret:
+          namespace: lurus-admin
+          name: admin-secrets
+          client_id_key: ZITADEL_CLIENT_ID
+          client_secret_key: ZITADEL_CLIENT_SECRET
+        restart_deployment: lurus-admin
+    oidc:
+      app_type: web
+      auth_method: basic  # confidential client — admin holds a secret
+      grant_types: [authorization_code, refresh_token]
+      response_types: [code]
+      redirect_path: /auth/callback
+      post_logout_path: /
