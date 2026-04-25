@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import {
-  Card, Typography, Table, Tag, Toast, Button, Tooltip, Banner,
+  Card, Typography, Table, Tag, Toast, Button, Tooltip, Banner, Modal,
 } from '@douyinfe/semi-ui'
 import axios from 'axios'
 
@@ -47,6 +47,11 @@ export default function AppsTab() {
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState(null)
   const [errMsg, setErrMsg] = useState('')
+  // rotatingKey is the row key (`${app}:${env}`) currently mid-flight.
+  // Used to disable the per-row button during the request so a double
+  // click can't double-rotate. Centralised here rather than per-row
+  // local state because the confirmation Modal lives at this level.
+  const [rotatingKey, setRotatingKey] = useState('')
 
   async function fetchApps() {
     setLoading(true)
@@ -64,6 +69,52 @@ export default function AppsTab() {
   }
 
   useEffect(() => { fetchApps() }, [])
+
+  // rotateSecret POSTs to /admin/v1/apps/:name/:env/rotate-secret. The
+  // confirmation step is wrapped in Modal.confirm to enforce a deliberate
+  // operator action — rotation invalidates the previous secret server-
+  // side immediately, so a misclick would page on-call.
+  function rotateSecret(row) {
+    Modal.confirm({
+      title: '确认轮转 client_secret',
+      icon: null,
+      content: (
+        <div>
+          <p>
+            目标: <Text strong code>{row.appName}</Text> / <Text strong code>{row.env}</Text>
+          </p>
+          <p style={{ marginTop: 8 }}>
+            轮转后旧密钥将立即失效。新密钥会写入 K8s Secret <Text code>{row.secretName}</Text>，
+            随后 deployment 会被滚动重启。请在低峰期执行。
+          </p>
+        </div>
+      ),
+      okText: '执行轮转',
+      cancelText: '取消',
+      okButtonProps: { type: 'danger' },
+      onOk: async () => {
+        setRotatingKey(row.key)
+        try {
+          const res = await adminClient.post(
+            `/apps/${encodeURIComponent(row.appName)}/${encodeURIComponent(row.env)}/rotate-secret`,
+          )
+          const next = res.data?.next_due_at
+          Toast.success({
+            content: `已轮转 ${row.appName}/${row.env}`
+              + (next ? ` · 下次到期 ${new Date(next).toLocaleString()}` : ''),
+            duration: 5,
+          })
+          // Refresh so any client_id_preview / status changes show up.
+          fetchApps()
+        } catch (err) {
+          const msg = err?.response?.data?.message || err?.response?.data?.error || err.message
+          Toast.error({ content: `轮转失败: ${msg}`, duration: 6 })
+        } finally {
+          setRotatingKey('')
+        }
+      },
+    })
+  }
 
   const rows = flatten(view?.apps)
 
@@ -135,6 +186,34 @@ export default function AppsTab() {
           <Text type="tertiary" size="small">ns: {row.secretNamespace}</Text>
         </div>
       ),
+    },
+    {
+      title: '操作',
+      width: 110,
+      render: (_, row) => {
+        // Rotation only applies to confidential clients — PKCE apps
+        // have no client_secret to rotate. Render a quiet placeholder
+        // so the column stays aligned across rows.
+        if (row.authMethod !== 'basic') {
+          return <Text type="tertiary" size="small">—</Text>
+        }
+        if (!row.enabled) {
+          return <Text type="tertiary" size="small">—</Text>
+        }
+        return (
+          <Tooltip content="生成新的 client_secret 并写入 K8s Secret，然后滚动重启 deployment">
+            <Button
+              size="small"
+              type="warning"
+              loading={rotatingKey === row.key}
+              disabled={!!rotatingKey && rotatingKey !== row.key}
+              onClick={() => rotateSecret(row)}
+            >
+              轮转密钥
+            </Button>
+          </Tooltip>
+        )
+      },
     },
   ]
 
