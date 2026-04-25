@@ -11,6 +11,7 @@ const TokensTab = lazy(() => import('./TokensTab'))
 const UsageLogsTab = lazy(() => import('./UsageLogsTab'))
 const ModelsTab = lazy(() => import('./ModelsTab'))
 const GatewaySettingsTab = lazy(() => import('./GatewaySettingsTab'))
+const AppsTab = lazy(() => import('./AppsTab'))
 
 function LazyTab({ children }) {
   return (
@@ -391,6 +392,11 @@ export default function AdminPage() {
         <TabPane tab="系统配置" itemKey="settings">
           <div style={{ paddingTop: 16 }}>
             <SystemConfigTab />
+          </div>
+        </TabPane>
+        <TabPane tab="应用注册" itemKey="apps">
+          <div style={{ paddingTop: 16 }}>
+            <LazyTab><AppsTab /></LazyTab>
           </div>
         </TabPane>
         <TabPane tab="渠道管理" itemKey="channels">

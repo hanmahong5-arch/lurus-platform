@@ -27,11 +27,18 @@ metadata:
   name: platform-core-app-registry
   namespace: lurus-tally
 rules:
+  # K8s RBAC quirk: `resourceNames` filters cannot apply to `create`
+  # (the resource doesn't have a name until it's created), so create
+  # is granted unconditionally at the namespace level. Misconfigured
+  # apps.yaml can therefore create new Secrets in this namespace —
+  # but never touch unrelated existing ones, since get/patch/update
+  # are restricted via the second rule below.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create", "patch", "update"]
-    # Restrict by resourceNames so a misconfigured apps.yaml can't
-    # accidentally touch unrelated secrets in this namespace.
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch", "update"]
     resourceNames: ["tally-secrets", "tally-secrets-prod"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
@@ -61,7 +68,10 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create", "patch", "update"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch", "update"]
     resourceNames: ["admin-secrets"]
   - apiGroups: ["apps"]
     resources: ["deployments"]

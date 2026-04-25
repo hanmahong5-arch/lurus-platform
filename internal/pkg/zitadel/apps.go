@@ -10,6 +10,13 @@ import (
 	"strings"
 )
 
+// LookupProject returns the Zitadel project id for `name` if it
+// exists, or empty string + nil error when nothing matches. Pure-read
+// variant of EnsureProject — does NOT create anything.
+func (c *Client) LookupProject(ctx context.Context, name string) (string, error) {
+	return c.findProjectByName(ctx, name)
+}
+
 // EnsureProject returns the Zitadel project id for the given project
 // name, creating the project first if it doesn't already exist. The
 // operation is idempotent: calling it twice with the same name returns
@@ -96,6 +103,27 @@ type OIDCAppCredentials struct {
 	AppID        string
 	ClientID     string
 	ClientSecret string
+}
+
+// LookupOIDCApp returns the live credentials for an OIDC app if one
+// exists with the given name in the project. Returns (nil, nil) when
+// nothing matches — callers distinguish "not provisioned" from "lookup
+// failed" by checking the error. This is a pure-read companion to
+// EnsureOIDCApp; safe to use from viewer / admin UIs that must not
+// create resources as a side effect.
+func (c *Client) LookupOIDCApp(ctx context.Context, projectID, name string) (*OIDCAppCredentials, error) {
+	appID, err := c.findOIDCAppByName(ctx, projectID, name)
+	if err != nil {
+		return nil, err
+	}
+	if appID == "" {
+		return nil, nil
+	}
+	clientID, err := c.fetchOIDCClientID(ctx, projectID, appID)
+	if err != nil {
+		return nil, err
+	}
+	return &OIDCAppCredentials{AppID: appID, ClientID: clientID}, nil
 }
 
 // EnsureOIDCApp reconciles one OIDC application inside the given project:

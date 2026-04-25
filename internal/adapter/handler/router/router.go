@@ -37,6 +37,7 @@ type Deps struct {
 	Organizations   *handler.OrganizationHandler    // organization management
 	QRLogin         *handler.QRLoginHandler         // v1 QR login (login-only, legacy)
 	QR              *handler.QRHandler              // v2 multi-action QR primitive (login → join_org/delegate pending)
+	AppsAdmin       *handler.AppsAdminHandler       // read-only viewer over apps.yaml + Zitadel state
 	NewAPIProxy     *handler.NewAPIProxyHandler     // nil when newapi proxy is not configured
 	ServiceKeyAdmin *handler.AdminServiceKeyHandler // nil when service key management not wired
 	InternalKey     string                          // legacy INTERNAL_API_KEY (fallback during migration)
@@ -349,6 +350,13 @@ func Build(deps Deps) *gin.Engine {
 		// Admin Organizations
 		admin.GET("/organizations", deps.Organizations.AdminList)
 		admin.PATCH("/organizations/:id", deps.Organizations.AdminUpdateStatus)
+
+		// Admin Apps viewer — read-only list of apps.yaml joined with
+		// Zitadel live state. No write verbs: apps.yaml is the source
+		// of truth; mutations go through the git flow.
+		if deps.AppsAdmin != nil {
+			admin.GET("/apps", deps.AppsAdmin.List)
+		}
 
 		// Service API Key management
 		if deps.ServiceKeyAdmin != nil {

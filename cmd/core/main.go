@@ -488,6 +488,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		Organizations:     orgH,
 		QRLogin:           qrLoginH,
 		QR:                qrH,
+		AppsAdmin:         handler.NewAppsAdminHandler(getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath), zitadelClient),
 		NewAPIProxy:       newAPIProxyH,
 		InternalKey:       cfg.InternalAPIKey,
 		JWT:               jwtMiddleware,
