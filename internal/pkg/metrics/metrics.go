@@ -215,9 +215,29 @@ var (
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "app_registry_reconcile_total",
-			Help:      "App registry reconcile results per (app, env) pair. Outcomes: noop, secret_updated, rollout_triggered, oidc_ensure_failed, secret_write_failed, rollout_failed, project_ensure_failed, skipped_disabled.",
+			Help:      "App registry reconcile results per (app, env) pair. Outcomes: noop, secret_updated, rollout_triggered, oidc_ensure_failed, secret_write_failed, rollout_failed, project_ensure_failed, skipped_disabled, rotation_succeeded, rotation_zitadel_failed, rotation_secret_write_failed, rotation_rollout_failed, rotation_state_read_failed, rotation_state_write_failed, rotation_lookup_failed.",
 		},
 		[]string{"outcome"},
+	)
+
+	// OIDC client_secret rotations are tracked separately from the
+	// reconcile-outcome counter because the (app, env, trigger) split
+	// is the natural grouping for an alerting / dashboard query — e.g.
+	// "alert when an app hasn't auto-rotated in 100 days" or "spike of
+	// manual rotations in 5 min". Trigger label is "auto" when fired
+	// from the periodic reconciler, "manual" when an operator hits the
+	// /admin/v1/apps/:name/:env/rotate-secret endpoint.
+	//
+	// Steady-state rate is roughly 1/(interval_days * apps) for auto,
+	// plus operator-driven manual events. A persistent zero rate on a
+	// confidential app is itself a signal that rotation is misconfigured.
+	oidcSecretRotatedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "oidc_secret_rotated_total",
+			Help:      "OIDC client_secret rotations grouped by trigger (manual|auto). Sustained activity should be roughly 1/(interval_days * apps) for auto, plus operator-driven manual events.",
+		},
+		[]string{"app", "env", "trigger"},
 	)
 )
 
@@ -361,4 +381,11 @@ func RecordQRPollFallback() {
 // fixed vocabulary documented in the metric help text.
 func RecordAppRegistryReconcile(outcome string) {
 	appRegistryReconcileTotal.WithLabelValues(outcome).Inc()
+}
+
+// RecordOIDCSecretRotation increments the OIDC rotation counter for a
+// single completed rotation. trigger must be "auto" (fired by the
+// periodic reconciler) or "manual" (admin endpoint).
+func RecordOIDCSecretRotation(app, env, trigger string) {
+	oidcSecretRotatedTotal.WithLabelValues(app, env, trigger).Inc()
 }
