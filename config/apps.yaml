@@ -56,12 +56,12 @@ apps:
       post_logout_path: /
 
   # ── admin (2l-bs-admin — Elixir LiveView admin dashboard) ────────────
-  # Still pending initial deploy. Listed here so first apply lands
-  # cleanly; remove "enabled: false" when Zitadel confidential client
-  # is ready.
+  # OIDC client provisioned via app_registry; the admin Phoenix image
+  # itself is deployed separately. Reconciler creates Zitadel project
+  # entry + lurus-admin/admin-secrets even before the admin pods exist
+  # so that first deploy of the admin image already has working creds.
   - name: admin
     display_name: Lurus Admin Console
-    enabled: false  # pending Zitadel confidential client setup
     environments:
       - env: prod
         domain: admin.lurus.cn
@@ -70,7 +70,7 @@ apps:
           name: admin-secrets
           client_id_key: ZITADEL_CLIENT_ID
           client_secret_key: ZITADEL_CLIENT_SECRET
-        restart_deployment: lurus-admin
+        # No restart_deployment yet — admin pod not deployed.
     oidc:
       app_type: web
       auth_method: basic  # confidential client — admin holds a secret
