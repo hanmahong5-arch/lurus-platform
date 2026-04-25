@@ -352,8 +352,12 @@ func Build(deps Deps) *gin.Engine {
 		admin.PATCH("/organizations/:id", deps.Organizations.AdminUpdateStatus)
 
 		// Admin Apps viewer — read-only list of apps.yaml joined with
-		// Zitadel live state. No write verbs: apps.yaml is the source
-		// of truth; mutations go through the git flow.
+		// Zitadel live state. The List verb stays read-only.
+		// DeleteRequest mints a QR-delegate session; the destructive
+		// Zitadel call only runs once the boss confirms on the APP, so
+		// surfacing the endpoint here doesn't break the "git is the
+		// source of truth" invariant — apps.yaml deletion is still a
+		// follow-up PR within the 24h tombstone window.
 		if deps.AppsAdmin != nil {
 			admin.GET("/apps", deps.AppsAdmin.List)
 			// Manual OIDC client_secret rotation. Confidential clients
@@ -361,6 +365,10 @@ func Build(deps Deps) *gin.Engine {
 			// action so it stays under admin auth and is recorded with
 			// trigger=manual on oidc_secret_rotated_total.
 			admin.POST("/apps/:name/:env/rotate-secret", deps.AppsAdmin.RotateSecret)
+			// QR-delegate destructive flow: this endpoint mints the QR
+			// only; the Zitadel + K8s mutation happens later when the
+			// boss biometric-confirms on his APP via /api/v2/qr/:id/confirm.
+			admin.POST("/apps/:name/:env/delete-request", deps.AppsAdmin.DeleteRequest)
 		}
 
 		// Service API Key management

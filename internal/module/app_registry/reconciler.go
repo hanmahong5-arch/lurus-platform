@@ -22,11 +22,12 @@ import (
 // Safe to run in a goroutine from main; every error path logs + metric-
 // records and never panics the process.
 type Reconciler struct {
-	spec     *Spec
-	zitadel  *zitadel.Client
-	k8s      *K8sClient
-	rotation *RotationState
-	interval time.Duration
+	spec       *Spec
+	zitadel    *zitadel.Client
+	k8s        *K8sClient
+	rotation   *RotationState
+	tombstones *Tombstones // nil = recreation-suppression disabled (single-pod / no-redis dev paths)
+	interval   time.Duration
 }
 
 // Options configures a Reconciler; zero values pick sensible defaults.
@@ -65,6 +66,14 @@ func NewReconciler(spec *Spec, zit *zitadel.Client, k8s *K8sClient, rotation *Ro
 		rotation: rotation,
 		interval: interval,
 	}, nil
+}
+
+// WithTombstones wires the deletion-suppression store. Chainable; safe
+// to call with nil (leaves recreation-suppression disabled). Intended to
+// be called once at boot from main wiring, not from the reconcile loop.
+func (r *Reconciler) WithTombstones(t *Tombstones) *Reconciler {
+	r.tombstones = t
+	return r
 }
 
 // Run blocks until ctx is cancelled, running ReconcileOnce on entry and
@@ -118,6 +127,26 @@ func (r *Reconciler) ReconcileOnce(ctx context.Context) {
 // reconcileAppEnv is the per-environment unit of work. Kept small so
 // each phase's error surface is clear in logs.
 func (r *Reconciler) reconcileAppEnv(ctx context.Context, projectID string, app App, env Environment) {
+	// Tombstone fast path: if a human just confirmed deletion of this
+	// (app, env) pair on their APP, the entry is still in apps.yaml
+	// (deletion is YAML-by-PR, not auto) — but recreating the OIDC app
+	// here would defeat the user-visible "delete" they just performed.
+	// Honour the tombstone for its TTL window; once that lapses normal
+	// convergence resumes and the YAML entry wins again. A Redis error
+	// here is logged + treated as "no tombstone" so a transient broker
+	// outage cannot pin reconciliation indefinitely.
+	if r.tombstones != nil {
+		active, terr := r.tombstones.IsActive(ctx, app.Name, env.Env)
+		if terr != nil {
+			slog.Warn("app_registry: tombstone check failed, proceeding",
+				"app", app.Name, "env", env.Env, "err", terr)
+		} else if active {
+			slog.Info("app_registry: skipping tombstoned (app, env)",
+				"app", app.Name, "env", env.Env)
+			return
+		}
+	}
+
 	// Zitadel app name combines slug + env so (tally, stage) and
 	// (tally, prod) live side-by-side inside one project.
 	zitAppName := app.Name + "-" + env.Env

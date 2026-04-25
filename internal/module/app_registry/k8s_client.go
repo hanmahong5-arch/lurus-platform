@@ -189,6 +189,56 @@ func (k *K8sClient) patchSecretData(ctx context.Context, namespace, name string,
 	return nil
 }
 
+// RemoveSecretKeys deletes the named keys from Secret <namespace>/<name>
+// while preserving the Secret object itself and any unrelated keys.
+// This is the dedicated "delete just the OIDC credentials" door for the
+// Phase 3 QR-delegate flow — the Secret often carries unrelated data
+// (DATABASE_DSN, SESSION_SECRET, …) owned by other controllers, so we
+// must never delete the whole Secret.
+//
+// Idempotent: missing keys are a no-op; a missing Secret is also a
+// no-op since the desired post-condition (those keys are gone) already
+// holds. Returns the number of keys actually removed for log context.
+func (k *K8sClient) RemoveSecretKeys(ctx context.Context, namespace, name string, keys ...string) (removed int, err error) {
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	existing, err := k.GetSecretData(ctx, namespace, name)
+	if err != nil {
+		return 0, err
+	}
+	if existing == nil {
+		// Secret doesn't exist — desired state already satisfied.
+		return 0, nil
+	}
+	// Build a strategic-merge patch with the listed keys set to null;
+	// strategic-merge interprets a null value under .data as "delete
+	// this key" without touching siblings. Keys absent from `existing`
+	// are skipped so the patch stays minimal and the return count is
+	// honest.
+	deletions := make(map[string]any, len(keys))
+	for _, key := range keys {
+		if _, present := existing[key]; !present {
+			continue
+		}
+		deletions[key] = nil
+		removed++
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	payload, _ := json.Marshal(map[string]any{"data": deletions})
+	path := fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", namespace, name)
+	body, status, err := k.do(ctx, http.MethodPatch, path, payload, "application/strategic-merge-patch+json")
+	if err != nil {
+		return 0, err
+	}
+	if status != http.StatusOK {
+		return 0, fmt.Errorf("app_registry: remove secret keys %s/%s returned %d: %s", namespace, name, status, body)
+	}
+	return removed, nil
+}
+
 // TriggerRolloutRestart sets a `kubectl.kubernetes.io/restartedAt`
 // annotation on the Deployment's pod template, mirroring what
 // `kubectl rollout restart deployment/<name>` does. A present annotation

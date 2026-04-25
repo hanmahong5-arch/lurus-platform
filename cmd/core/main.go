@@ -476,6 +476,23 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// returns 503.
 	appRegRecon := buildAppRegistryReconciler(rdb, zitadelClient)
 
+	// Wire the QR-delegate destructive flow (Phase 3 / Track 1). All
+	// three deps (QRHandler + K8sClient + Tombstones) are required for
+	// DeleteRequest to leave its 501 gate; missing any one keeps the
+	// endpoint disabled rather than half-wired. Tombstones plug into the
+	// reconciler too, so the recreation-suppression survives pod restarts.
+	appsAdminH := handler.NewAppsAdminHandler(getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath), zitadelClient, appRegRecon)
+	if appRegRecon != nil {
+		// Best-effort K8s client (returns ErrNotInCluster off-cluster) +
+		// Redis-backed tombstone store. Both no-op cleanly when nil so
+		// the WithDeleteFlow call below is safe to make either way.
+		if k8sClient, err := app_registry.NewK8sClient(); err == nil {
+			tombstones := app_registry.NewTombstones(rdb)
+			appsAdminH = appsAdminH.WithDeleteFlow(qrH, k8sClient, tombstones)
+			appRegRecon = appRegRecon.WithTombstones(tombstones)
+		}
+	}
+
 	engine := router.Build(router.Deps{
 		Accounts:          accountH,
 		Subscriptions:     subH,
@@ -496,7 +513,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		Organizations:     orgH,
 		QRLogin:           qrLoginH,
 		QR:                qrH,
-		AppsAdmin:         handler.NewAppsAdminHandler(getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath), zitadelClient, appRegRecon),
+		AppsAdmin:         appsAdminH,
 		NewAPIProxy:       newAPIProxyH,
 		InternalKey:       cfg.InternalAPIKey,
 		JWT:               jwtMiddleware,

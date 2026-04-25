@@ -105,6 +105,21 @@ type OIDCAppCredentials struct {
 	ClientSecret string
 }
 
+// DeleteOIDCApp removes an OIDC application from the given project. The
+// operation is destructive and is intended to be invoked only from a
+// human-confirmed flow (Phase 3 QR delegate action). 404-style "already
+// gone" responses bubble up as errors so the caller can decide whether
+// to treat them as benign — the K8s Secret + tombstone steps that follow
+// in the deletion flow are skipped on any Zitadel failure to keep state
+// consistent.
+//
+// The Zitadel API returns 200 on success; the response body is empty.
+func (c *Client) DeleteOIDCApp(ctx context.Context, projectID, appID string) error {
+	path := "/management/v1/projects/" + projectID + "/apps/" + appID
+	_, err := c.doManagement(ctx, http.MethodDelete, path, nil)
+	return err
+}
+
 // LookupOIDCApp returns the live credentials for an OIDC app if one
 // exists with the given name in the project. Returns (nil, nil) when
 // nothing matches — callers distinguish "not provisioned" from "lookup

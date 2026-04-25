@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import {
-  Card, Typography, Table, Tag, Toast, Button, Tooltip, Banner, Modal,
+  Card, Typography, Table, Tag, Toast, Button, Tooltip, Banner, Modal, Space,
 } from '@douyinfe/semi-ui'
+import { QRCodeSVG } from 'qrcode.react'
 import axios from 'axios'
 
 const { Title, Text, Paragraph } = Typography
@@ -47,11 +48,15 @@ export default function AppsTab() {
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState(null)
   const [errMsg, setErrMsg] = useState('')
-  // rotatingKey is the row key (`${app}:${env}`) currently mid-flight.
-  // Used to disable the per-row button during the request so a double
-  // click can't double-rotate. Centralised here rather than per-row
-  // local state because the confirmation Modal lives at this level.
+  // rotatingKey is the row key (`${app}:${env}`) currently mid-flight
+  // for a rotate request — disables the button so a double click can't
+  // double-rotate.
   const [rotatingKey, setRotatingKey] = useState('')
+  // Delete-flow modal state. `deleteSession` holds the QR session
+  // returned by /admin/v1/apps/:name/:env/delete-request; the modal
+  // shows the QR until the boss scans + confirms on his APP.
+  const [deleteSession, setDeleteSession] = useState(null)
+  const [deleting, setDeleting] = useState(null) // {name, env} of the row whose delete request is in flight
 
   async function fetchApps() {
     setLoading(true)
@@ -65,6 +70,23 @@ export default function AppsTab() {
       Toast.error('加载应用注册表失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  // requestDelete kicks off the QR-delegate flow for a single (app, env)
+  // pair. The destructive Zitadel call only happens once the boss
+  // scans the returned QR and biometric-confirms on his APP — this
+  // endpoint just mints the session.
+  async function requestDelete(row) {
+    setDeleting({ name: row.appName, env: row.env })
+    try {
+      const res = await adminClient.post(`/apps/${row.appName}/${row.env}/delete-request`)
+      setDeleteSession(res.data)
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.response?.data?.error || err.message
+      Toast.error(`无法启动删除流程：${msg}`)
+    } finally {
+      setDeleting(null)
     }
   }
 
@@ -189,29 +211,49 @@ export default function AppsTab() {
     },
     {
       title: '操作',
-      width: 110,
+      width: 200,
       render: (_, row) => {
-        // Rotation only applies to confidential clients — PKCE apps
-        // have no client_secret to rotate. Render a quiet placeholder
-        // so the column stays aligned across rows.
-        if (row.authMethod !== 'basic') {
-          return <Text type="tertiary" size="small">—</Text>
-        }
         if (!row.enabled) {
           return <Text type="tertiary" size="small">—</Text>
         }
+        const deletePending = deleting && deleting.name === row.appName && deleting.env === row.env
+        const deleteDisabled = !row.zitadelAppId
         return (
-          <Tooltip content="生成新的 client_secret 并写入 K8s Secret，然后滚动重启 deployment">
-            <Button
-              size="small"
-              type="warning"
-              loading={rotatingKey === row.key}
-              disabled={!!rotatingKey && rotatingKey !== row.key}
-              onClick={() => rotateSecret(row)}
+          <Space>
+            {/* Rotate — only confidential clients have a client_secret. */}
+            {row.authMethod === 'basic' && (
+              <Tooltip content="生成新的 client_secret 并写入 K8s Secret，然后滚动重启 deployment">
+                <Button
+                  size="small"
+                  type="warning"
+                  loading={rotatingKey === row.key}
+                  disabled={!!rotatingKey && rotatingKey !== row.key}
+                  onClick={() => rotateSecret(row)}
+                >
+                  轮转
+                </Button>
+              </Tooltip>
+            )}
+            {/* Delete — disabled when nothing's been provisioned yet. */}
+            <Tooltip
+              content={
+                deleteDisabled
+                  ? '尚未在 Zitadel 注册，无需删除'
+                  : '点击后生成二维码，老板用 APP 扫码 + 指纹确认才会执行删除'
+              }
             >
-              轮转密钥
-            </Button>
-          </Tooltip>
+              <Button
+                size="small"
+                type="danger"
+                theme="borderless"
+                loading={deletePending}
+                disabled={deleteDisabled}
+                onClick={() => requestDelete(row)}
+              >
+                删除
+              </Button>
+            </Tooltip>
+          </Space>
         )
       },
     },
@@ -261,6 +303,45 @@ export default function AppsTab() {
           empty="暂无注册应用 — 在 config/apps.yaml 里声明一个。"
         />
       </Card>
+
+      <Modal
+        title="扫码确认删除应用"
+        visible={!!deleteSession}
+        onCancel={() => setDeleteSession(null)}
+        footer={null}
+        width={420}
+        maskClosable={false}
+      >
+        {deleteSession && (
+          <Space vertical align="center" style={{ width: '100%' }}>
+            <Banner
+              type="warning"
+              fullMode={false}
+              closeIcon={null}
+              description={
+                <span>
+                  即将删除 <Text code>{deleteSession.app}</Text>
+                  {' / '}
+                  <Text code>{deleteSession.env}</Text>
+                  {' '}的 Zitadel OIDC 应用与 K8s Secret 中的 ZITADEL_CLIENT_ID 字段。
+                  <br />
+                  <Text type="danger" strong>此操作不可恢复</Text>，
+                  并且 <Text strong>{Math.round((deleteSession.expires_in || 0) / 60)} 分钟内必须完成</Text>。
+                </span>
+              }
+            />
+            <div style={{ background: '#fff', padding: 16, border: '1px solid #eee', borderRadius: 8 }}>
+              <QRCodeSVG value={deleteSession.qr_payload} size={220} level="M" includeMargin={false} />
+            </div>
+            <Text type="tertiary" size="small">
+              请用老板的路途 APP 扫码，并通过指纹/人脸认证后点击「确认」。
+              成功后 reconciler 在 24 小时内不会重建该应用，
+              请尽快提 PR 删除 <Text code>config/apps.yaml</Text> 里对应 entry。
+            </Text>
+            <Button onClick={() => { setDeleteSession(null); fetchApps() }}>关闭</Button>
+          </Space>
+        )}
+      </Modal>
     </div>
   )
 }
