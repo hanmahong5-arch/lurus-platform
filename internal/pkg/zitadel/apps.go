@@ -188,7 +188,20 @@ func (c *Client) updateOIDCAppConfig(ctx context.Context, projectID, appID strin
 	body, _ := json.Marshal(oidcBody(spec))
 	path := "/management/v1/projects/" + projectID + "/apps/" + appID + "/oidc_config"
 	_, err := c.doManagement(ctx, http.MethodPut, path, body)
+	// Zitadel returns 400 "No changes (COMMAND-1m88i)" when the live config
+	// already matches the requested state. That's the steady-state outcome
+	// of an idempotent reconciler, not a failure — collapse it to nil.
+	if err != nil && isZitadelNoChangesError(err) {
+		return nil
+	}
 	return err
+}
+
+// isZitadelNoChangesError detects Zitadel's "No changes" 400 response.
+// We string-match the COMMAND error id rather than the human message to
+// stay robust against future i18n / wording tweaks.
+func isZitadelNoChangesError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "COMMAND-1m88i")
 }
 
 func (c *Client) fetchOIDCClientID(ctx context.Context, projectID, appID string) (string, error) {
