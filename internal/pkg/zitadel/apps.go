@@ -232,6 +232,52 @@ func isZitadelNoChangesError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "COMMAND-1m88i")
 }
 
+// RotateOIDCSecret asks Zitadel to mint a new client_secret for the given
+// OIDC application. The previous secret is invalidated server-side as
+// soon as the call returns; Zitadel itself does not provide a grace
+// period — the caller is responsible for sequencing the rollout so that
+// the new secret is persisted to its consumers (e.g. K8s Secret) before
+// the old pods are recycled.
+//
+// Endpoint (Management API v1, RPC RegenerateOIDCClientSecret):
+//
+//	POST /management/v1/projects/{projectID}/apps/{appID}/oidc_config/_generate_client_secret
+//
+// Source: zitadel/zitadel proto/zitadel/management.proto — the google.api.http
+// annotation pins both method and URI template; we only prepend the
+// gateway prefix `/management/v1` that Zitadel uses for the v1 REST gateway.
+//
+// Returns the freshly issued client_secret. PKCE / public clients
+// (auth_method=none) have no secret and Zitadel will reject the call —
+// the caller must filter on AuthMethod=="basic" before invoking.
+func (c *Client) RotateOIDCSecret(ctx context.Context, projectID, appID string) (string, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return "", fmt.Errorf("zitadel: rotate secret: projectID is required")
+	}
+	if strings.TrimSpace(appID) == "" {
+		return "", fmt.Errorf("zitadel: rotate secret: appID is required")
+	}
+	path := "/management/v1/projects/" + projectID + "/apps/" + appID + "/oidc_config/_generate_client_secret"
+	// Body must be present (`body: "*"` in the proto) but carries no
+	// fields beyond projectID/appID which live in the path. Send an empty
+	// JSON object — `null` and zero-length bodies have both been observed
+	// to trip request-validation middleware in front of Zitadel.
+	respBody, err := c.doManagement(ctx, http.MethodPost, path, []byte("{}"))
+	if err != nil {
+		return "", err
+	}
+	var res struct {
+		ClientSecret string `json:"clientSecret"`
+	}
+	if err := json.Unmarshal(respBody, &res); err != nil {
+		return "", fmt.Errorf("zitadel: decode rotate secret: %w", err)
+	}
+	if res.ClientSecret == "" {
+		return "", fmt.Errorf("zitadel: rotate returned empty client_secret")
+	}
+	return res.ClientSecret, nil
+}
+
 func (c *Client) fetchOIDCClientID(ctx context.Context, projectID, appID string) (string, error) {
 	path := "/management/v1/projects/" + projectID + "/apps/" + appID
 	respBody, err := c.doManagement(ctx, http.MethodGet, path, nil)
