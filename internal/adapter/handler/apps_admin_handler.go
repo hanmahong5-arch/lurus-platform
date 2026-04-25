@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -166,4 +168,100 @@ func previewClientID(id string) string {
 		return id
 	}
 	return id[:12] + "…"
+}
+
+// rotateSecretResponse is the JSON shape returned to the UI after a
+// successful manual rotation. NextDueAt is a hint only — the
+// reconciler is the final authority on when the next auto-rotation
+// fires; this value lets the UI display "next: in 90 days" without a
+// second round-trip.
+type rotateSecretResponse struct {
+	App        string `json:"app"`
+	Env        string `json:"env"`
+	RotatedAt  string `json:"rotated_at"`             // RFC3339 UTC
+	NextDueAt  string `json:"next_due_at,omitempty"`  // RFC3339 UTC; empty when rotation is not auto-scheduled
+	Trigger    string `json:"trigger"`                // always "manual" for this endpoint
+}
+
+// RotateSecret triggers an immediate rotation of one (app, env)'s OIDC
+// client_secret.
+//
+//	POST /admin/v1/apps/:name/:env/rotate-secret  (admin JWT required)
+//
+// The handler is intentionally thin: parameter sanity checks → delegate
+// to Reconciler.RotateOnce, which is the shared primitive that both the
+// auto-rotation loop and this endpoint use. That keeps the audit trail,
+// metric labels, and Zitadel/K8s/Redis side-effects identical between
+// "operator hit the button" and "schedule fired".
+//
+// Errors map to:
+//   - 503 when the reconciler isn't wired (Zitadel unconfigured, not in
+//     a K8s pod, apps.yaml absent — operator can't fix at runtime).
+//   - 404 when (app, env) isn't in apps.yaml or hasn't been provisioned
+//     in Zitadel yet.
+//   - 400 when the app exists but is not auth_method=basic (PKCE has no
+//     client_secret to rotate).
+//   - 502 for upstream Zitadel / K8s failures so the operator knows the
+//     incident is on the dependency side, not on this endpoint.
+func (h *AppsAdminHandler) RotateSecret(c *gin.Context) {
+	if h.recon == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   "rotation_unavailable",
+			"message": "app_registry reconciler is not wired — verify Zitadel PAT, in-cluster ServiceAccount, and apps.yaml",
+		})
+		return
+	}
+	appName := c.Param("name")
+	envName := c.Param("env")
+	if appName == "" || envName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid_request",
+			"message": "app name and env path params are required",
+		})
+		return
+	}
+
+	rotatedAt, err := h.recon.RotateOnce(c.Request.Context(), appName, envName)
+	if err != nil {
+		// Map well-known error shapes to specific HTTP statuses so the
+		// UI can render actionable messages. Anything else is a 502 —
+		// the rotation primitive itself is fine; an upstream is not.
+		msg := err.Error()
+		switch {
+		case rotateErrContains(msg, "not declared in apps.yaml"):
+			c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": msg})
+		case rotateErrContains(msg, "only 'basic' has a client_secret", "no secret.client_secret_key"):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_target", "message": msg})
+		case rotateErrContains(msg, "not provisioned in zitadel"):
+			c.JSON(http.StatusNotFound, gin.H{"error": "not_provisioned", "message": msg})
+		default:
+			c.JSON(http.StatusBadGateway, gin.H{"error": "rotation_failed", "message": msg})
+		}
+		return
+	}
+
+	resp := rotateSecretResponse{
+		App:       appName,
+		Env:       envName,
+		RotatedAt: rotatedAt.UTC().Format(time.RFC3339),
+		Trigger:   "manual",
+	}
+	if interval := h.recon.SecretRotationInterval(appName, envName); interval > 0 {
+		resp.NextDueAt = rotatedAt.Add(interval).UTC().Format(time.RFC3339)
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// rotateErrContains matches a RotateOnce error string against a fixed
+// list of substrings. Named-scoped to this handler to avoid colliding
+// with similar helpers in the package; the substrings themselves are
+// stable contracts on app_registry.RotateOnce, locked in by the
+// rotate-handler tests.
+func rotateErrContains(haystack string, needles ...string) bool {
+	for _, n := range needles {
+		if strings.Contains(haystack, n) {
+			return true
+		}
+	}
+	return false
 }

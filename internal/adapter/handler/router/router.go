@@ -356,6 +356,11 @@ func Build(deps Deps) *gin.Engine {
 		// of truth; mutations go through the git flow.
 		if deps.AppsAdmin != nil {
 			admin.GET("/apps", deps.AppsAdmin.List)
+			// Manual OIDC client_secret rotation. Confidential clients
+			// only — the handler 400s for PKCE apps. Operator-grade
+			// action so it stays under admin auth and is recorded with
+			// trigger=manual on oidc_secret_rotated_total.
+			admin.POST("/apps/:name/:env/rotate-secret", deps.AppsAdmin.RotateSecret)
 		}
 
 		// Service API Key management
