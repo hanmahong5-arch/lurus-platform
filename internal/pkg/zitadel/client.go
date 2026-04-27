@@ -247,6 +247,53 @@ func (c *Client) SetNewPassword(ctx context.Context, userID, verificationCode, n
 	return nil
 }
 
+// DeactivateUser disables a Zitadel user so subsequent OIDC logins
+// for that subject are rejected. POST /v2/users/:userID/deactivate.
+//
+// Idempotent: if the user is already inactive Zitadel returns 412
+// "user is in invalid state" — we treat that as success. Likewise if
+// the user no longer exists (404) — the desired end-state already
+// holds. Any other 4xx/5xx surfaces as an error so the caller can
+// flip the audit row to 'failed'.
+func (c *Client) DeactivateUser(ctx context.Context, userID string) error {
+	if userID == "" {
+		return fmt.Errorf("zitadel: deactivate user requires non-empty userID")
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	url := c.issuer + "/v2/users/" + userID + "/deactivate"
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		return fmt.Errorf("zitadel: build deactivate request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.pat)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("zitadel: deactivate user request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated, http.StatusNoContent:
+		return nil
+	case http.StatusNotFound:
+		// Already gone — purge cascade is idempotent on this branch.
+		return nil
+	case http.StatusPreconditionFailed:
+		// "user is in invalid state" — already deactivated. Treat as
+		// success so a re-run of the cascade doesn't mark the audit
+		// row failed.
+		return nil
+	default:
+		return fmt.Errorf("zitadel: deactivate user returned %d: %s", resp.StatusCode, respBody)
+	}
+}
+
 // FindUserByEmail searches for a user by email.
 // POST /v2/users (list with filter)
 // Returns the Zitadel user ID, or empty string if not found.

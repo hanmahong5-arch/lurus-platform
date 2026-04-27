@@ -3,12 +3,15 @@
 A platform-level QR-code handshake for binding two devices in a single flow:
 Web/desktop "initiator" generates a QR; the APP "confirmer" (authenticated)
 scans it; the initiator polls for the result. Same primitive serves multiple
-actions (login today; join-org and delegate in a later phase).
+actions (login, join_org, delegate).
 
-> Status — **Phase 2 shipped**: `action=login` + `action=join_org` are wired.
-> `action=delegate` still returns 501 `action_not_supported_yet`.
-> `join_org` sessions must be created via `POST /api/v2/qr/session/authed`
-> (JWT-protected, caller must be `owner`/`admin` of the target org).
+> Status — **Phase 4 shipped (2026-04-25, backend only)**: `action=login`,
+> `action=join_org`, and `action=delegate` are all wired. Delegate
+> dispatches to a slice of `QRDelegateExecutor` keyed by `op` name; today's
+> ops are `delete_oidc_app`, `delete_account`, `approve_refund`. The
+> Lutu APP biometric confirm screen (Sprint 1B) is not yet shipped — until
+> it is, scans of `a=delegate` QR payloads must be done by the existing
+> v2 confirm screen which issues `confirmV2` without biometric step-up.
 
 ### Action catalog
 
@@ -16,7 +19,7 @@ actions (login today; join-org and delegate in a later phase).
 |--------|----------------|-------------|------------------|
 | `login` | `POST /api/v2/qr/session` (unauthed) | None on Confirm; token issued to Web poller on `/status` | `{confirmed, action}` (token delivered separately via status poll) |
 | `join_org` | `POST /api/v2/qr/session/authed` (JWT; caller = org owner/admin) | `OrganizationService.AddMember(orgID, initiator, scanner, role)` inline on Confirm | `{confirmed, action, org_id, role, joined_at}` |
-| `delegate` | *not implemented* | *n/a* | 501 |
+| `delegate` | `POST /api/v2/qr/session/authed` (JWT; per-op mint endpoint, e.g. `POST /admin/v1/apps/:name/delete-request`) | Dispatches to registered `QRDelegateExecutor` matching `op` (`delete_oidc_app` / `delete_account` / `approve_refund`); side effect runs inline on Confirm | `{confirmed, action: delegate, op, ...op-specific fields}` (NEVER includes a token) |
 
 ### Why actions split the Confirm / PollStatus path
 

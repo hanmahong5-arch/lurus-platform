@@ -46,17 +46,16 @@ type QREventPublisher interface {
 
 // QRDelegateExecutor performs the side effect of a confirmed delegate
 // action. Declared as an interface so the QR handler stays free of any
-// app_registry / Zitadel imports — those concerns live behind the
-// concrete executor wired at startup. Returns the human-readable
-// arguments echoed back in the confirm response (op, app, env), and an
-// error when the operation should fail with 500.
+// app_registry / Zitadel / account-service imports — those concerns
+// live behind concrete executors wired at startup. Multiple executors
+// can be registered: dispatch is by op name via SupportedOps().
 //
-// Pre-validated by the handler: op was checked against a whitelist at
-// session creation, so executors only handle the ops they claim to
-// support. An unknown op surfaces as ErrUnsupportedDelegateOp so the
-// handler can return 400 instead of 500.
+// Pre-validated by the handler: op was checked against the union of all
+// executors' SupportedOps at session creation, so executors only handle
+// the ops they claim to support. An unknown op surfaces as
+// ErrUnsupportedDelegateOp so the handler can return 400 instead of 500.
 type QRDelegateExecutor interface {
-	ExecuteDelegate(ctx context.Context, op, app, env string, callerID int64) error
+	ExecuteDelegate(ctx context.Context, params QRDelegateParams, callerID int64) error
 	// SupportedOps returns the op identifiers this executor will accept.
 	// CreateSessionAuthed validates against this set before persisting
 	// the session so a typo fails fast at create-time rather than
@@ -177,11 +176,11 @@ type QRHandler struct {
 	// publisher is best-effort: join_org confirm emits identity.org.member_joined
 	// to IDENTITY_EVENTS. nil = publish skipped (never blocks the confirm).
 	publisher QREventPublisher
-	// delegate executes the confirmed delegate-action side effect (e.g.
-	// delete an OIDC app). nil = action gated with 501 at create-time so
-	// the legacy "delegate not yet shipped" error message remains the
-	// user-visible failure mode on deployments that haven't wired it.
-	delegate QRDelegateExecutor
+	// delegates execute confirmed delegate-action side effects (delete
+	// OIDC app, purge account, …). Empty slice = action gated with 501
+	// at create-time. Multiple executors register independently;
+	// dispatch is by op-name overlap with each executor's SupportedOps.
+	delegates []QRDelegateExecutor
 	// pollSem bounds the number of concurrent long-poll goroutines held by
 	// PollStatus. A full buffered channel means "no slot available"; the
 	// handler returns 503 immediately so upstream load balancers can shed.
@@ -244,28 +243,39 @@ func (h *QRHandler) WithPublisher(p QREventPublisher) *QRHandler {
 	return h
 }
 
-// WithDelegateExecutor wires the executor for action=delegate. When
-// nil, CreateSessionAuthed continues to gate delegate with 501; once
-// set, supported ops (per executor.SupportedOps) are accepted.
-// Chainable.
+// WithDelegateExecutor registers an executor for action=delegate. The
+// call is append-style: each executor handles its own SupportedOps and
+// dispatch picks the first executor whose op set contains the request.
+// Passing nil is a no-op so call sites can wire conditionally without a
+// guard. Chainable.
 func (h *QRHandler) WithDelegateExecutor(d QRDelegateExecutor) *QRHandler {
-	h.delegate = d
+	if d == nil {
+		return h
+	}
+	h.delegates = append(h.delegates, d)
 	return h
 }
 
-// supportsDelegateOp reports whether the wired executor accepts op.
-// Returns false when no executor is wired. Centralised so
-// CreateSessionAuthed and Confirm cannot disagree on the whitelist.
-func (h *QRHandler) supportsDelegateOp(op string) bool {
-	if h.delegate == nil {
-		return false
-	}
-	for _, supported := range h.delegate.SupportedOps() {
-		if supported == op {
-			return true
+// delegateFor returns the registered executor that supports op, or nil
+// if none does. Walks executors in registration order; the first match
+// wins, so collisions between executors are decided by who registered
+// first (operationally we expect SupportedOps sets to be disjoint).
+func (h *QRHandler) delegateFor(op string) QRDelegateExecutor {
+	for _, exec := range h.delegates {
+		for _, supported := range exec.SupportedOps() {
+			if supported == op {
+				return exec
+			}
 		}
 	}
-	return false
+	return nil
+}
+
+// supportsDelegateOp reports whether any registered executor accepts
+// op. Centralised so CreateSessionAuthed and Confirm cannot disagree on
+// the whitelist.
+func (h *QRHandler) supportsDelegateOp(op string) bool {
+	return h.delegateFor(op) != nil
 }
 
 // ── Create ──────────────────────────────────────────────────────────────────
@@ -283,26 +293,93 @@ type qrJoinOrgParams struct {
 	Role  string `json:"role,omitempty"`
 }
 
-// qrDelegateParams describes the operation a confirmed delegate session
-// will perform. The op enum is intentionally narrow — every value must
-// be a destructive admin action that benefits from human confirmation
-// on a separate device. New ops are added behind explicit wiring; the
-// handler will reject anything not in the executor's SupportedOps set.
-type qrDelegateParams struct {
-	// Op identifies the action. Currently the only supported value is
-	// "delete_oidc_app". Kept as a string (rather than a typed enum) so
-	// future ops can ship without a new entity type.
+// QRDelegateParams describes the operation a confirmed delegate session
+// will perform. Field requirements depend on op:
+//
+//   - delete_oidc_app: AppName + Env required, others ignored.
+//   - delete_account:  AccountID required, others ignored.
+//   - approve_refund:  RefundNo required, others ignored.
+//
+// Per-op validation is centralised in Validate() so the create-side
+// (CreateSessionAuthed / CreateDelegateSession) and the confirm-side
+// (confirmDelegate) cannot disagree on the schema. New ops add their
+// own clause; unknown ops return nil here so the executor — which
+// knows what it accepts — owns the final say.
+//
+// The struct is intentionally a flat bag rather than a discriminated
+// union: it keeps Redis-stored sessions JSON-stable across versions,
+// and at three ops the field count is still trivially manageable.
+// If we ever exceed (say) six op-specific fields, switching to
+// `Params json.RawMessage` per op will be the right move.
+//
+// Exported because handler-package test fakes implement
+// QRDelegateExecutor from a sibling _test package, which cannot
+// reference unexported types in method signatures.
+type QRDelegateParams struct {
+	// Op identifies the action. The set of valid values is defined by
+	// the union of all registered executors' SupportedOps. Kept as a
+	// string (rather than a typed enum) so new ops can ship behind
+	// configuration without adding entity types.
 	Op string `json:"op" binding:"required"`
-	// AppName is the apps.yaml slug of the target app (e.g. "tally").
-	AppName string `json:"app_name" binding:"required"`
-	// Env is the environment tag in apps.yaml (e.g. "stage", "prod").
-	Env string `json:"env" binding:"required"`
+	// AppName is the apps.yaml slug of the target app (e.g. "tally")
+	// for delete_oidc_app. Empty for ops that don't target an app.
+	AppName string `json:"app_name,omitempty"`
+	// Env is the environment tag in apps.yaml (e.g. "stage", "prod")
+	// for delete_oidc_app. Empty for ops that don't target an env.
+	Env string `json:"env,omitempty"`
+	// AccountID is the target account for delete_account. Zero for ops
+	// that don't target a user.
+	AccountID int64 `json:"account_id,omitempty"`
+	// RefundNo is the target refund number for approve_refund. Empty
+	// for ops that don't target a refund.
+	RefundNo string `json:"refund_no,omitempty"`
 }
 
-// qrDelegateOpDeleteOIDCApp is the canonical op string for the
-// delete-OIDC-app flow. Exported as a constant so the executor and
-// handler can never disagree on spelling.
-const qrDelegateOpDeleteOIDCApp = "delete_oidc_app"
+// Validate enforces per-op required-field rules. Returns nil when the
+// params shape matches the op; returns a descriptive error otherwise.
+//
+// Op-name validity (i.e. is this op supported by some registered
+// executor?) is handled separately by QRHandler.supportsDelegateOp;
+// Validate only checks shape. Unknown ops return nil here so a
+// deployment-time op known to an executor but not yet known to this
+// schema is passed through to the executor — which may accept it or
+// reject with ErrUnsupportedDelegateOp.
+func (p QRDelegateParams) Validate() error {
+	switch p.Op {
+	case qrDelegateOpDeleteOIDCApp:
+		if strings.TrimSpace(p.AppName) == "" || strings.TrimSpace(p.Env) == "" {
+			return errors.New("delete_oidc_app requires app_name and env")
+		}
+		return nil
+	case qrDelegateOpDeleteAccount:
+		if p.AccountID <= 0 {
+			return errors.New("delete_account requires a positive account_id")
+		}
+		return nil
+	case qrDelegateOpApproveRefund:
+		if strings.TrimSpace(p.RefundNo) == "" {
+			return errors.New("approve_refund requires refund_no")
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+const (
+	// qrDelegateOpDeleteOIDCApp is the canonical op string for the
+	// delete-OIDC-app flow. Exported via the executor's SupportedOps so
+	// the handler and apps_admin executor cannot disagree on spelling.
+	qrDelegateOpDeleteOIDCApp = "delete_oidc_app"
+	// qrDelegateOpDeleteAccount is the canonical op string for GDPR-
+	// grade account purges (Phase 4 / Sprint 1A).
+	qrDelegateOpDeleteAccount = "delete_account"
+	// qrDelegateOpApproveRefund is the canonical op string for
+	// QR-confirmed refund approval (Phase 4 / Sprint 3A) — used for
+	// large refunds where the customer-service rep wants the boss to
+	// sign off rather than approve directly.
+	qrDelegateOpApproveRefund = "approve_refund"
+)
 
 // CreateSession — POST /api/v2/qr/session (unauthenticated)
 //
@@ -475,31 +552,32 @@ func (h *QRHandler) CreateSessionAuthed(c *gin.Context) {
 		req.Params = canonical
 
 	case entity.QRActionDelegate:
-		if h.delegate == nil {
+		if len(h.delegates) == 0 {
 			c.JSON(http.StatusNotImplemented, gin.H{
 				"error":   "action_not_supported_yet",
 				"message": "delegate is not wired on this deployment",
 			})
 			return
 		}
-		var p qrDelegateParams
+		var p QRDelegateParams
 		if len(req.Params) == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "invalid_params",
-				"message": "delegate requires params={op, app_name, env}",
+				"message": "delegate requires params={op, ...}",
 			})
 			return
 		}
 		if err := json.Unmarshal(req.Params, &p); err != nil ||
-			strings.TrimSpace(p.Op) == "" ||
-			strings.TrimSpace(p.AppName) == "" ||
-			strings.TrimSpace(p.Env) == "" {
+			strings.TrimSpace(p.Op) == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "invalid_params",
-				"message": "delegate params must include op, app_name, env",
+				"message": "delegate params must include op",
 			})
 			return
 		}
+		// Op name comes first: an unsupported op is a different failure
+		// mode than valid op + bad params, and clients (the admin Web
+		// UI) need to tell them apart.
 		if !h.supportsDelegateOp(p.Op) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "invalid_op",
@@ -507,12 +585,21 @@ func (h *QRHandler) CreateSessionAuthed(c *gin.Context) {
 			})
 			return
 		}
+		if err := p.Validate(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid_params",
+				"message": err.Error(),
+			})
+			return
+		}
 		// Re-serialise with trimmed fields so the confirm side never
 		// sees stray whitespace / mismatched casing leaking through.
-		canonical, err := json.Marshal(qrDelegateParams{
-			Op:      p.Op,
-			AppName: p.AppName,
-			Env:     p.Env,
+		canonical, err := json.Marshal(QRDelegateParams{
+			Op:        p.Op,
+			AppName:   strings.TrimSpace(p.AppName),
+			Env:       strings.TrimSpace(p.Env),
+			AccountID: p.AccountID,
+			RefundNo:  strings.TrimSpace(p.RefundNo),
 		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -574,33 +661,48 @@ type QRDelegateSession struct {
 	ExpiresIn int       `json:"expires_in"`
 }
 
-// CreateDelegateSession mints a delegate-action QR session on behalf of
-// an already-authorised caller (e.g. the AppsAdmin DeleteRequest
-// endpoint). The op is validated against the wired executor's
-// SupportedOps; mismatches return errors so the calling handler can
-// translate to the right HTTP status without leaking internals.
+// CreateDelegateSession mints a delete_oidc_app delegate session.
+// Retained as a convenience wrapper because callers (the AppsAdmin
+// DeleteRequest endpoint, multiple tests) hand the (op, appName, env)
+// triple directly. Internally builds a QRDelegateParams and delegates
+// to CreateDelegateSessionWithParams.
 //
 // Unlike CreateSessionAuthed this never reaches into the Gin context —
 // IP / UA capture is intentionally omitted because the initiator is
 // another server-side handler, not the end user. The user's device
 // metadata is captured at confirm time on the APP side.
 func (h *QRHandler) CreateDelegateSession(ctx context.Context, callerID int64, op, appName, env string) (*QRDelegateSession, error) {
+	return h.CreateDelegateSessionWithParams(ctx, callerID, QRDelegateParams{
+		Op:      strings.TrimSpace(op),
+		AppName: strings.TrimSpace(appName),
+		Env:     strings.TrimSpace(env),
+	})
+}
+
+// CreateDelegateSessionWithParams is the generic, op-agnostic minter
+// used by handlers that need to mint sessions for ops with non-(app,
+// env) param shapes (delete_account, future ops). All failure modes
+// return wrapped errors so the calling HTTP handler can map to the
+// right status — e.g. ErrUnsupportedDelegateOp → 501 / 400 depending on
+// whether wiring is missing or the op was simply unknown.
+func (h *QRHandler) CreateDelegateSessionWithParams(ctx context.Context, callerID int64, params QRDelegateParams) (*QRDelegateSession, error) {
 	if callerID == 0 {
 		return nil, errors.New("qr: CreateDelegateSession requires non-zero callerID")
 	}
-	if h.delegate == nil {
+	if len(h.delegates) == 0 {
 		return nil, errors.New("qr: delegate executor not wired")
 	}
-	op = strings.TrimSpace(op)
-	appName = strings.TrimSpace(appName)
-	env = strings.TrimSpace(env)
-	if op == "" || appName == "" || env == "" {
-		return nil, fmt.Errorf("qr: delegate session needs (op, app_name, env); got (%q, %q, %q)", op, appName, env)
+	params.Op = strings.TrimSpace(params.Op)
+	if params.Op == "" {
+		return nil, errors.New("qr: delegate session needs op")
 	}
-	if !h.supportsDelegateOp(op) {
-		return nil, fmt.Errorf("qr: %w: %q", ErrUnsupportedDelegateOp, op)
+	if !h.supportsDelegateOp(params.Op) {
+		return nil, fmt.Errorf("qr: %w: %q", ErrUnsupportedDelegateOp, params.Op)
 	}
-	params, err := json.Marshal(qrDelegateParams{Op: op, AppName: appName, Env: env})
+	if err := params.Validate(); err != nil {
+		return nil, fmt.Errorf("qr: invalid params: %w", err)
+	}
+	encoded, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("qr: marshal delegate params: %w", err)
 	}
@@ -612,7 +714,7 @@ func (h *QRHandler) CreateDelegateSession(ctx context.Context, callerID int64, o
 	session := entity.QRSession{
 		ID:        id,
 		Action:    entity.QRActionDelegate,
-		Params:    params,
+		Params:    encoded,
 		Status:    entity.QRStatusPending,
 		CreatedBy: callerID,
 		CreatedAt: issuedAt,
@@ -860,26 +962,57 @@ func (h *QRHandler) writeConfirmResult(c *gin.Context, s *entity.QRSession) {
 		})
 
 	case entity.QRActionJoinOrg:
-		// join_org's side effect runs on the Confirm (APP) path, not here —
-		// there is no Web long-poller waiting for the result. This branch is
-		// only reached if some legacy code path still polls status for a
-		// join_org session; return a descriptive 400 rather than silently
-		// running AddMember twice.
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "action_uses_confirm_path",
-			"message": "join_org is completed on the APP confirm path; status polling is not applicable",
-		})
+		// The APP confirm path has already executed AddMember and
+		// emitted the audit log. Web pollers (the org admin's UI
+		// that minted the QR) need a 200 with the join details so
+		// they can refresh their member list — returning 400 here
+		// would hide a successful state transition. We deliberately
+		// do NOT include any auth-bearing token; the Web initiator
+		// is already authenticated for their own session.
+		var p qrJoinOrgParams
+		_ = json.Unmarshal(s.Params, &p)
+		resp := gin.H{
+			"status": string(entity.QRStatusConfirmed),
+			"action": string(s.Action),
+		}
+		if p.OrgID != 0 {
+			resp["org_id"] = p.OrgID
+		}
+		if p.Role != "" {
+			resp["role"] = p.Role
+		}
+		if s.AccountID != 0 {
+			resp["new_member_id"] = s.AccountID
+		}
+		c.JSON(http.StatusOK, resp)
 
 	case entity.QRActionDelegate:
-		// Same rationale as join_org: the executor runs synchronously on
-		// the APP confirm path and writes its own response there. The Web
-		// initiator's polling exists only to learn that the action
-		// finished; for now it gets a structured 400 so a stale poller
-		// surfaces a clear "use confirm" message instead of silent retry.
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "action_uses_confirm_path",
-			"message": "delegate is completed on the APP confirm path; status polling is not applicable",
-		})
+		// The APP confirm path has already executed the op (or
+		// recorded its failure in the audit log). Web pollers (the
+		// admin UI that minted the delete-app / refund-approve /
+		// account-purge QR) get a 200 with the op metadata so they
+		// can refresh their data view. No auth token is included —
+		// delegate sessions never produce login credentials.
+		var p QRDelegateParams
+		_ = json.Unmarshal(s.Params, &p)
+		resp := gin.H{
+			"status": string(entity.QRStatusConfirmed),
+			"action": string(s.Action),
+			"op":     p.Op,
+		}
+		if p.AppName != "" {
+			resp["app"] = p.AppName
+		}
+		if p.Env != "" {
+			resp["env"] = p.Env
+		}
+		if p.AccountID != 0 {
+			resp["account_id"] = p.AccountID
+		}
+		if p.RefundNo != "" {
+			resp["refund_no"] = p.RefundNo
+		}
+		c.JSON(http.StatusOK, resp)
 
 	default:
 		// Reached only if an action is added to entity.IsValidQRAction but not
@@ -1046,14 +1179,21 @@ func (h *QRHandler) Confirm(c *gin.Context) {
 
 	metrics.RecordQRConfirmed(string(session.Action))
 
-	// Wake any waiting PollStatus subscribers so the Web side sees the
-	// confirmation without having to poll again. Best-effort: a publish
-	// failure only delays pollers until their own deadline — they will
-	// re-read and discover the confirmed state on their next cycle.
-	if perr := h.rdb.Publish(ctx, pubsubChannel(id), "confirmed").Err(); perr != nil {
-		slog.WarnContext(ctx, "qr.pubsub_publish_failed",
-			"id", id, "action", string(session.Action), "err", perr)
-	}
+	// Defer the Pub/Sub publish until AFTER the action-specific
+	// handler runs. The earlier in-flight order (publish *before*
+	// confirmDelegate) caused a race where Web pollers could wake
+	// up to a "confirmed" status while the executor was still
+	// running — Web UI then refreshed the data view and saw stale
+	// state. By deferring, pollers see "confirmed" only once the
+	// world has converged. Publish failures stay best-effort: a
+	// dropped publish only delays pollers until their own deadline,
+	// at which point they re-read and discover the state.
+	defer func() {
+		if perr := h.rdb.Publish(ctx, pubsubChannel(id), "confirmed").Err(); perr != nil {
+			slog.WarnContext(ctx, "qr.pubsub_publish_failed",
+				"id", id, "action", string(session.Action), "err", perr)
+		}
+	}()
 
 	// tryConfirm stored accountID in Redis; mirror it onto our local copy so
 	// downstream side effects (e.g. AddMember target) see the right user.
@@ -1214,7 +1354,7 @@ func (h *QRHandler) confirmJoinOrg(c *gin.Context, s *entity.QRSession) {
 // op whitelist.
 func (h *QRHandler) confirmDelegate(c *gin.Context, s *entity.QRSession) {
 	ctx := c.Request.Context()
-	if h.delegate == nil {
+	if len(h.delegates) == 0 {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "action_unsupported",
 			"message": "delegate requires executor, not wired",
@@ -1228,21 +1368,26 @@ func (h *QRHandler) confirmDelegate(c *gin.Context, s *entity.QRSession) {
 		})
 		return
 	}
-	var p qrDelegateParams
-	if err := json.Unmarshal(s.Params, &p); err != nil ||
-		strings.TrimSpace(p.Op) == "" ||
-		strings.TrimSpace(p.AppName) == "" ||
-		strings.TrimSpace(p.Env) == "" {
+	var p QRDelegateParams
+	if err := json.Unmarshal(s.Params, &p); err != nil || strings.TrimSpace(p.Op) == "" {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "invalid_session",
 			"message": "delegate session has malformed params",
 		})
 		return
 	}
-	if !h.supportsDelegateOp(p.Op) {
+	if err := p.Validate(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "invalid_session",
+			"message": "delegate session has malformed params",
+		})
+		return
+	}
+	exec := h.delegateFor(p.Op)
+	if exec == nil {
 		// Defensive: SupportedOps could narrow between create and
-		// confirm if the executor was swapped (it isn't today, but the
-		// check is cheap and it makes the rejection legible in logs).
+		// confirm if the executor set was swapped (it isn't today, but
+		// the check is cheap and makes rejection legible in logs).
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "invalid_op",
 			"message": fmt.Sprintf("Op %q is not supported", p.Op),
@@ -1250,7 +1395,8 @@ func (h *QRHandler) confirmDelegate(c *gin.Context, s *entity.QRSession) {
 		return
 	}
 
-	if err := h.delegate.ExecuteDelegate(ctx, p.Op, p.AppName, p.Env, s.CreatedBy); err != nil {
+	if err := exec.ExecuteDelegate(ctx, p, s.CreatedBy); err != nil {
+		metrics.RecordQRDelegateConfirm(p.Op, "failed")
 		if errors.Is(err, ErrUnsupportedDelegateOp) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "invalid_op",
@@ -1260,6 +1406,7 @@ func (h *QRHandler) confirmDelegate(c *gin.Context, s *entity.QRSession) {
 		}
 		slog.WarnContext(ctx, "qr.confirm.delegate_failed",
 			"op", p.Op, "app", p.AppName, "env", p.Env,
+			"account_id", p.AccountID, "refund_no", p.RefundNo,
 			"initiator", s.CreatedBy, "scanner", s.AccountID, "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "delegate_failed",
@@ -1267,10 +1414,12 @@ func (h *QRHandler) confirmDelegate(c *gin.Context, s *entity.QRSession) {
 		})
 		return
 	}
+	metrics.RecordQRDelegateConfirm(p.Op, "success")
 	// Audit log — destructive admin operations always emit a structured
 	// success line so Loki queries can compute "who deleted what when"
-	// without parsing access logs.
-	slog.InfoContext(ctx, "qr.confirm.delegate",
+	// without parsing access logs. AccountID is included only when the
+	// op carried one (delete_account); zero-valued for app-targeted ops.
+	auditAttrs := []any{
 		"op", p.Op,
 		"app", p.AppName,
 		"env", p.Env,
@@ -1278,14 +1427,34 @@ func (h *QRHandler) confirmDelegate(c *gin.Context, s *entity.QRSession) {
 		"scanner", s.AccountID,
 		"ip", c.ClientIP(),
 		"ua", s.UA,
-		"created_ip", s.IP)
-	c.JSON(http.StatusOK, gin.H{
+		"created_ip", s.IP,
+	}
+	if p.AccountID != 0 {
+		auditAttrs = append(auditAttrs, "account_id", p.AccountID)
+	}
+	if p.RefundNo != "" {
+		auditAttrs = append(auditAttrs, "refund_no", p.RefundNo)
+	}
+	slog.InfoContext(ctx, "qr.confirm.delegate", auditAttrs...)
+
+	resp := gin.H{
 		"confirmed": true,
 		"action":    string(s.Action),
 		"op":        p.Op,
-		"app":       p.AppName,
-		"env":       p.Env,
-	})
+	}
+	if p.AppName != "" {
+		resp["app"] = p.AppName
+	}
+	if p.Env != "" {
+		resp["env"] = p.Env
+	}
+	if p.AccountID != 0 {
+		resp["account_id"] = p.AccountID
+	}
+	if p.RefundNo != "" {
+		resp["refund_no"] = p.RefundNo
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // ── Helpers: id / payload / HMAC / IP ──────────────────────────────────────

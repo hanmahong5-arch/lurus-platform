@@ -47,11 +47,14 @@ func (f *fakeDelegateExec) SupportedOps() []string {
 	return out
 }
 
-func (f *fakeDelegateExec) ExecuteDelegate(_ context.Context, op, app, env string, callerID int64) error {
+func (f *fakeDelegateExec) ExecuteDelegate(_ context.Context, params handler.QRDelegateParams, callerID int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.executeHits++
-	f.lastOp, f.lastApp, f.lastEnv, f.lastCaller = op, app, env, callerID
+	f.lastOp = params.Op
+	f.lastApp = params.AppName
+	f.lastEnv = params.Env
+	f.lastCaller = callerID
 	return f.executeErr
 }
 
@@ -312,12 +315,21 @@ func TestQR_Confirm_Delegate_MissingAuth_401(t *testing.T) {
 	}
 }
 
-// TestQR_Confirm_Delegate_PollingReturns400 ensures the Web initiator
-// cannot accidentally try to consume a delegate session via the status
-// long-poll path — the side effect runs on the APP confirm path, so
-// any poller hitting /status after confirm sees a structured 400 with
-// action_uses_confirm_path.
-func TestQR_Confirm_Delegate_PollingReturns400(t *testing.T) {
+// TestQR_Confirm_Delegate_PollingReturnsOpInfo verifies that the Web
+// initiator (the admin UI that minted the QR) gets a 200 with op
+// metadata when polling /status after the boss confirmed on his
+// APP. Two invariants this test guards:
+//
+//   - The response MUST NOT include a session token. Delegate
+//     sessions are not login flows; smuggling a token here would
+//     let any party that scrapes the admin UI's network log
+//     impersonate the scanner.
+//
+//   - The response MUST include the op type so the Web UI knows
+//     what data view to refresh ("the boss approved the refund
+//     RF-001"). Returning an opaque "confirmed" without op
+//     metadata would force the Web UI into per-page bookkeeping.
+func TestQR_Confirm_Delegate_PollingReturnsOpInfo(t *testing.T) {
 	h, _ := setupQRWithDelegate(t)
 	const adminID, scannerID int64 = 99, 777
 
@@ -343,22 +355,33 @@ func TestQR_Confirm_Delegate_PollingReturns400(t *testing.T) {
 		t.Fatalf("confirm = %d (body=%s)", wConfirm.Code, wConfirm.Body.String())
 	}
 
-	// A stale Web poller arrives after confirm — must NOT receive 200
-	// with a token (that's login behaviour) and must NOT silently re-
-	// run the executor.
+	// Web poller arrives after confirm — should receive 200 + op
+	// metadata so it can refresh the apps list.
 	cPoll, wPoll := postJSON(http.MethodGet, "/", nil, gin.Param{Key: "id", Value: id})
 	cPoll.Params = gin.Params{{Key: "id", Value: id}}
-	// Use the existing PollStatus path; expect 400 action_uses_confirm_path.
 	h.PollStatus(cPoll)
-	// Codes acceptable: 400 (writeConfirmResult delegate branch) OR
-	// 410 (race where another poller consumed first). 200 with token
-	// would be the regression we're guarding against.
-	if wPoll.Code != http.StatusBadRequest && wPoll.Code != http.StatusGone {
-		t.Fatalf("poll = %d; want 400 or 410, never 200/token", wPoll.Code)
+
+	// Acceptable: 200 (we beat any concurrent poller to consume) OR
+	// 410 (some other poller consumed first — also a successful
+	// terminal state).
+	if wPoll.Code != http.StatusOK && wPoll.Code != http.StatusGone {
+		t.Fatalf("poll = %d (body=%s); want 200 or 410", wPoll.Code, wPoll.Body.String())
 	}
-	if wPoll.Code == http.StatusBadRequest {
-		if got := decode(t, wPoll)["error"]; got != "action_uses_confirm_path" {
-			t.Errorf("error = %v; want action_uses_confirm_path", got)
+
+	if wPoll.Code == http.StatusOK {
+		body := decode(t, wPoll)
+		// HARD invariant: never a token on a delegate session.
+		if _, hasToken := body["token"]; hasToken {
+			t.Errorf("poll body must NOT include a token; got %v", body)
+		}
+		if body["status"] != "confirmed" {
+			t.Errorf("status = %v; want confirmed", body["status"])
+		}
+		if body["op"] != "delete_oidc_app" {
+			t.Errorf("op = %v; want delete_oidc_app", body["op"])
+		}
+		if body["app"] != "tally" {
+			t.Errorf("app = %v; want tally", body["app"])
 		}
 	}
 }

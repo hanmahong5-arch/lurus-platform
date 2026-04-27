@@ -38,8 +38,11 @@ type Deps struct {
 	QRLogin         *handler.QRLoginHandler         // v1 QR login (login-only, legacy)
 	QR              *handler.QRHandler              // v2 multi-action QR primitive (login → join_org/delegate pending)
 	AppsAdmin       *handler.AppsAdminHandler       // read-only viewer over apps.yaml + Zitadel state
+	AccountAdmin    *handler.AccountAdminHandler    // GDPR-grade account purge via QR-delegate (Phase 4)
+	OpsCatalog      *handler.OpsCatalogHandler      // privileged-op catalogue (Phase 4 / Sprint 2)
 	NewAPIProxy     *handler.NewAPIProxyHandler     // nil when newapi proxy is not configured
 	ServiceKeyAdmin *handler.AdminServiceKeyHandler // nil when service key management not wired
+	SMSRelay        *handler.SMSRelayHandler        // nil when SMS relay is not configured
 	InternalKey     string                          // legacy INTERNAL_API_KEY (fallback during migration)
 	ServiceKeys     *app.ServiceKeyStore            // scoped service key resolver (nil = legacy-only mode)
 	JWT             *auth.JWTMiddleware
@@ -308,6 +311,10 @@ func Build(deps Deps) *gin.Engine {
 		// User preferences sync (cross-device, e.g. Creator model usage stats)
 		internal.POST("/preferences/sync", deps.Internal.SyncPreferences)
 		internal.GET("/preferences/:account_id", deps.Internal.GetPreferences)
+		// Zitadel SMS webhook relay — bridges Zitadel OTP webhook to Aliyun SMS
+		if deps.SMSRelay != nil {
+			internal.POST("/sms/relay", deps.SMSRelay.Relay)
+		}
 	}
 
 	// Admin API — requires admin JWT role (Zitadel only, not lurus session tokens)
@@ -319,6 +326,14 @@ func Build(deps Deps) *gin.Engine {
 		admin.POST("/accounts/:id/grant", deps.Accounts.AdminGrantEntitlement)
 		admin.POST("/accounts/:id/wallet/adjust", deps.Wallets.AdminAdjustWallet)
 		admin.POST("/accounts/:id/wallet/credit", deps.Internal.CreditWallet)
+		// GDPR-grade purge via QR-delegate (Phase 4 / Sprint 1A) —
+		// mints the QR only; the cascade runs on the boss's APP
+		// confirm path. Gate-and-fall-through pattern matches
+		// AppsAdmin: missing wiring keeps the endpoint at 501 rather
+		// than half-functional.
+		if deps.AccountAdmin != nil {
+			admin.POST("/accounts/:id/delete-request", deps.AccountAdmin.DeleteRequest)
+		}
 
 		admin.POST("/products", deps.Products.AdminCreateProduct)
 		admin.PUT("/products/:id", deps.Products.AdminUpdateProduct)
@@ -331,6 +346,12 @@ func Build(deps Deps) *gin.Engine {
 		// Admin Refunds
 		admin.POST("/refunds/:refund_no/approve", deps.Refunds.AdminApprove)
 		admin.POST("/refunds/:refund_no/reject", deps.Refunds.AdminReject)
+		// QR-delegate refund approval (Phase 4 / Sprint 3A) — used
+		// for large or sensitive refunds where the boss biometric
+		// confirms on his APP rather than the CS rep approving
+		// directly. Mint-only here; the credit happens after
+		// /api/v2/qr/:id/confirm.
+		admin.POST("/refunds/:refund_no/qr-approve", deps.Refunds.AdminQRApprove)
 
 		// Admin Ops: batch redemption code generation
 		admin.POST("/redemption-codes/batch", deps.AdminOps.BatchGenerateCodes)
@@ -369,6 +390,16 @@ func Build(deps Deps) *gin.Engine {
 			// only; the Zitadel + K8s mutation happens later when the
 			// boss biometric-confirms on his APP via /api/v2/qr/:id/confirm.
 			admin.POST("/apps/:name/:env/delete-request", deps.AppsAdmin.DeleteRequest)
+		}
+
+		// Privileged-op catalogue (Phase 4 / Sprint 2). Read-only
+		// catalogue of all destructive / privileged ops the
+		// platform exposes — consumed by the Lutu APP confirm
+		// screen and the future audit dashboard so each client
+		// renders risk-aware prompts without hardcoded knowledge
+		// per op.
+		if deps.OpsCatalog != nil {
+			admin.GET("/ops", deps.OpsCatalog.List)
 		}
 
 		// Service API Key management

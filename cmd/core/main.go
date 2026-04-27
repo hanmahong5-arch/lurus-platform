@@ -30,9 +30,11 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/repo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
+	appsms "github.com/hanmahong5-arch/lurus-platform/internal/app/sms"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module/app_registry"
+	"github.com/hanmahong5-arch/lurus-platform/internal/module/ops"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/buildinfo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/cache"
@@ -138,6 +140,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	// --- Repositories ---
 	accountRepo := repo.NewAccountRepo(db)
+	accountPurgeRepo := repo.NewAccountPurgeRepo(db)
 	subRepo := repo.NewSubscriptionRepo(db)
 	walletRepo := repo.NewWalletRepo(db)
 	productRepo := repo.NewProductRepo(db)
@@ -173,7 +176,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 	productSvc := app.NewProductService(productRepo)
 	entSvc := app.NewEntitlementService(subRepo, productRepo, entCache)
 	subSvc := app.NewSubscriptionService(subRepo, productRepo, entSvc, cfg.GracePeriodDays)
-	accountSvc := app.NewAccountService(accountRepo, walletRepo, vipRepo)
+	accountSvc := app.NewAccountService(accountRepo, walletRepo, vipRepo).
+		WithPurgeStore(accountPurgeRepo)
 	// Note: accountSvc.SetOnAccountCreatedHook is wired after registry init (below).
 	invoiceSvc := app.NewInvoiceService(invoiceRepo, walletRepo)
 	referralSvc := app.NewReferralServiceWithCodes(accountRepo, walletRepo, walletRepo).WithStats(referralRepo).WithRewardEvents(referralRepo)
@@ -493,6 +497,63 @@ func run(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
+	// GDPR-grade account purge (Phase 4 / Sprint 1A) — wire the
+	// delete_account QR-delegate executor and admin endpoint. The
+	// executor is registered as a second QRHandler.WithDelegateExecutor
+	// alongside AppsAdmin's delete_oidc_app — multi-executor dispatch
+	// resolves by op name. zitadelClient is allowed to be nil; the
+	// cascade degrades that step with a warn-level audit instead of
+	// failing the whole purge.
+	accountDeleteExec := handler.NewAccountDeleteExecutor(accountSvc, subSvc, walletSvc, zitadelClient)
+	qrH = qrH.WithDelegateExecutor(accountDeleteExec)
+	accountAdminH := handler.NewAccountAdminHandler(accountSvc).WithDeleteFlow(qrH)
+
+	// Refund QR-approve flow (Phase 4 / Sprint 3A) — large refunds
+	// route through a boss biometric scan instead of direct admin
+	// approval. The executor satisfies the same QRDelegateExecutor
+	// + ops.DelegateOp pair as the other delegate ops, so adding
+	// this op required no changes to qr_handler dispatch nor to
+	// the catalogue endpoint — proves the abstraction.
+	refundApproveExec := handler.NewRefundApproveExecutor(refundSvc)
+	qrH = qrH.WithDelegateExecutor(refundApproveExec)
+	refundH = refundH.WithQRApprove(qrH)
+
+	// Privileged-op catalogue (Phase 4 / Sprint 2). One registry per
+	// process — populated here at boot, served read-only by
+	// OpsCatalogHandler at /admin/v1/ops, consumed by the Lutu APP
+	// confirm screen and the future audit dashboard. Registration
+	// is intentionally MustRegister: a duplicate Type() or unknown
+	// RiskLevel is a deployer mistake, not a runtime condition.
+	opsRegistry := ops.NewRegistry()
+	opsRegistry.MustRegister(accountDeleteExec)
+	opsRegistry.MustRegister(appsAdminH)
+	opsRegistry.MustRegister(refundApproveExec)
+	// rotate_secret is a direct admin action (not QR-delegate) but
+	// belongs in the catalogue so audit dashboards and operator UIs
+	// see the full surface of privileged ops the platform exposes.
+	// Registered as ops.Info — no executor wired here because the
+	// existing AppsAdminHandler.RotateSecret handles dispatch via
+	// admin JWT, not the ops registry.
+	opsRegistry.MustRegister(ops.Info{
+		OpType:        "rotate_secret",
+		OpDescription: "Rotate an OIDC client_secret (direct admin action, no APP confirmation required)",
+		OpRisk:        ops.RiskWarn,
+		OpDestructive: false,
+	})
+	opsCatalogH := handler.NewOpsCatalogHandler(opsRegistry)
+
+	// --- SMS Relay Handler (Zitadel webhook → Aliyun SMS) ---
+	// Active only when SMS_PROVIDER is configured. When noop, the endpoint is
+	// still wired but messages are logged and discarded (useful for staging).
+	smsRelayUC := appsms.NewSMSRelayUsecase(
+		smsSender,
+		smsCfg.AliyunSignName,
+		smsCfg.AliyunTemplateVerify,
+		smsCfg.AliyunTemplateReset,
+		3, // maxRetries
+	)
+	smsRelayH := handler.NewSMSRelayHandler(smsRelayUC)
+
 	engine := router.Build(router.Deps{
 		Accounts:          accountH,
 		Subscriptions:     subH,
@@ -514,7 +575,10 @@ func run(ctx context.Context, cfg *config.Config) error {
 		QRLogin:           qrLoginH,
 		QR:                qrH,
 		AppsAdmin:         appsAdminH,
+		AccountAdmin:      accountAdminH,
+		OpsCatalog:        opsCatalogH,
 		NewAPIProxy:       newAPIProxyH,
+		SMSRelay:          smsRelayH,
 		InternalKey:       cfg.InternalAPIKey,
 		JWT:               jwtMiddleware,
 		RateLimit:         rateLimiter,

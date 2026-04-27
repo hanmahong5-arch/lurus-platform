@@ -162,6 +162,15 @@ var (
 		},
 	)
 
+	qrDelegateConfirmsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "qr_delegate_confirms_total",
+			Help:      "Total confirmed QR-delegate ops, partitioned by op type and outcome. result=success|failed; success means the executor returned no error, failed includes both ErrUnsupportedDelegateOp and any cascade failure. Op type is the canonical op string (delete_oidc_app|delete_account|approve_refund|...) — adding a new op needs no metric definition change, just a new label value.",
+		},
+		[]string{"op", "result"},
+	)
+
 	// Rate limiter fallback: counts every request routed through the local
 	// in-process token bucket because Redis was unreachable. A non-zero
 	// rate indicates a Redis outage and should page; sustained firing of
@@ -345,6 +354,18 @@ func RecordQRConfirmLatency(action string, elapsed time.Duration) {
 // the deprecated format so we can decide when it is safe to remove.
 func RecordQRLegacySignature() {
 	qrLegacySignaturesTotal.Inc()
+}
+
+// RecordQRDelegateConfirm records the outcome of a confirmed
+// QR-delegate op, partitioned by op type. result must be "success"
+// or "failed" so dashboards can chart per-op approval rates.
+//
+// Why a separate metric from qr_confirmed_total: that counter labels
+// only by action (login|join_org|delegate). For ops dashboards we
+// need per-op visibility — "did delete_account fail at the cascade
+// step today?" — without redoing the whole metric.
+func RecordQRDelegateConfirm(op, result string) {
+	qrDelegateConfirmsTotal.WithLabelValues(op, result).Inc()
 }
 
 // RecordRateLimitFallbackEngaged increments when a rate-limit check ran

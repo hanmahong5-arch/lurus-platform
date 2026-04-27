@@ -373,14 +373,16 @@ func (h *AppsAdminHandler) SupportedOps() []string {
 }
 
 // ExecuteDelegate runs the destructive side effect after the boss has
-// confirmed on his APP.
-func (h *AppsAdminHandler) ExecuteDelegate(ctx context.Context, op, app, env string, _ int64) error {
-	if op != qrDelegateOpDeleteOIDCApp {
-		return fmt.Errorf("%w: %q", ErrUnsupportedDelegateOp, op)
+// confirmed on his APP. params.Op must be delete_oidc_app; params
+// AppName + Env carry the target. AccountID is unused for this op.
+func (h *AppsAdminHandler) ExecuteDelegate(ctx context.Context, params QRDelegateParams, _ int64) error {
+	if params.Op != qrDelegateOpDeleteOIDCApp {
+		return fmt.Errorf("%w: %q", ErrUnsupportedDelegateOp, params.Op)
 	}
 	if h.zitadel == nil || h.k8s == nil || h.tombstones == nil {
 		return errors.New("apps_admin: delete flow dependencies not wired")
 	}
+	app, env := params.AppName, params.Env
 
 	spec, err := app_registry.LoadSpec(h.configPath)
 	if err != nil {

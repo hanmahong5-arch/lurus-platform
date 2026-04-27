@@ -158,6 +158,34 @@ type rewardEventStore interface {
 	CreateRewardEvent(ctx context.Context, ev *entity.ReferralRewardEvent) (created bool, err error)
 }
 
+// accountPurgeStore is the minimal DB interface required by
+// AccountService for the GDPR-grade account purge flow. Implemented
+// by repo.AccountPurgeRepo.
+type accountPurgeStore interface {
+	BeginPurge(ctx context.Context, p *entity.AccountPurge) error
+	MarkCompleted(ctx context.Context, purgeID, approvedBy int64, completedAt time.Time) error
+	MarkFailed(ctx context.Context, purgeID int64, errMsg string, completedAt time.Time) error
+}
+
+// ErrAccountAlreadyPurged is returned by AccountService.BeginPurge
+// when the target account is already in status=Deleted. Callers map
+// this to an idempotent 200 response (the desired end state already
+// holds), not 409.
+var ErrAccountAlreadyPurged = errorString("account already purged")
+
+// ErrPurgeInFlight is returned by AccountService.BeginPurge when
+// another purge attempt is already running for the same account.
+// Callers map this to 409 Conflict so the second admin sees a clear
+// signal rather than a silent duplicate cascade.
+var ErrPurgeInFlight = errorString("account purge already in flight")
+
+// errorString is a lightweight typed-string error so callers can
+// errors.Is-match the sentinels above without depending on a heavier
+// errors package import surface.
+type errorString string
+
+func (e errorString) Error() string { return string(e) }
+
 // orgStore is the minimal DB interface required by OrganizationService.
 type orgStore interface {
 	// organization CRUD

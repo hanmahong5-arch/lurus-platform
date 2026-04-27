@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
@@ -10,11 +13,23 @@ import (
 // RefundHandler handles refund-related HTTP endpoints.
 type RefundHandler struct {
 	refunds *app.RefundService
+	// qr is the QR-delegate session minter used by the admin
+	// QR-approve flow. Optional: when nil the AdminQRApprove
+	// endpoint stays at 501 so a half-wired deployment is loud.
+	qr *QRHandler
 }
 
 // NewRefundHandler creates a new RefundHandler.
 func NewRefundHandler(refunds *app.RefundService) *RefundHandler {
 	return &RefundHandler{refunds: refunds}
+}
+
+// WithQRApprove wires the QR-delegate session minter so the boss
+// can biometric-approve large refunds from his APP. Chainable; safe
+// to call with nil to leave the endpoint gated.
+func (h *RefundHandler) WithQRApprove(qr *QRHandler) *RefundHandler {
+	h.qr = qr
+	return h
 }
 
 // RequestRefund creates a refund request for a paid order.
@@ -125,4 +140,80 @@ func (h *RefundHandler) AdminReject(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"rejected": true})
+}
+
+// qrApproveResponse mirrors the QR session shape so the admin Web UI
+// can render a QR immediately after the mint without an extra
+// round-trip. The Web side typically polls /api/v2/qr/:id/status to
+// learn when the boss biometric-confirmed.
+type qrApproveResponse struct {
+	ID        string `json:"id"`
+	QRPayload string `json:"qr_payload"`
+	ExpiresAt string `json:"expires_at"`
+	ExpiresIn int    `json:"expires_in"`
+	RefundNo  string `json:"refund_no"`
+}
+
+// AdminQRApprove — POST /admin/v1/refunds/:refund_no/qr-approve
+//
+// Mints a QR-delegate session for the approve_refund op. The CS rep
+// is already authenticated as an admin by AdminAuth; the destructive
+// step (RefundService.Approve) only runs after the boss scans + a
+// biometric step-up on the APP.
+//
+// Threshold enforcement is intentionally not done here — the policy
+// "amounts > X must use QR" lives in the admin Web UI (which only
+// surfaces the QR-approve button for refunds above the threshold).
+// Backend stays simple: any pending refund can be QR-approved.
+//
+// Why a separate endpoint instead of overloading /approve: the
+// existing /approve runs synchronously and credits immediately; this
+// path defers to the boss. Keeping them distinct lets clients
+// choose explicitly and keeps the audit trail unambiguous.
+func (h *RefundHandler) AdminQRApprove(c *gin.Context) {
+	if h.qr == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{
+			"error":   "qr_approve_not_wired",
+			"message": "QR-delegate refund approval is not configured on this deployment",
+		})
+		return
+	}
+	callerID, ok := requireAccountID(c)
+	if !ok {
+		return
+	}
+	refundNo := c.Param("refund_no")
+	if refundNo == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid_request",
+			"message": "refund_no path param is required",
+		})
+		return
+	}
+
+	session, err := h.qr.CreateDelegateSessionWithParams(c.Request.Context(), callerID, QRDelegateParams{
+		Op:       qrDelegateOpApproveRefund,
+		RefundNo: refundNo,
+	})
+	if err != nil {
+		if errors.Is(err, ErrUnsupportedDelegateOp) {
+			c.JSON(http.StatusNotImplemented, gin.H{
+				"error":   "qr_approve_not_wired",
+				"message": err.Error(),
+			})
+			return
+		}
+		respondInternalError(c, "Refund.AdminQRApprove", err)
+		return
+	}
+	slog.InfoContext(c.Request.Context(), "refund.qr_approve_requested",
+		"refund_no", refundNo, "initiator", callerID, "session_id", session.ID)
+
+	c.JSON(http.StatusOK, qrApproveResponse{
+		ID:        session.ID,
+		QRPayload: session.QRPayload,
+		ExpiresAt: session.ExpiresAt.Format(time.RFC3339),
+		ExpiresIn: session.ExpiresIn,
+		RefundNo:  refundNo,
+	})
 }
