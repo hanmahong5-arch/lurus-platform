@@ -5,6 +5,7 @@
 *.so
 *.dylib
 /app
+/core
 
 # Test
 *.test
