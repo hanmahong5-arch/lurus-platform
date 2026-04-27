@@ -231,8 +231,16 @@ new pods panicked — recovery required `crictl inspect` on a live
 container to extract the env. See `.claude/skills/infra-ops/SKILL.md`
 §6.26 for the full postmortem.
 
-**Migrations pinned at 016** — new deployments must run migrations
+**Migrations pinned at 025** — new deployments must run migrations
 (`migrate -path migrations -database $DATABASE_DSN up`) before the
 first pod starts, or GORM will fail on missing columns. The deployment
 `initContainer` does this automatically under Kustomize; bare Compose
 users must run it manually.
+
+Phase 4 critical migrations:
+- `024_account_purges.sql` — required by Sprint 1A `delete_account` flow.
+  Without it, `POST /admin/v1/accounts/:id/delete-request` will 500 on
+  the first call (table missing). Idempotent — safe to re-run.
+- `025_seed_tally_product.sql` — seeds the lurus-tally product so
+  `POST /internal/v1/subscriptions/checkout` resolves Tally plans. Only
+  needed if you plan to onboard Tally (`2b-svc-psi`); harmless otherwise.
