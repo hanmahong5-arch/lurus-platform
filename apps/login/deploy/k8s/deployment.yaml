@@ -22,16 +22,27 @@ spec:
       labels:
         app: lurus-login
         app.kubernetes.io/managed-by: argocd
+      annotations:
+        # Bump to force rollout when image tag :main moves. Value is
+        # the short SHA of the last commit we want this deploy to track.
+        rollout.lurus.cn/revision: "7deabc8"
     spec:
-      nodeSelector:
-        lurus.cn/vpn: "true"
+      # nodeSelector intentionally omitted — single-node cluster
+      # (cloud-ubuntu-5-32c32g) doesn't carry the legacy
+      # lurus.cn/vpn=true label and the selector blocks scheduling.
+      # Restore + label nodes if we go multi-node again.
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
         fsGroup: 1001
       containers:
         - name: lurus-login
-          image: ghcr.io/zitadel/zitadel-login:latest
+          # Lurus-customized Login UI — see apps/login/Dockerfile.
+          # The :main tag rolls forward on every push to master via
+          # .github/workflows/login.yaml. imagePullPolicy: Always +
+          # rollout.lurus.cn/revision annotation make `kubectl rollout
+          # restart` pick up the latest CI build.
+          image: ghcr.io/hanmahong5-arch/lurus-login:main
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
