@@ -34,6 +34,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module/app_registry"
+	"github.com/hanmahong5-arch/lurus-platform/internal/module/identity_admin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module/ops"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/buildinfo"
@@ -540,6 +541,37 @@ func run(ctx context.Context, cfg *config.Config) error {
 		OpRisk:        ops.RiskWarn,
 		OpDestructive: false,
 	})
+
+	// Lurus API key abstraction over Zitadel (Service User + PAT).
+	// The whole point of identity_admin module is to keep operators
+	// out of Zitadel console; the Web Admin "应用密钥" tab consumes
+	// the /admin/v1/api-keys endpoints. Wired only when Zitadel is
+	// configured (without it Service.Create has nothing to call).
+	var apiKeysAdminH *handler.APIKeysAdminHandler
+	if zitadelClient != nil {
+		apiKeyRepo := repo.NewAPIKeyRepo(db)
+		apiKeySvc := identity_admin.NewService(apiKeyRepo, zitadelClient, slog.Default())
+		apiKeysAdminH = handler.NewAPIKeysAdminHandler(apiKeySvc)
+		// AppsAdminHandler already registered as "delete_oidc_app" via
+		// its DelegateOp methods; the api-key handler exposes ops
+		// metadata for "create_api_key" alone (handler.Type returns
+		// that) and we register rotate/revoke as ops.Info siblings so
+		// the catalogue lists all three to admin UIs.
+		opsRegistry.MustRegister(apiKeysAdminH)
+		opsRegistry.MustRegister(ops.Info{
+			OpType:        "rotate_api_key",
+			OpDescription: "Rotate the PAT behind a Lurus API key (revoke old, mint new) — direct admin action",
+			OpRisk:        ops.RiskWarn,
+			OpDestructive: false,
+		})
+		opsRegistry.MustRegister(ops.Info{
+			OpType:        "revoke_api_key",
+			OpDescription: "Revoke a Lurus API key (delete the underlying Zitadel Service User) — direct admin action",
+			OpRisk:        ops.RiskDestructive,
+			OpDestructive: true,
+		})
+	}
+
 	opsCatalogH := handler.NewOpsCatalogHandler(opsRegistry)
 
 	// --- SMS Relay Handler (Zitadel webhook → Aliyun SMS) ---
@@ -577,6 +609,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		AppsAdmin:         appsAdminH,
 		AccountAdmin:      accountAdminH,
 		OpsCatalog:        opsCatalogH,
+		APIKeysAdmin:      apiKeysAdminH,
 		NewAPIProxy:       newAPIProxyH,
 		SMSRelay:          smsRelayH,
 		InternalKey:       cfg.InternalAPIKey,

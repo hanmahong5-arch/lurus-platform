@@ -345,3 +345,185 @@ func (c *Client) FindUserByEmail(ctx context.Context, email string) (string, err
 	}
 	return result.Result[0].UserID, nil
 }
+
+// CreateMachineUser provisions a machine (service) user via the
+// management API. POST /management/v1/users/machine.
+//
+// username is the stable identifier (must be unique within the org);
+// displayName is shown in the Zitadel console. description is free-form.
+//
+// accessTokenType is "BEARER" (default) — Zitadel also supports JWT but
+// callers using Lurus's API-key abstraction never need that variant.
+//
+// Returns Zitadel's userId on success; surfaces 409 as a typed error so
+// the caller can decide whether to look up the existing user.
+func (c *Client) CreateMachineUser(ctx context.Context, username, displayName, description string) (string, error) {
+	if username == "" || displayName == "" {
+		return "", fmt.Errorf("zitadel: create machine user requires non-empty username + displayName")
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	body, _ := json.Marshal(map[string]any{
+		"userName":        username,
+		"name":            displayName,
+		"description":     description,
+		"accessTokenType": "ACCESS_TOKEN_TYPE_BEARER",
+	})
+
+	url := c.issuer + "/management/v1/users/machine"
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("zitadel: build create-machine request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.pat)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("zitadel: create machine user request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated:
+		var out struct {
+			UserID string `json:"userId"`
+		}
+		if err := json.Unmarshal(respBody, &out); err != nil {
+			return "", fmt.Errorf("zitadel: decode create machine response: %w (body=%s)", err, respBody)
+		}
+		if out.UserID == "" {
+			return "", fmt.Errorf("zitadel: create machine returned empty userId (body=%s)", respBody)
+		}
+		return out.UserID, nil
+	case http.StatusConflict:
+		return "", fmt.Errorf("zitadel: machine user already exists (username=%s)", username)
+	default:
+		return "", fmt.Errorf("zitadel: create machine user returned %d: %s", resp.StatusCode, respBody)
+	}
+}
+
+// CreatePAT issues a Personal Access Token for a machine user.
+// POST /management/v1/users/{userId}/pats.
+//
+// expiresAt is required; pass time.Time{} for "never expires" (Zitadel
+// uses absent expirationDate for that). Returns the PAT's tokenId AND
+// the token string itself — the latter is shown only once and the
+// caller must persist or hand it off immediately.
+func (c *Client) CreatePAT(ctx context.Context, userID string, expiresAt time.Time) (tokenID, token string, err error) {
+	if userID == "" {
+		return "", "", fmt.Errorf("zitadel: create PAT requires userID")
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	payload := map[string]any{}
+	if !expiresAt.IsZero() {
+		// Zitadel expects RFC3339 timestamp.
+		payload["expirationDate"] = expiresAt.UTC().Format(time.RFC3339)
+	}
+	body, _ := json.Marshal(payload)
+
+	url := c.issuer + "/management/v1/users/" + userID + "/pats"
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", "", fmt.Errorf("zitadel: build create-pat request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.pat)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("zitadel: create PAT request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return "", "", fmt.Errorf("zitadel: create PAT returned %d: %s", resp.StatusCode, respBody)
+	}
+
+	var out struct {
+		TokenID string `json:"tokenId"`
+		Token   string `json:"token"`
+	}
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return "", "", fmt.Errorf("zitadel: decode create PAT response: %w (body=%s)", err, respBody)
+	}
+	if out.Token == "" {
+		return "", "", fmt.Errorf("zitadel: create PAT returned empty token (body=%s)", respBody)
+	}
+	return out.TokenID, out.Token, nil
+}
+
+// DeletePAT revokes a single PAT by id.
+// DELETE /management/v1/users/{userId}/pats/{tokenId}.
+//
+// 404 is treated as success (already revoked / never existed).
+func (c *Client) DeletePAT(ctx context.Context, userID, tokenID string) error {
+	if userID == "" || tokenID == "" {
+		return fmt.Errorf("zitadel: delete PAT requires userID + tokenID")
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	url := c.issuer + "/management/v1/users/" + userID + "/pats/" + tokenID
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("zitadel: build delete-pat request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.pat)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("zitadel: delete PAT request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent, http.StatusNotFound:
+		return nil
+	default:
+		return fmt.Errorf("zitadel: delete PAT returned %d: %s", resp.StatusCode, respBody)
+	}
+}
+
+// DeleteUser hard-deletes a user (cascades PATs).
+// DELETE /management/v1/users/{userId}.
+//
+// 404 is treated as success.
+func (c *Client) DeleteUser(ctx context.Context, userID string) error {
+	if userID == "" {
+		return fmt.Errorf("zitadel: delete user requires userID")
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	url := c.issuer + "/management/v1/users/" + userID
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("zitadel: build delete-user request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.pat)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("zitadel: delete user request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent, http.StatusNotFound:
+		return nil
+	default:
+		return fmt.Errorf("zitadel: delete user returned %d: %s", resp.StatusCode, respBody)
+	}
+}

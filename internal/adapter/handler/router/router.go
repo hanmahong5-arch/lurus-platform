@@ -40,6 +40,7 @@ type Deps struct {
 	AppsAdmin       *handler.AppsAdminHandler       // read-only viewer over apps.yaml + Zitadel state
 	AccountAdmin    *handler.AccountAdminHandler    // GDPR-grade account purge via QR-delegate (Phase 4)
 	OpsCatalog      *handler.OpsCatalogHandler      // privileged-op catalogue (Phase 4 / Sprint 2)
+	APIKeysAdmin    *handler.APIKeysAdminHandler    // /admin/v1/api-keys/* — Lurus API key abstraction over Zitadel
 	NewAPIProxy     *handler.NewAPIProxyHandler     // nil when newapi proxy is not configured
 	ServiceKeyAdmin *handler.AdminServiceKeyHandler // nil when service key management not wired
 	SMSRelay        *handler.SMSRelayHandler        // nil when SMS relay is not configured
@@ -400,6 +401,16 @@ func Build(deps Deps) *gin.Engine {
 		// per op.
 		if deps.OpsCatalog != nil {
 			admin.GET("/ops", deps.OpsCatalog.List)
+		}
+
+		// Lurus API keys — abstracts Zitadel Service User + PAT.
+		// Idempotent on `name`: same name twice returns 409 + existing
+		// metadata (no token re-issued); use rotate to re-issue.
+		if deps.APIKeysAdmin != nil {
+			admin.POST("/api-keys", deps.APIKeysAdmin.Create)
+			admin.GET("/api-keys", deps.APIKeysAdmin.List)
+			admin.POST("/api-keys/:name/rotate", deps.APIKeysAdmin.Rotate)
+			admin.DELETE("/api-keys/:name", deps.APIKeysAdmin.Revoke)
 		}
 
 		// Service API Key management

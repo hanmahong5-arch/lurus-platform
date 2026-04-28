@@ -13,6 +13,7 @@ const ModelsTab = lazy(() => import('./ModelsTab'))
 const GatewaySettingsTab = lazy(() => import('./GatewaySettingsTab'))
 const AppsTab = lazy(() => import('./AppsTab'))
 const OpsTab = lazy(() => import('./OpsTab'))
+const ApiKeysTab = lazy(() => import('./ApiKeysTab'))
 
 function LazyTab({ children }) {
   return (
@@ -403,6 +404,11 @@ export default function AdminPage() {
         <TabPane tab="特权操作" itemKey="ops">
           <div style={{ paddingTop: 16 }}>
             <LazyTab><OpsTab /></LazyTab>
+          </div>
+        </TabPane>
+        <TabPane tab="应用密钥" itemKey="api-keys">
+          <div style={{ paddingTop: 16 }}>
+            <LazyTab><ApiKeysTab /></LazyTab>
           </div>
         </TabPane>
         <TabPane tab="渠道管理" itemKey="channels">
