@@ -43,3 +43,6 @@ tmp/
 
 # Zitadel login UI sparse-checkout (developer-local clone, not source)
 apps/login/upstream/
+
+# Claude Code agent worktrees (developer-local runtime state)
+.claude/
