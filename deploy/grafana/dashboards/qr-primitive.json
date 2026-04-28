@@ -110,10 +110,65 @@
       }
     },
     {
+      "title": "Delegate Confirms by Op",
+      "type": "timeseries",
+      "description": "Per-second rate of QR-delegate confirms broken down by op. Today's ops: delete_oidc_app (Phase 3), delete_account (Sprint 1A), approve_refund (Sprint 3A). Adding a new op produces a new line automatically — no dashboard change needed.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 18 },
+      "targets": [
+        {
+          "expr": "sum by(op) (rate(lurus_platform_qr_delegate_confirms_total{result=\"success\"}[5m]))",
+          "legendFormat": "{{op}} (ok)",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by(op) (rate(lurus_platform_qr_delegate_confirms_total{result=\"failed\"}[5m]))",
+          "legendFormat": "{{op}} (fail)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true },
+          "unit": "ops"
+        }
+      }
+    },
+    {
+      "title": "Delegate Failure Ratio (per op, last 1h)",
+      "type": "stat",
+      "description": "Failed / (success + failed) per op over the last hour. Sustained > 5% on any op means an executor cascade is misbehaving (e.g. Zitadel down for delete_oidc_app, refund service down for approve_refund). Empty cells = op not invoked in the window.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 18 },
+      "targets": [
+        {
+          "expr": "sum by(op) (increase(lurus_platform_qr_delegate_confirms_total{result=\"failed\"}[1h])) / clamp_min(sum by(op) (increase(lurus_platform_qr_delegate_confirms_total[1h])), 1)",
+          "legendFormat": "{{op}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "textMode": "value_and_name"
+      }
+    },
+    {
       "title": "Legacy Signature Share",
       "type": "timeseries",
       "description": "Fraction of confirm requests still using the pre-B5 (timestamp-less) HMAC payload, measured as legacy / (legacy + new). Deprecation target 2026-06-01 — if this stays above ~1% near the cutover, delay removal and re-check APP version rollout.",
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 18 },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 27 },
       "targets": [
         {
           "expr": "sum(rate(lurus_platform_qr_legacy_signatures_total[15m])) / clamp_min(sum(rate(lurus_platform_qr_confirmed_total[15m])) + sum(rate(lurus_platform_qr_signature_rejected_total[15m])), 0.0001)",
