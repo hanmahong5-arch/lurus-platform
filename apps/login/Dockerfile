@@ -49,11 +49,17 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 # @zitadel/proto resolve from /packages/.
 RUN pnpm install --frozen-lockfile
 
-# Build Next.js standalone output via the workspace filter so the
-# build context is the monorepo root (correct for workspace package
-# resolution), not /src/apps/login.
+# Build the workspace packages @zitadel/login depends on FIRST
+# (zitadel-client + zitadel-proto), then the login app itself. The
+# packages export `./dist/*.js` from their package.json — without
+# their build step, Next.js Turbopack errors with 96 "Module not
+# found: Can't resolve '@zitadel/client'" because dist/ is empty.
+#
+# `...` after the filter is pnpm's "include dependencies" suffix:
+# topologically resolves and builds @zitadel/login + every
+# transitive workspace dep in order.
 ENV NODE_ENV=production
-RUN pnpm --filter @zitadel/login build
+RUN pnpm --filter "@zitadel/login..." build
 
 WORKDIR /src/apps/login
 
