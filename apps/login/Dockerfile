@@ -9,7 +9,12 @@
 #
 # Build is intentionally cached on ARG change so nightly builds track upstream.
 
-ARG ZITADEL_REF=main
+# Pinned to a Zitadel release tag instead of `main` to keep CI builds
+# reproducible — sparse-checkouts of upstream `main` broke twice in
+# April 2026 when the monorepo layout shifted underneath us. Bump this
+# manually after verifying the new tag's apps/login still builds with
+# our overlay (see overrides/ below).
+ARG ZITADEL_REF=v4.14.0
 
 # ── Stage 1: Clone & build ────────────────────────────────────────────────────
 FROM node:22-alpine AS builder
@@ -21,16 +26,16 @@ RUN apk add --no-cache git
 
 WORKDIR /src
 
-# Sparse checkout to avoid pulling the full monorepo (~600 MB)
+# Full clone — apps/login is part of a pnpm workspace and pulls in
+# `@zitadel/client` + `@zitadel/proto` from /packages/. The earlier
+# `git sparse-checkout set apps/login` left those workspace packages
+# missing, so `pnpm install` couldn't resolve them and Next.js Turbopack
+# logged 96 "Module not found: Can't resolve '@zitadel/client'" errors.
+# Trade ~600 MB clone time for a build that actually works.
 RUN git clone \
       --depth 1 \
-      --filter=blob:none \
-      --sparse \
       --branch "${ZITADEL_REF}" \
-      https://github.com/zitadel/zitadel.git . && \
-    git sparse-checkout set apps/login
-
-WORKDIR /src/apps/login
+      https://github.com/zitadel/zitadel.git .
 
 # Apply Lurus overrides on top of upstream source.
 # overrides/ mirrors the apps/login directory structure; files here
@@ -40,14 +45,17 @@ COPY overrides/ /src/apps/login/
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-# Install dependencies (the login app has its own package.json)
-RUN pnpm install --frozen-lockfile 2>/dev/null || \
-    (cd /src && pnpm install --frozen-lockfile)
+# Install dependencies at the workspace root so @zitadel/client +
+# @zitadel/proto resolve from /packages/.
+RUN pnpm install --frozen-lockfile
 
-# Build Next.js standalone output
+# Build Next.js standalone output via the workspace filter so the
+# build context is the monorepo root (correct for workspace package
+# resolution), not /src/apps/login.
 ENV NODE_ENV=production
-RUN pnpm run build 2>/dev/null || \
-    (cd /src && pnpm --filter @zitadel/login build)
+RUN pnpm --filter @zitadel/login build
+
+WORKDIR /src/apps/login
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
