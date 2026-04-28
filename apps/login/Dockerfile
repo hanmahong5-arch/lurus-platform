@@ -49,6 +49,13 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 # @zitadel/proto resolve from /packages/.
 RUN pnpm install --frozen-lockfile
 
+# Generate the protobuf TS bindings for @zitadel/proto. The package
+# ships with no `build` script — its content (zitadel/*.ts, google/*.ts,
+# validate/*.ts) is produced from /proto via `buf generate`. Without
+# this step, @zitadel/client tsup build errors with TS2307 trying to
+# import `@zitadel/proto/zitadel/admin_pb.js` etc.
+RUN pnpm --filter @zitadel/proto generate
+
 # Build the workspace packages @zitadel/login depends on FIRST
 # (zitadel-client + zitadel-proto), then the login app itself. The
 # packages export `./dist/*.js` from their package.json — without
