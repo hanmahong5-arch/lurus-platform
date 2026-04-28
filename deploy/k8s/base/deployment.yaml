@@ -33,8 +33,13 @@ spec:
       # ServiceAccount grants scoped Secret/Deployment RBAC needed by the
       # app_registry reconciler (see rbac-app-registry.yaml).
       serviceAccountName: platform-core
-      nodeSelector:
-        lurus.cn/vpn: "true"
+      # Removed `nodeSelector: lurus.cn/vpn=true` on 2026-04-28 — the
+      # selector was a multi-node-cluster convention (pin platform-core
+      # to VPN-enabled nodes) carried over from the old k3s cluster
+      # at 100.98.57.55. The new cluster (cloud-ubuntu-5-32c32g) is
+      # single-node and the selector blocked rollouts because the node
+      # didn't carry the label. If we ever go multi-node again, restore
+      # the selector AND label the eligible nodes.
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
