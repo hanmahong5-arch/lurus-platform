@@ -32,6 +32,11 @@ RUN git clone \
 
 WORKDIR /src/apps/login
 
+# Apply Lurus overrides on top of upstream source.
+# overrides/ mirrors the apps/login directory structure; files here
+# replace the corresponding upstream files before the build runs.
+COPY overrides/ /src/apps/login/
+
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@latest --activate
 

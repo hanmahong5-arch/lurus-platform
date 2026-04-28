@@ -40,3 +40,6 @@ dist/
 # Temp
 tmp/
 *.log
+
+# Zitadel login UI sparse-checkout (developer-local clone, not source)
+apps/login/upstream/
