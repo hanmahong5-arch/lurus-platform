@@ -8,10 +8,11 @@ import RedeemPage from './pages/Redeem'
 import AdminPage from './pages/Admin'
 import CallbackPage from './pages/Callback'
 import LoginPage from './pages/Login'
-import RegisterPage from './pages/Register'
 import ForgotPasswordPage from './pages/ForgotPassword'
 import ZLoginPage from './pages/ZLogin'
 import HubPage from './pages/Hub'
+import TosPage from './pages/Legal/Tos'
+import PrivacyPage from './pages/Legal/Privacy'
 import { useStore } from './store'
 import { isLoggedIn } from './auth'
 
@@ -34,7 +35,7 @@ export default function App() {
     // Skip init on auth pages — /callback hasn't stored the token yet,
     // and /login + /zlogin don't need API data.
     const path = window.location.pathname
-    if (['/callback', '/login', '/register', '/forgot-password', '/zlogin'].includes(path)) return
+    if (['/callback', '/login', '/register', '/forgot-password', '/zlogin', '/legal/tos', '/legal/privacy'].includes(path)) return
     if (isLoggedIn()) init()
   }, [])
 
@@ -43,11 +44,17 @@ export default function App() {
       <Routes>
         {/* Auth pages — outside Layout, no auth required */}
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
+        {/* Register kept as alias to /login — the new combined "登录/注册"
+            button auto-creates an account on first SMS verification, so
+            there's no separate registration screen any more. */}
+        <Route path="/register" element={<Navigate to="/login" replace />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/callback" element={<CallbackPage />} />
         {/* Custom Zitadel OIDC login UI — no auth, no layout wrapper */}
         <Route path="/zlogin" element={<ZLoginPage />} />
+        {/* Legal pages — public, no auth required */}
+        <Route path="/legal/tos" element={<TosPage />} />
+        <Route path="/legal/privacy" element={<PrivacyPage />} />
 
         <Route path="/" element={<RequireAuth><Layout /></RequireAuth>}>
           <Route index element={<Navigate to="/hub" replace />} />
