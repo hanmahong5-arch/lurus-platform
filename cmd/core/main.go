@@ -430,8 +430,14 @@ func run(ctx context.Context, cfg *config.Config) error {
 	adminConfigH := handler.NewAdminConfigHandler(adminConfigSvc)
 	wechatAuthH := handler.NewWechatAuthHandler(accountSvc, cfg.WechatServerAddress, cfg.WechatServerToken, cfg.SessionSecret)
 	wechatOAuthH := handler.NewWechatOAuthHandler(cfg.WechatServerAddress, cfg.WechatServerToken, cfg.WechatOAuthClientSecret, rdb)
-	zloginH := handler.NewZLoginHandler(accountSvc, accountRepo, cfg.ZitadelIssuer, cfg.ZitadelServiceAccountPAT, cfg.SessionSecret)
-	registrationH := handler.NewRegistrationHandler(registrationSvc)
+	// Cookie parent domain — read from env so dev (localhost) and prod
+	// (.lurus.cn) diverge without code changes. Empty = host-only cookie
+	// (the safe default; only the issuing host can read it).
+	cookieDomain := getEnvDefault("LURUS_COOKIE_DOMAIN", "")
+	zloginH := handler.NewZLoginHandler(accountSvc, accountRepo, cfg.ZitadelIssuer, cfg.ZitadelServiceAccountPAT, cfg.SessionSecret).
+		WithCookieDomain(cookieDomain)
+	registrationH := handler.NewRegistrationHandler(registrationSvc).WithCookieDomain(cookieDomain)
+	whoamiH := handler.NewWhoamiHandler(accountSvc, cfg.SessionSecret)
 	checkinH := handler.NewCheckinHandler(checkinSvc)
 	orgH := handler.NewOrganizationHandler(orgSvc)
 	qrLoginH := handler.NewQRLoginHandler(rdb, cfg.SessionSecret)
@@ -610,6 +616,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 		AccountAdmin:      accountAdminH,
 		OpsCatalog:        opsCatalogH,
 		APIKeysAdmin:      apiKeysAdminH,
+		Whoami:            whoamiH,
+		CookieDomain:      cookieDomain,
 		NewAPIProxy:       newAPIProxyH,
 		SMSRelay:          smsRelayH,
 		InternalKey:       cfg.InternalAPIKey,

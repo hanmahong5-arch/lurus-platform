@@ -41,10 +41,12 @@ type Deps struct {
 	AccountAdmin    *handler.AccountAdminHandler    // GDPR-grade account purge via QR-delegate (Phase 4)
 	OpsCatalog      *handler.OpsCatalogHandler      // privileged-op catalogue (Phase 4 / Sprint 2)
 	APIKeysAdmin    *handler.APIKeysAdminHandler    // /admin/v1/api-keys/* — Lurus API key abstraction over Zitadel
+	Whoami          *handler.WhoamiHandler          // /api/v1/whoami — drop-in identity contract for *.lurus.cn products
 	NewAPIProxy     *handler.NewAPIProxyHandler     // nil when newapi proxy is not configured
 	ServiceKeyAdmin *handler.AdminServiceKeyHandler // nil when service key management not wired
 	SMSRelay        *handler.SMSRelayHandler        // nil when SMS relay is not configured
 	InternalKey     string                          // legacy INTERNAL_API_KEY (fallback during migration)
+	CookieDomain    string                          // parent domain for lurus_session cookie (e.g. ".lurus.cn"); empty = host-only
 	ServiceKeys     *app.ServiceKeyStore            // scoped service key resolver (nil = legacy-only mode)
 	JWT             *auth.JWTMiddleware
 	RateLimit       *ratelimit.Limiter
@@ -170,6 +172,17 @@ func Build(deps Deps) *gin.Engine {
 	// Public QR code endpoint — unauthenticated, read-only.
 	if deps.AdminConfig != nil {
 		r.GET("/api/v1/public/qrcode/:type", deps.AdminConfig.GetPublicQRCode)
+	}
+
+	// /api/v1/whoami — drop-in identity contract.
+	// Outside the JWT middleware group because the handler accepts BOTH
+	// the Authorization Bearer token AND the parent-domain `lurus_session`
+	// cookie; the standard middleware only knows about Bearer.
+	if deps.Whoami != nil {
+		r.GET("/api/v1/whoami", deps.Whoami.Whoami)
+		r.POST("/api/v1/auth/logout", func(c *gin.Context) {
+			deps.Whoami.Logout(c, deps.CookieDomain)
+		})
 	}
 
 	// Public user API — requires Zitadel JWT or lurus session token

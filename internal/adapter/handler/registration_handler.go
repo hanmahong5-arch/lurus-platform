@@ -12,6 +12,7 @@ import (
 // RegistrationHandler handles user registration and password reset endpoints.
 type RegistrationHandler struct {
 	registration *app.RegistrationService
+	cookieDomain string // parent domain for session cookie set after register; "" = host-only
 }
 
 // NewRegistrationHandler creates the handler. Returns nil if service is nil.
@@ -149,12 +150,25 @@ func (h *RegistrationHandler) Register(c *gin.Context) {
 		return
 	}
 
+	// Mirror DirectLogin: set parent-domain cookie so the new account is
+	// immediately authenticated on every *.lurus.cn subdomain.
+	SetSessionCookie(c, result.Token, h.cookieDomain)
+
 	c.JSON(http.StatusCreated, gin.H{
 		"token":        result.Token,
 		"account_id":   result.AccountID,
 		"lurus_id":     result.LurusID,
 		"redirect_url": "/dashboard",
 	})
+}
+
+// WithCookieDomain wires the cookie parent-domain (mirrors ZLoginHandler).
+func (h *RegistrationHandler) WithCookieDomain(d string) *RegistrationHandler {
+	if h == nil {
+		return nil
+	}
+	h.cookieDomain = d
+	return h
 }
 
 // classifyRegistrationError maps app-layer errors to rich UX-friendly responses.

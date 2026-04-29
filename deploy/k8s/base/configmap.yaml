@@ -26,3 +26,7 @@ data:
   OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector.observability.svc:4317"
   MODULES_MAIL_ENABLED: "false"
   MODULES_NOTIFICATION_ENABLED: "false"
+  # Parent-domain cookie so any *.lurus.cn subdomain sees the lurus_session
+  # JWT — basis of the drop-in /whoami contract. Leave empty for dev /
+  # localhost (host-only cookie). See docs/简化路线图.md 阶段 1 #2.
+  LURUS_COOKIE_DOMAIN: ".lurus.cn"

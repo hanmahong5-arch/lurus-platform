@@ -32,7 +32,16 @@ type ZLoginHandler struct {
 	zitadelIssuer     string // e.g. https://auth.lurus.cn
 	serviceAccountPAT string // Zitadel PAT with session creation rights
 	sessionSecret     string // for validating lurus-issued session tokens
+	cookieDomain      string // parent domain for the session cookie (e.g. .lurus.cn); empty = host-only
 	disabled          bool   // true when PAT is empty; all handlers respond 503
+}
+
+// WithCookieDomain configures the parent-domain attribute used when
+// writing the lurus_session cookie on successful login. Returns the
+// receiver to keep main.go wiring chainable.
+func (h *ZLoginHandler) WithCookieDomain(d string) *ZLoginHandler {
+	h.cookieDomain = d
+	return h
 }
 
 // accountStoreForLogin is a minimal interface for resolving login identifiers.
@@ -280,6 +289,12 @@ func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue session token"})
 		return
 	}
+
+	// Set the parent-domain cookie so any *.lurus.cn subdomain can read
+	// it via /whoami. The legacy JSON `token` is kept for current admin
+	// SPA which stores it in localStorage; new products should rely on
+	// the cookie via withCredentials: true.
+	SetSessionCookie(c, token, h.cookieDomain)
 
 	c.JSON(http.StatusOK, gin.H{
 		"token":      token,
