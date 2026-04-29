@@ -136,6 +136,10 @@ type Config struct {
 	NewAPIAdminAccessToken string // NEWAPI_ADMIN_ACCESS_TOKEN
 	NewAPIAdminUserID      string // NEWAPI_ADMIN_USER_ID
 
+	// Memorus AI memory proxy (Lutu APP → /api/v1/memorus/* → in-cluster memorus)
+	MemorusInternalURL string // MEMORUS_INTERNAL_URL (e.g. http://memorus.lurus-system.svc:8880)
+	MemorusAPIKey      string // MEMORUS_API_KEY (X-API-Key, never shipped to client)
+
 	// SMS
 	SMSProvider string // SMS_PROVIDER ("tencent" or "aliyun"; empty = noop)
 
@@ -223,6 +227,8 @@ func Load() (*Config, error) {
 		ShutdownTimeout:        parseDuration("SHUTDOWN_TIMEOUT", 45*time.Second),
 		CacheEntitlementTTL:    parseDuration("CACHE_ENTITLEMENT_TTL", 5*time.Minute),
 		NewAPIInternalURL:      getEnv("NEWAPI_INTERNAL_URL", ""),
+		MemorusInternalURL:     getEnv("MEMORUS_INTERNAL_URL", ""),
+		MemorusAPIKey:          getEnv("MEMORUS_API_KEY", ""),
 		NewAPIAdminAccessToken: getEnv("NEWAPI_ADMIN_ACCESS_TOKEN", ""),
 		NewAPIAdminUserID:      getEnv("NEWAPI_ADMIN_USER_ID", ""),
 		LurusAPIInternalURL:    getEnv("LURUS_API_INTERNAL_URL", "http://lurus-api.lurus-system.svc:8850"),

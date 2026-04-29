@@ -43,6 +43,7 @@ type Deps struct {
 	APIKeysAdmin    *handler.APIKeysAdminHandler    // /admin/v1/api-keys/* — Lurus API key abstraction over Zitadel
 	Whoami          *handler.WhoamiHandler          // /api/v1/whoami — drop-in identity contract for *.lurus.cn products
 	NewAPIProxy     *handler.NewAPIProxyHandler     // nil when newapi proxy is not configured
+	MemorusProxy    *handler.MemorusProxyHandler    // nil when memorus URL/key not configured
 	ServiceKeyAdmin *handler.AdminServiceKeyHandler // nil when service key management not wired
 	SMSRelay        *handler.SMSRelayHandler        // nil when SMS relay is not configured
 	InternalKey     string                          // legacy INTERNAL_API_KEY (fallback during migration)
@@ -245,6 +246,15 @@ func Build(deps Deps) *gin.Engine {
 		// Daily check-in
 		v1.GET("/checkin/status", deps.Checkin.GetStatus)
 		v1.POST("/checkin", deps.Checkin.DoCheckin)
+
+		// Memorus AI memory proxy — wraps the in-cluster memorus engine
+		// behind platform JWT auth. Clients send their Lutu JWT, we
+		// inject memorus' shared X-API-Key server-side. Per-user
+		// scoping is the responsibility of the caller (set `user_id`
+		// in payload to the JWT subject).
+		if deps.MemorusProxy != nil {
+			v1.Any("/memorus/*path", deps.MemorusProxy.Handle)
+		}
 
 		// Organizations
 		v1.POST("/organizations", deps.Organizations.Create)

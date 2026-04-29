@@ -482,6 +482,22 @@ func run(ctx context.Context, cfg *config.Config) error {
 		slog.Info("newapi admin proxy enabled", "target", cfg.NewAPIInternalURL)
 	}
 
+	// --- Memorus AI Memory Proxy (optional) ---
+	// When MEMORUS_INTERNAL_URL + MEMORUS_API_KEY are both set, exposes
+	// /api/v1/memorus/* under user JWT auth. Clients send Lutu JWT;
+	// we inject memorus' shared X-API-Key server-side so it never
+	// ships in the APP binary.
+	var memorusProxyH *handler.MemorusProxyHandler
+	if cfg.MemorusInternalURL != "" && cfg.MemorusAPIKey != "" {
+		var memorusErr error
+		memorusProxyH, memorusErr = handler.NewMemorusProxyHandler(
+			cfg.MemorusInternalURL, cfg.MemorusAPIKey)
+		if memorusErr != nil {
+			return fmt.Errorf("init memorus proxy: %w", memorusErr)
+		}
+		slog.Info("memorus proxy enabled", "target", cfg.MemorusInternalURL)
+	}
+
 	// Readiness probe set — wired with the live infra clients so /readyz
 	// actively verifies critical dependencies per request.
 	//
@@ -636,6 +652,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		Whoami:            whoamiH,
 		CookieDomain:      cookieDomain,
 		NewAPIProxy:       newAPIProxyH,
+		MemorusProxy:      memorusProxyH,
 		SMSRelay:          smsRelayH,
 		InternalKey:       cfg.InternalAPIKey,
 		JWT:               jwtMiddleware,
