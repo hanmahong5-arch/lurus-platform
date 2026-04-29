@@ -187,6 +187,20 @@ spec:
                   name: platform-core-secrets
                   key: NEWAPI_ADMIN_USER_ID
                   optional: true
+            # Memorus AI memory proxy (lurus-platform exposes /api/v1/memorus/*
+            # by injecting X-API-Key server-side; APP only needs Lutu JWT).
+            - name: MEMORUS_INTERNAL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: platform-core-secrets
+                  key: MEMORUS_INTERNAL_URL
+                  optional: true
+            - name: MEMORUS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-core-secrets
+                  key: MEMORUS_API_KEY
+                  optional: true
             - name: SMS_PROVIDER
               valueFrom:
                 secretKeyRef:
