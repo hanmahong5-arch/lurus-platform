@@ -23,6 +23,10 @@ type Account struct {
 	Username      string     `json:"username"       gorm:"type:varchar(64)"` // uniqueness enforced via partial index in migration 010
 	ReferrerID    *int64     `json:"referrer_id"    gorm:"index"`
 	AffCode       string     `json:"aff_code"       gorm:"type:varchar(32);uniqueIndex;not null"`
+	// NewAPIUserID 是 NewAPI (newapi.lurus.cn) 内部 users 表的主键 — 1:1 映射，
+	// 让 platform 钱包同步到 NewAPI 配额（C.2 集成，见 docs/ADR-newapi-billing-sync.md）。
+	// nil = 尚未同步（首次注册后异步建；老账户由 cron 回填）。
+	NewAPIUserID  *int       `json:"newapi_user_id,omitempty" gorm:"column:newapi_user_id"`
 	CreatedAt     time.Time  `json:"created_at"     gorm:"autoCreateTime"`
 	UpdatedAt     time.Time  `json:"updated_at"     gorm:"autoUpdateTime"`
 }

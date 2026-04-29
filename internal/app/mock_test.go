@@ -178,6 +178,17 @@ func (m *mockAccountStore) GetByOAuthBinding(_ context.Context, provider, provid
 	return nil, nil
 }
 
+func (m *mockAccountStore) SetNewAPIUserID(_ context.Context, accountID int64, newapiUserID int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.byID[accountID]
+	if !ok {
+		return nil
+	}
+	a.NewAPIUserID = &newapiUserID
+	return nil
+}
+
 // ── walletStore mock ──────────────────────────────────────────────────────────
 
 type mockWalletStore struct {

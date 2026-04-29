@@ -22,6 +22,11 @@ type accountStore interface {
 	GetByUsername(ctx context.Context, username string) (*entity.Account, error)
 	// GetByOAuthBinding looks up an account via its OAuth provider binding.
 	GetByOAuthBinding(ctx context.Context, provider, providerID string) (*entity.Account, error)
+	// SetNewAPIUserID writes the 1:1 NewAPI user mapping for an account.
+	// Idempotent: writing the same value twice is a no-op. Used by the C.2
+	// NewAPI sync flow to remember the just-created NewAPI user_id so
+	// subsequent top-ups know whom to credit.
+	SetNewAPIUserID(ctx context.Context, accountID int64, newapiUserID int) error
 }
 
 // walletStore is the minimal DB interface required by WalletService and VIPService.

@@ -137,6 +137,10 @@ func (m *mockAccountStore) GetByOAuthBinding(_ context.Context, _, _ string) (*e
 	return nil, nil
 }
 
+func (m *mockAccountStore) SetNewAPIUserID(_ context.Context, _ int64, _ int) error {
+	return nil
+}
+
 // seed inserts a test account and returns a copy.
 func (m *mockAccountStore) seed(a entity.Account) *entity.Account {
 	_ = m.Create(context.Background(), &a)

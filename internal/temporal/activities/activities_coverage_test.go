@@ -384,6 +384,7 @@ func (s *cstubAccountStore) GetByAffCode(_ context.Context, _ string) (*entity.A
 func (s *cstubAccountStore) GetByPhone(_ context.Context, _ string) (*entity.Account, error)          { return nil, nil }
 func (s *cstubAccountStore) GetByUsername(_ context.Context, _ string) (*entity.Account, error)       { return nil, nil }
 func (s *cstubAccountStore) GetByOAuthBinding(_ context.Context, _, _ string) (*entity.Account, error) { return nil, nil }
+func (s *cstubAccountStore) SetNewAPIUserID(_ context.Context, _ int64, _ int) error               { return nil }
 func (s *cstubAccountStore) List(_ context.Context, _ string, _, _ int) ([]*entity.Account, int64, error) {
 	return nil, 0, nil
 }

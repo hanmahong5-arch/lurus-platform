@@ -147,6 +147,10 @@ func (m *grpcMockAccountStore) GetByOAuthBinding(_ context.Context, _, _ string)
 	return nil, nil
 }
 
+func (m *grpcMockAccountStore) SetNewAPIUserID(_ context.Context, _ int64, _ int) error {
+	return nil
+}
+
 // grpcMockWalletStore satisfies app.walletStore.
 type grpcMockWalletStore struct {
 	mu        sync.Mutex

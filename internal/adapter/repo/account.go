@@ -25,6 +25,16 @@ func (r *AccountRepo) Update(ctx context.Context, a *entity.Account) error {
 	return r.db.WithContext(ctx).Save(a).Error
 }
 
+// SetNewAPIUserID 写入 NewAPI 用户映射。一次性 column update，避免 Save 冲掉
+// 其他 mutation 字段。重复写同一值是 no-op（DB level）。
+func (r *AccountRepo) SetNewAPIUserID(ctx context.Context, accountID int64, newapiUserID int) error {
+	return r.db.WithContext(ctx).
+		Model(&entity.Account{}).
+		Where("id = ?", accountID).
+		Update("newapi_user_id", newapiUserID).
+		Error
+}
+
 func (r *AccountRepo) GetByID(ctx context.Context, id int64) (*entity.Account, error) {
 	var a entity.Account
 	err := r.db.WithContext(ctx).First(&a, id).Error
