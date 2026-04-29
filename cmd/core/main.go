@@ -35,6 +35,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/module"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module/app_registry"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module/identity_admin"
+	"github.com/hanmahong5-arch/lurus-platform/internal/module/newapi_sync"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module/ops"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/auth"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/buildinfo"
@@ -44,6 +45,7 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/idempotency"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/lurusapi"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/newapi"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/outbox"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/ratelimit"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/readiness"
@@ -208,6 +210,21 @@ func run(ctx context.Context, cfg *config.Config) error {
 			MailDomain:       getEnvDefault("MAIL_DOMAIN", "lurus.cn"),
 		})
 		mailMod.Register(registry)
+	}
+
+	// NewAPI sync module: build NewAPI admin client and register the
+	// account-created hook so every new platform account auto-provisions
+	// a matching NewAPI user (1:1 mapping by username "lurus_<id>").
+	// All three NewAPI env vars must be set; otherwise the module is
+	// silently disabled (dev / standalone deployments).
+	// See docs/ADR-newapi-billing-sync.md (C.2 step 4c).
+	if cfg.NewAPIInternalURL != "" && cfg.NewAPIAdminAccessToken != "" && cfg.NewAPIAdminUserID != "" {
+		nclient, err := newapi.New(cfg.NewAPIInternalURL, cfg.NewAPIAdminAccessToken, cfg.NewAPIAdminUserID)
+		if err != nil {
+			slog.Warn("newapi_sync: client init failed, sync disabled", "err", err)
+		} else if mod := newapi_sync.New(nclient, accountRepo); mod != nil {
+			mod.Register(registry)
+		}
 	}
 
 	// Wire check-in hook to fire module events (notifications on streak milestones).
