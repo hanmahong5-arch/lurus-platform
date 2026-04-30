@@ -144,6 +144,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// --- Repositories ---
 	accountRepo := repo.NewAccountRepo(db)
 	accountPurgeRepo := repo.NewAccountPurgeRepo(db)
+	accountDeleteRequestRepo := repo.NewAccountDeleteRequestRepo(db)
 	subRepo := repo.NewSubscriptionRepo(db)
 	walletRepo := repo.NewWalletRepo(db)
 	productRepo := repo.NewProductRepo(db)
@@ -585,6 +586,16 @@ func run(ctx context.Context, cfg *config.Config) error {
 	qrH = qrH.WithDelegateExecutor(accountDeleteExec)
 	accountAdminH := handler.NewAccountAdminHandler(accountSvc).WithDeleteFlow(qrH)
 
+	// User-self delete-request flow (PIPL §47 / GDPR Art.17). Sibling
+	// to the admin QR-delegate flow above; the user submits intent +
+	// reason, the row sits in a 30-day cooling-off window, and a
+	// future cron worker (Sprint 1B) dispatches the same cascade
+	// reusing accountDeleteExec. Subscription guard returns 409 if the
+	// user still has an active or grace-period subscription.
+	accountDeleteReqSvc := app.NewAccountDeleteRequestService(accountDeleteRequestRepo, accountSvc).
+		WithSubscriptionGuard(subSvc)
+	accountSelfDeleteH := handler.NewAccountSelfDeleteHandler(accountDeleteReqSvc)
+
 	// Refund QR-approve flow (Phase 4 / Sprint 3A) — large refunds
 	// route through a boss biometric scan instead of direct admin
 	// approval. The executor satisfies the same QRDelegateExecutor
@@ -684,6 +695,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		QR:                qrH,
 		AppsAdmin:         appsAdminH,
 		AccountAdmin:      accountAdminH,
+		AccountSelfDelete: accountSelfDeleteH,
 		OpsCatalog:        opsCatalogH,
 		APIKeysAdmin:      apiKeysAdminH,
 		Whoami:            whoamiH,

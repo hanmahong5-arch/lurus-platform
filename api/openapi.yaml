@@ -1107,6 +1107,86 @@ paths:
                   stats:
                     type: object
 
+  /api/v1/account/me/delete-request:
+    post:
+      tags: [public-account]
+      operationId: requestSelfAccountDeletion
+      summary: Submit a user-initiated account deletion request
+      description: |
+        Registers the authenticated user's intent to delete their own account.
+        The request enters a 30-day cooling-off period (PIPL §47 / GDPR Art.17)
+        during which the user may cancel by re-authenticating. After the
+        cooling-off elapses, an out-of-band worker dispatches the same
+        cascade used by the admin-driven `/admin/v1/accounts/{id}/delete-request`
+        flow.
+
+        Idempotent: re-submitting while a request is already pending returns
+        `200 OK` carrying the existing `request_id` rather than creating a
+        duplicate. If the account is already in the terminal `Deleted`
+        status the response is `200 OK` with `already_deleted: true`.
+      security:
+        - ZitadelJWT: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Optional reason code from a closed enum.
+                  enum:
+                    - no_longer_using
+                    - privacy_concern
+                    - experience_issue
+                    - found_alternative
+                    - other
+                reason_text:
+                  type: string
+                  maxLength: 500
+                  description: |
+                    Optional free-text explanation. Inputs longer than 500
+                    characters are silently truncated; the request is NOT
+                    rejected on a length nit.
+      responses:
+        '200':
+          description: |
+            Delete request registered, OR an existing pending request is
+            being surfaced idempotently, OR the account is already deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request_id:
+                    type: string
+                    description: Numeric id of the pending row, as a string.
+                  status:
+                    type: string
+                    enum: [pending, already_deleted]
+                  cooling_off_until:
+                    type: string
+                    format: date-time
+                  already_deleted:
+                    type: boolean
+                    description: True when the account is already in the terminal Deleted state.
+        '400':
+          description: Validation failure (e.g. unrecognised `reason` enum value).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing or invalid Zitadel JWT.
+        '409':
+          description: |
+            Account has an active subscription that must be cancelled first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/v1/products:
     get:
       tags: [public-product]

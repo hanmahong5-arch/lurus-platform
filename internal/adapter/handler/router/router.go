@@ -39,6 +39,7 @@ type Deps struct {
 	QR              *handler.QRHandler              // v2 multi-action QR primitive (login → join_org/delegate pending)
 	AppsAdmin       *handler.AppsAdminHandler       // read-only viewer over apps.yaml + Zitadel state
 	AccountAdmin    *handler.AccountAdminHandler    // GDPR-grade account purge via QR-delegate (Phase 4)
+	AccountSelfDelete *handler.AccountSelfDeleteHandler // user-self delete-request (PIPL §47 / GDPR Art.17)
 	OpsCatalog      *handler.OpsCatalogHandler      // privileged-op catalogue (Phase 4 / Sprint 2)
 	APIKeysAdmin    *handler.APIKeysAdminHandler    // /admin/v1/api-keys/* — Lurus API key abstraction over Zitadel
 	Whoami          *handler.WhoamiHandler          // /api/v1/whoami — drop-in identity contract for *.lurus.cn products
@@ -219,6 +220,17 @@ func Build(deps Deps) *gin.Engine {
 		v1.GET("/account/me/services", deps.Accounts.GetServices)
 		v1.GET("/account/me/overview", deps.Accounts.GetMeOverview)
 		v1.GET("/account/me/referral", deps.Accounts.GetMeReferral)
+
+		// User-self account deletion (PIPL §47 / GDPR Art.17). Sibling
+		// to the admin-only QR-delegate flow at
+		// /admin/v1/accounts/:id/delete-request — the user files a
+		// pending request that sits in a 30-day cooling-off window
+		// before the cascade runs. Gated by handler nil check so the
+		// existing test deployments (without the new wiring) keep
+		// returning 404 rather than 500.
+		if deps.AccountSelfDelete != nil {
+			v1.POST("/account/me/delete-request", deps.AccountSelfDelete.Submit)
+		}
 
 		// Products (read-only, public)
 		v1.GET("/products", deps.Products.ListProducts)
