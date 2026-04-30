@@ -38,12 +38,16 @@ var ErrUserNotFound = errors.New("newapi: user not found")
 
 // Client 是 NewAPI admin API 的客户端。零值不可用 — 必须 New。
 //
-// 线程安全（http.Client 内部并发安全；headers 静态构造一次）。
+// 线程安全（http.Client 内部并发安全；headers 静态构造一次；resilience
+// state 内部互斥锁保护）。
 type Client struct {
 	baseURL     string // 如 "http://lurus-newapi.lurus-system.svc:3000"（in-cluster）
 	accessToken string // NEWAPI_ADMIN_ACCESS_TOKEN
 	adminUserID string // NEWAPI_ADMIN_USER_ID（字符串避免反复转换）
 	http        *http.Client
+	// resilience 包装 do() — retry + circuit breaker + OTel span（P1-1+1-2+1-7）。
+	// nil = 调用方关闭弹性层（测试场景）。生产 New() 总是创建一个。
+	resil *resilience
 }
 
 // New 构造一个 Client。三个参数必填；任一空 → 返回 ErrConfigMissing 让 main.go
@@ -62,6 +66,7 @@ func New(baseURL, accessToken, adminUserID string) (*Client, error) {
 		http: &http.Client{
 			Timeout: defaultTimeout,
 		},
+		resil: newResilience(),
 	}, nil
 }
 
@@ -283,7 +288,35 @@ func (e *statusErr) Error() string {
 
 // do 是 HTTP 请求的统一入口：注入鉴权头、做 NewAPI 标准 envelope 解码
 // （`{success, message, data}`），并把 success=false 当作错误返回。
+//
+// 包了 resilience 层（retry + circuit breaker + OTel span，见
+// resilience.go）。retry 仅在 retriable 错误（5xx/408/429/网络）且重试预算
+// 没用尽时进行；breaker 在连续 5 次失败后 Open 15 秒，半开探测一次。
+//
+// 单次 attempt 的逻辑封在 closure 里，retry 时整个 closure 重跑（每次构建
+// 新 *http.Request 是必须的，因为 net/http 设计上 Request body Reader 不可
+// 重读，重用同一个 req 会让第二次 Do 收到 EOF）。
 func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte, error) {
+	var resp []byte
+	err := c.resil.call(ctx, method+" "+path, func(rctx context.Context) error {
+		out, err := c.doOnce(rctx, method, path, body)
+		if err != nil {
+			return err
+		}
+		resp = out
+		return nil
+	})
+	return resp, err
+}
+
+// doOnce executes a single HTTP attempt — the unit of work that
+// resilience.call retries. Errors fall into three classes recognised by
+// retriableError:
+//
+//   - statusErr (HTTP 4xx/5xx) → retriable for 408/429/5xx, terminal otherwise
+//   - network/timeout error    → retriable
+//   - request-build / json     → wrapped fmt.Errorf, retriable (treated as transient by default)
+func (c *Client) doOnce(ctx context.Context, method, path string, body any) ([]byte, error) {
 	url := c.baseURL + path
 
 	var reader io.Reader
