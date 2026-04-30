@@ -49,15 +49,36 @@ type Checker interface {
 
 // Set is a collection of Checkers evaluated together on every probe.
 // The zero value is a valid empty set that always reports ready.
+//
+// Two classes of checker:
+//
+//   - **Critical** (default): a failure flips Ready→false and the probe
+//     returns 503; K8s pulls the pod from Service endpoints. Use for
+//     Redis / Postgres / NATS — anything where serving traffic without
+//     it is worse than serving none.
+//
+//   - **Soft** (added via WithSoftChecker): a failure surfaces in the
+//     `degraded` field of the response body but **does not** flip Ready.
+//     The probe still returns 200. Use for OPTIONAL deps (e.g. NewAPI
+//     for newapi_sync) where the platform serves correctly without
+//     them but operators want a cheap signal that the integration is
+//     unhealthy. Avoids the trap of "pulling a healthy pod out of LB
+//     because a non-critical sidecar service is flaky".
+//
+// Both classes share the same Checker interface and timeout machinery —
+// the distinction is purely about how failures translate to HTTP status.
 type Set struct {
-	checkers []Checker
+	checkers     []Checker
+	softCheckers []Checker
 	// timeout bounds each individual check. Zero = defaultCheckTimeout.
 	timeout time.Duration
 }
 
-// NewSet constructs a readiness Set from zero or more Checkers. Nil
-// entries are silently dropped so callers can pass conditionally-wired
+// NewSet constructs a readiness Set from zero or more **critical** Checkers.
+// Nil entries are silently dropped so callers can pass conditionally-wired
 // dependencies (e.g. NATS when optional).
+//
+// To add soft (non-failing) checkers, chain WithSoftChecker after construction.
 func NewSet(cs ...Checker) *Set {
 	set := &Set{timeout: defaultCheckTimeout}
 	for _, c := range cs {
@@ -69,25 +90,52 @@ func NewSet(cs ...Checker) *Set {
 	return set
 }
 
+// WithSoftChecker appends a soft checker. Its failure shows up in the
+// `degraded` JSON field but the overall probe still returns 200 OK. nil
+// is silently ignored (mirrors NewSet). Chainable.
+func (s *Set) WithSoftChecker(c Checker) *Set {
+	if s == nil || c == nil {
+		return s
+	}
+	s.softCheckers = append(s.softCheckers, c)
+	return s
+}
+
 // failure is the per-checker entry surfaced in the JSON response.
 type failure struct {
 	Name  string `json:"name"`
 	Error string `json:"err"`
 }
 
-// response is the full readiness payload.
+// response is the full readiness payload. Failures and Degraded are
+// emitted only when non-empty — alerting tools that hard-code field
+// presence as "dep is unhealthy" need a stable shape.
 type response struct {
 	Ready    bool      `json:"ready"`
 	Failures []failure `json:"failures,omitempty"`
+	Degraded []failure `json:"degraded,omitempty"`
 }
 
-// Evaluate runs every checker sequentially and returns the collected
-// failures. Returned slice is nil (not empty) when all checkers passed,
-// which mirrors the JSON omitempty behaviour. Sequential execution is
-// intentional: the probe runs rarely, timeouts are short, and a
-// goroutine fan-out would obscure per-dep error correlation in logs.
+// Evaluate runs every CRITICAL checker sequentially and returns the
+// collected failures. Soft checkers are NOT evaluated here — use
+// EvaluateAll if both classes are needed. Returned slice is nil (not
+// empty) when all checkers passed, which mirrors the JSON omitempty
+// behaviour. Sequential execution is intentional: the probe runs rarely,
+// timeouts are short, and a goroutine fan-out would obscure per-dep
+// error correlation in logs.
 func (s *Set) Evaluate(ctx context.Context) []failure {
-	if len(s.checkers) == 0 {
+	return s.runCheckers(ctx, s.checkers)
+}
+
+// EvaluateAll runs both critical and soft checkers, returning each set
+// independently. Used by HTTPHandler so the response can express the
+// "ready but degraded" state distinctly from "fully ready".
+func (s *Set) EvaluateAll(ctx context.Context) (critical, soft []failure) {
+	return s.runCheckers(ctx, s.checkers), s.runCheckers(ctx, s.softCheckers)
+}
+
+func (s *Set) runCheckers(ctx context.Context, list []Checker) []failure {
+	if len(list) == 0 {
 		return nil
 	}
 	timeout := s.timeout
@@ -95,7 +143,7 @@ func (s *Set) Evaluate(ctx context.Context) []failure {
 		timeout = defaultCheckTimeout
 	}
 	var failures []failure
-	for _, c := range s.checkers {
+	for _, c := range list {
 		cctx, cancel := context.WithTimeout(ctx, timeout)
 		err := c.Check(cctx)
 		cancel()
@@ -109,16 +157,25 @@ func (s *Set) Evaluate(ctx context.Context) []failure {
 // HTTPHandler returns a Gin handler that evaluates the set and writes
 // the canonical readiness response:
 //
-//	all healthy       → 200 {"ready": true}
-//	any failing       → 503 {"ready": false, "failures": [...]}
+//	all critical pass + soft pass     → 200 {"ready": true}
+//	all critical pass + soft fail(s)  → 200 {"ready": true, "degraded": [...]}
+//	any critical fail                  → 503 {"ready": false, "failures": [...]}
+//
+// Note `ready` stays true when only soft checks fail — the HTTP status
+// is 200 in that case. K8s won't pull the pod, but operators see the
+// degraded list at /readyz and via the underlying metrics.
 //
 // The response body is hand-written via json.Marshal (not c.JSON) so
 // the Content-Type and shape are identical on both paths — some alerting
 // tools treat a missing field as "test skipped" rather than "healthy".
 func (s *Set) HTTPHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		fails := s.Evaluate(c.Request.Context())
-		resp := response{Ready: len(fails) == 0, Failures: fails}
+		critFails, softFails := s.EvaluateAll(c.Request.Context())
+		resp := response{
+			Ready:    len(critFails) == 0,
+			Failures: critFails,
+			Degraded: softFails,
+		}
 		status := http.StatusOK
 		if !resp.Ready {
 			status = http.StatusServiceUnavailable

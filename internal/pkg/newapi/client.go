@@ -196,6 +196,45 @@ type APIKey struct {
 	UnlimitedQuota bool   `json:"unlimited_quota"`
 }
 
+// Ping calls NewAPI's public /api/status endpoint as a cheap liveness
+// probe. Used by the readiness checker — does NOT require admin auth and
+// can run as often as needed without polluting NewAPI's audit logs.
+//
+// Returns nil only on HTTP 200 with the standard NewAPI envelope
+// reporting `success: true`. Anything else (5xx, network error, malformed
+// body) is wrapped and returned as the underlying probe failure.
+func (c *Client) Ping(ctx context.Context) error {
+	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(pingCtx, http.MethodGet, c.baseURL+"/api/status", nil)
+	if err != nil {
+		return fmt.Errorf("newapi ping: build request: %w", err)
+	}
+	// /api/status is public — no auth headers needed. Setting them
+	// anyway is harmless but creates noise in NewAPI logs; skip.
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("newapi ping: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("newapi ping: http %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+	var env struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return fmt.Errorf("newapi ping: decode: %w", err)
+	}
+	if !env.Success {
+		return fmt.Errorf("newapi ping: success=false")
+	}
+	return nil
+}
+
 // EnsureUserAPIKey upserts a per-user API key keyed by name, returning the
 // existing entry on repeated calls. Idempotent on (user_id, name) — NewAPI
 // admin endpoint enforces that contract; this client just forwards.

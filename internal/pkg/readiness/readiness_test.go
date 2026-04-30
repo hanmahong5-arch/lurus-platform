@@ -140,3 +140,82 @@ func TestSet_NilChecker_Dropped(t *testing.T) {
 		t.Fatalf("status = %d; want 200 (nil checkers should be dropped)", w.Code)
 	}
 }
+
+// ── Soft checkers (degraded but ready) ───────────────────────────────────
+
+func TestSet_SoftCheckerFail_StaysReady200(t *testing.T) {
+	// Soft failures must NOT flip ready→false. K8s should keep the pod
+	// in service while operators investigate the optional dep.
+	soft := &fakeChecker{name: "newapi", err: errors.New("upstream 503")}
+	set := readiness.NewSet().WithSoftChecker(soft)
+
+	w := serve(t, set)
+	if w.Code != http.StatusOK {
+		t.Errorf("soft failure should keep status 200, got %d", w.Code)
+	}
+	var resp struct {
+		Ready    bool                `json:"ready"`
+		Failures []map[string]string `json:"failures"`
+		Degraded []map[string]string `json:"degraded"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if !resp.Ready {
+		t.Errorf("ready = false on soft failure; want true")
+	}
+	if len(resp.Degraded) != 1 || resp.Degraded[0]["name"] != "newapi" {
+		t.Errorf("expected degraded[newapi], got %+v", resp.Degraded)
+	}
+	if len(resp.Failures) != 0 {
+		t.Errorf("soft failure leaked into failures[]: %+v", resp.Failures)
+	}
+}
+
+func TestSet_SoftPass_NoDegradedField(t *testing.T) {
+	soft := &fakeChecker{name: "newapi", err: nil}
+	set := readiness.NewSet().WithSoftChecker(soft)
+
+	w := serve(t, set)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	// omitempty drops the degraded field when empty. Alerting tools rely
+	// on absence as "no degradation observed".
+	if contains(body, `"degraded"`) {
+		t.Errorf("unexpected degraded field on healthy soft probe: %s", body)
+	}
+}
+
+func TestSet_CriticalAndSoftMixed(t *testing.T) {
+	// Critical failing + soft also failing → 503 with BOTH lists populated.
+	crit := &fakeChecker{name: "redis", err: errors.New("redis down")}
+	soft := &fakeChecker{name: "newapi", err: errors.New("newapi down")}
+	set := readiness.NewSet(crit).WithSoftChecker(soft)
+
+	w := serve(t, set)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 (critical down)", w.Code)
+	}
+	body := w.Body.String()
+	if !contains(body, `"redis"`) || !contains(body, `"newapi"`) {
+		t.Errorf("expected both failures + degraded in body: %s", body)
+	}
+}
+
+func TestSet_WithSoftChecker_NilSafe(t *testing.T) {
+	// Calling WithSoftChecker(nil) on a real Set must be a no-op.
+	set := readiness.NewSet().WithSoftChecker(nil)
+	w := serve(t, set)
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d on empty set, want 200", w.Code)
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

@@ -221,19 +221,25 @@ func run(ctx context.Context, cfg *config.Config) error {
 	//
 	// The reference is captured in newapiSyncMod so the NATS topup
 	// consumer (constructed below) can wire its OnTopupCompleted hook.
-	var newapiSyncMod *newapi_sync.Module
+	// newapiClient is also captured for the readiness probe (soft) so a
+	// NewAPI outage shows up at /readyz without flipping ready=false.
+	var (
+		newapiSyncMod *newapi_sync.Module
+		newapiClient  *newapi.Client
+	)
 	if cfg.NewAPIInternalURL != "" && cfg.NewAPIAdminAccessToken != "" && cfg.NewAPIAdminUserID != "" {
-		nclient, err := newapi.New(cfg.NewAPIInternalURL, cfg.NewAPIAdminAccessToken, cfg.NewAPIAdminUserID)
+		nc, err := newapi.New(cfg.NewAPIInternalURL, cfg.NewAPIAdminAccessToken, cfg.NewAPIAdminUserID)
 		if err != nil {
 			slog.Warn("newapi_sync: client init failed, sync disabled", "err", err)
 		} else {
+			newapiClient = nc
 			// Money-path deduper: fail-closed so a Redis outage NAKs
 			// JetStream redeliveries instead of letting them double-credit.
 			// See docs/平台硬化清单.md P0-1+P0-2 for the rationale.
 			topupDedup := idempotency.New(rdb, idempotency.DefaultWebhookTTL).
 				WithFailClosed().
 				WithKeyPrefix("newapi_sync:topup:seen:")
-			newapiSyncMod = newapi_sync.New(nclient, accountRepo).WithDeduper(topupDedup)
+			newapiSyncMod = newapi_sync.New(newapiClient, accountRepo).WithDeduper(topupDedup)
 			if newapiSyncMod != nil {
 				newapiSyncMod.Register(registry)
 			}
@@ -533,7 +539,15 @@ func run(ctx context.Context, cfg *config.Config) error {
 	readinessSet := readiness.NewSet(
 		readiness.RedisChecker(rdb),
 		readiness.PostgresChecker(sqlDB),
-	)
+	).
+		// NewAPI is wired SOFT — a NewAPI outage degrades newapi_sync
+		// (account creation hooks fail, topup mirroring lags) but the
+		// platform's core surfaces (login / wallet / whoami) still work,
+		// so flipping /readyz to 503 would do strictly more harm than
+		// good. Operators see the soft failure in the response body's
+		// `degraded` array and via the lurus_platform_newapi_sync_ops_total
+		// `error` counter. See docs/平台硬化清单.md P0-5.
+		WithSoftChecker(newapi.NewReadinessChecker(newapiClient))
 
 	// App registry reconciler: built up-front so the AppsAdmin handler
 	// can share the instance for manual /rotate-secret calls. The
