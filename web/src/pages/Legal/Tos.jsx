@@ -1,5 +1,6 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
+import Footer from '../../components/Footer'
 
 // 用户协议（《Lurus 用户服务协议》）
 //
@@ -115,6 +116,7 @@ export default function TosPage() {
           —— 本协议自您同意之时起对您生效 ——
         </p>
       </div>
+      <Footer />
     </div>
   )
 }

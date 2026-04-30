@@ -84,6 +84,10 @@ func Build(deps Deps) *gin.Engine {
 	r.Use(slogctx.Middleware()) // Assign request_id early for log correlation.
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())                                          // Catch panics, return 500 instead of crash.
+	// Security headers — applied early so even error responses get them.
+	// Defaults are tuned for a public-facing identity service; see
+	// handler/security_headers.go for per-header rationale.
+	r.Use(handler.SecurityHeaders(handler.DefaultSecurityHeaders()))
 	r.Use(handler.MaxBodySize(handler.DefaultMaxRequestBodyBytes)) // Reject >2 MB request bodies (413).
 	r.Use(handler.RequestTimeout(handler.DefaultRequestTimeout))   // Cancel stuck requests after 30s (504).
 	r.Use(cors.New(cors.Config{

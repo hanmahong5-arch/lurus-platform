@@ -3,6 +3,7 @@ import { Button, Card, Tag, Typography } from '@douyinfe/semi-ui'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../../store'
 import LurusBadge from '../../components/LurusBadge'
+import Footer from '../../components/Footer'
 
 const { Title, Text } = Typography
 
@@ -141,6 +142,9 @@ export default function HubPage() {
           ))}
         </div>
       </Card>
+
+      {/* 国内合规 — ICP 备案信息显示在 dashboard 底部 */}
+      <Footer />
     </div>
   )
 }

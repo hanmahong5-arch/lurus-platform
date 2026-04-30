@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { storeLurusToken, isLoggedIn } from '../../auth'
 import { useStore } from '../../store'
+import Footer from '../../components/Footer'
 
 // Lurus 统一登录页 — MiniMax-风格双 Tab + 统一"登录/注册"按钮
 //
@@ -273,13 +274,46 @@ export default function LoginPage() {
           </a>
         </div>
 
-        {/* Tertiary: QR for power users — kept compact, not a primary flow */}
-        <div style={{ marginTop: 28, textAlign: 'center' }}>
-          <Link to="/zlogin?qr=1" style={{ ...footerLinkStyle, fontSize: 12 }}>
-            使用 Lurus APP 扫码登录
-          </Link>
+        {/* 第三方登录入口（国内主流方式优先）。
+            微信扫码 = 国内 PC 端最高完成率；APP 扫码留给路途 APP 用户。
+            Apple/Google 等海外渠道不在此处暴露 — 走管理员后台手动 link。 */}
+        <div style={altLoginRowStyle}>
+          <div style={altLoginDividerStyle}>
+            <span style={altLoginDividerLineStyle} />
+            <span style={altLoginDividerTextStyle}>其他登录方式</span>
+            <span style={altLoginDividerLineStyle} />
+          </div>
+          <div style={altLoginButtonsStyle}>
+            <button
+              type="button"
+              onClick={() => {
+                // /api/v1/auth/wechat 已存在 (wechat_auth.go) — 后端处理 OAuth state + 跳微信
+                // 跳前在 sessionStorage 保存 return path 跟主流程一致
+                sessionStorage.setItem('login_return', sessionStorage.getItem('login_return') || '/hub')
+                window.location.href = '/api/v1/auth/wechat'
+              }}
+              style={altLoginButtonStyle}
+              title="微信扫码登录"
+              aria-label="微信登录"
+            >
+              <span style={{ fontSize: 22, color: '#07C160' }} aria-hidden>💬</span>
+              <span style={altLoginButtonLabelStyle}>微信</span>
+            </button>
+            <Link
+              to="/zlogin?qr=1"
+              style={{ ...altLoginButtonStyle, textDecoration: 'none' }}
+              title="使用路途 APP 扫码登录"
+              aria-label="路途 APP 扫码登录"
+            >
+              <span style={{ fontSize: 22 }} aria-hidden>📱</span>
+              <span style={altLoginButtonLabelStyle}>APP 扫码</span>
+            </Link>
+          </div>
         </div>
       </div>
+
+      {/* 国内合规要素 — Footer 组件统一渲染 ICP 备案 / 客服 / 法律入口 */}
+      <Footer compact />
     </div>
   )
 }
@@ -404,4 +438,55 @@ const footerRowStyle = {
 const footerLinkStyle = {
   color: '#6b7280',
   textDecoration: 'none',
+}
+
+// ── 第三方登录区样式 ────────────────────────────────────────────────────────
+const altLoginRowStyle = {
+  marginTop: 24,
+}
+
+const altLoginDividerStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  marginBottom: 14,
+}
+
+const altLoginDividerLineStyle = {
+  flex: 1,
+  height: 1,
+  background: '#e5e7eb',
+}
+
+const altLoginDividerTextStyle = {
+  margin: '0 12px',
+  fontSize: 12,
+  color: '#9ca3af',
+  whiteSpace: 'nowrap',
+}
+
+const altLoginButtonsStyle = {
+  display: 'flex',
+  justifyContent: 'center',
+  gap: 24,
+}
+
+const altLoginButtonStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 4,
+  width: 56,
+  height: 56,
+  background: '#f9fafb',
+  border: '1px solid #e5e7eb',
+  borderRadius: 10,
+  cursor: 'pointer',
+  transition: 'background 0.15s',
+  color: '#374151',
+}
+
+const altLoginButtonLabelStyle = {
+  fontSize: 11,
+  color: '#6b7280',
 }

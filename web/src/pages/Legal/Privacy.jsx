@@ -1,5 +1,6 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
+import Footer from '../../components/Footer'
 
 // 隐私政策（《Lurus 隐私政策》）
 //
@@ -116,6 +117,7 @@ export default function PrivacyPage() {
           —— 本政策自您同意之时起对您生效 ——
         </p>
       </div>
+      <Footer />
     </div>
   )
 }
