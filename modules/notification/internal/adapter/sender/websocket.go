@@ -5,19 +5,55 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
+	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/pkg/metrics"
 )
 
 // WSMessage is the JSON payload sent to WebSocket clients.
+//
+// Backward compatibility: old clients that read only {type, title, body}
+// continue to work because every new field uses `omitempty`. New clients
+// that understand source/category/priority/payload get the full record.
 type WSMessage struct {
-	Type    string `json:"type"`
-	Title   string `json:"title"`
-	Body    string `json:"body"`
-	ID      int64  `json:"id,omitempty"`
-	Unread  int64  `json:"unread,omitempty"`
+	Type      string          `json:"type"` // "notification" | "unread_count"
+	ID        int64           `json:"id,omitempty"`
+	AccountID int64           `json:"account_id,omitempty"`
+	Source    string          `json:"source,omitempty"`   // identity | lucrum | llm | psi
+	Category  string          `json:"category,omitempty"` // account | strategy | risk | quota | order | inventory | payment | ...
+	EventType string          `json:"event_type,omitempty"`
+	Title     string          `json:"title,omitempty"`
+	Body      string          `json:"body,omitempty"`
+	Priority  string          `json:"priority,omitempty"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
+	CreatedAt time.Time       `json:"created_at,omitempty"`
+	Unread    int64           `json:"unread,omitempty"`
+}
+
+// WSMessageFromNotification builds a full-fidelity WSMessage from a stored
+// notification entity. Empty/whitespace-only payload normalizes to "{}" so
+// clients always see a valid JSON object on the `payload` key when present.
+func WSMessageFromNotification(n *entity.Notification) WSMessage {
+	payload := n.Payload
+	if payload == "" {
+		payload = "{}"
+	}
+	return WSMessage{
+		Type:      "notification",
+		ID:        n.ID,
+		AccountID: n.AccountID,
+		Source:    n.Source,
+		Category:  n.Category,
+		EventType: n.EventType,
+		Title:     n.Title,
+		Body:      n.Body,
+		Priority:  string(n.Priority),
+		Payload:   json.RawMessage(payload),
+		CreatedAt: n.CreatedAt,
+	}
 }
 
 // Hub manages WebSocket connections grouped by account ID.

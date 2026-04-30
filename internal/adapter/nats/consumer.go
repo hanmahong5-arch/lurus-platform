@@ -16,10 +16,16 @@ import (
 // Implementation lives in newapi_sync.Module (C.2 step 4d) — kept as a func
 // signature here so the NATS layer doesn't import the module package.
 //
+// Signature carries `eventID` (envelope.event_id) so the handler can
+// deduplicate at-least-once redeliveries on its own (typically via Redis
+// SETNX — see internal/pkg/idempotency.WebhookDeduper.WithFailClosed).
+// The transport layer doesn't dedup itself; that's a business-logic policy
+// and lives next to the operation it protects.
+//
 // Returning a non-nil error → message is NAK'd and JetStream retries up to
 // MaxDeliver. Idempotency on the implementor's side is required because
 // JetStream is at-least-once.
-type TopupHandler func(ctx context.Context, accountID int64, amountCNY float64) error
+type TopupHandler func(ctx context.Context, eventID string, accountID int64, amountCNY float64) error
 
 // Consumer subscribes to the LLM_EVENTS stream (published by lurus-api) and
 // processes messages relevant to lurus-platform (VIP accumulation, etc.).
@@ -141,7 +147,7 @@ func (c *Consumer) handleTopup(ctx context.Context, msg *natsgo.Msg) error {
 		slog.Warn("topup: drop malformed payload", "err", err, "event_id", env.EventID)
 		return nil
 	}
-	return c.onTopup(ctx, env.AccountID, p.AmountCNY)
+	return c.onTopup(ctx, env.EventID, env.AccountID, p.AmountCNY)
 }
 
 func (c *Consumer) handleLLMUsage(ctx context.Context, msg *natsgo.Msg) error {

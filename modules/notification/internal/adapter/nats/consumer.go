@@ -66,6 +66,11 @@ func (c *Consumer) Run(ctx context.Context) error {
 			queue:   "notif-topup-completed",
 			handler: c.handleTopupCompleted,
 		},
+		{
+			subject: event.SubjectVIPLevelChanged,
+			queue:   "notif-vip-level-changed",
+			handler: c.handleVIPLevelChanged,
+		},
 		// LUCRUM_EVENTS
 		{
 			subject: event.SubjectStrategyTriggered,
@@ -77,11 +82,50 @@ func (c *Consumer) Run(ctx context.Context) error {
 			queue:   "notif-risk-alert",
 			handler: c.handleRiskAlert,
 		},
+		{
+			subject: event.SubjectLucrumAdvisorOutput,
+			queue:   "notif-lucrum-advisor-output",
+			handler: c.handleLucrumAdvisorOutput,
+		},
+		{
+			subject: event.SubjectLucrumMarketEvent,
+			queue:   "notif-lucrum-market-event",
+			handler: c.handleLucrumMarketEvent,
+		},
 		// LLM_EVENTS
 		{
 			subject: event.SubjectQuotaThreshold,
 			queue:   "notif-quota-threshold",
 			handler: c.handleQuotaThreshold,
+		},
+		{
+			subject: event.SubjectLLMImageGenerated,
+			queue:   "notif-llm-image-generated",
+			handler: c.handleLLMImageGenerated,
+		},
+		// TODO(spec E.4 Q2): llm.usage.milestone is published per-event today.
+		// If volume becomes a problem, route through digest_worker instead of
+		// fanning out a notification per milestone crossing.
+		{
+			subject: event.SubjectLLMUsageMilestone,
+			queue:   "notif-llm-usage-milestone",
+			handler: c.handleLLMUsageMilestone,
+		},
+		// PSI_EVENTS
+		{
+			subject: event.SubjectPSIOrderApprovalNeeded,
+			queue:   "notif-psi-order-approval",
+			handler: c.handlePSIOrderApprovalNeeded,
+		},
+		{
+			subject: event.SubjectPSIInventoryRedline,
+			queue:   "notif-psi-inventory-redline",
+			handler: c.handlePSIInventoryRedline,
+		},
+		{
+			subject: event.SubjectPSIPaymentReceived,
+			queue:   "notif-psi-payment-received",
+			handler: c.handlePSIPaymentReceived,
 		},
 	}
 
@@ -321,6 +365,11 @@ func (c *Consumer) handleQuotaThreshold(ctx context.Context, msg *natsgo.Msg) er
 				"percent":   fmt.Sprintf("%.0f", t.percent),
 				"remaining": fmt.Sprintf("%d", remaining),
 			},
+			Payload: map[string]any{
+				"used_tokens":   payload.UsedTokens,
+				"limit_tokens":  payload.LimitTokens,
+				"usage_percent": payload.UsagePercent,
+			},
 		}); err != nil {
 			slog.Error("failed to send quota alert",
 				"account_id", payload.AccountID,
@@ -331,4 +380,258 @@ func (c *Consumer) handleQuotaThreshold(ctx context.Context, msg *natsgo.Msg) er
 	}
 
 	return nil
+}
+
+// skipNoAccount logs a structured line and returns nil so the consumer ACKs
+// events that lack a resolvable account_id (e.g. workspace-scoped PSI events
+// with no member mapping yet). Mirrors the existing LUCRUM behavior.
+//
+// TODO(spec E.4 Q1): when the PSI workspace_members.account_id resolution
+// rule is finalised, replace this no-op with a fan-out to all linked accounts.
+func skipNoAccount(subject, eventID string) error {
+	slog.Info("notif: skipping event with no account_id",
+		"subject", subject,
+		"event_id", eventID,
+	)
+	return nil
+}
+
+func (c *Consumer) handleVIPLevelChanged(ctx context.Context, msg *natsgo.Msg) error {
+	var ev event.IdentityEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		return fmt.Errorf("unmarshal vip.level_changed: %w", err)
+	}
+	if ev.AccountID <= 0 {
+		return skipNoAccount(event.SubjectVIPLevelChanged, ev.EventID)
+	}
+	var payload event.VIPLevelChangedPayload
+	if len(ev.Payload) > 0 {
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			return fmt.Errorf("unmarshal vip payload: %w", err)
+		}
+	}
+	return c.notifSvc.Send(ctx, app.SendRequest{
+		AccountID: ev.AccountID,
+		EventType: event.SubjectVIPLevelChanged,
+		EventID:   ev.EventID,
+		Channels:  []entity.Channel{entity.ChannelInApp},
+		Vars: map[string]string{
+			"level":     payload.Level,
+			"old_level": payload.OldLevel,
+		},
+		Payload: map[string]any{
+			"level":     payload.Level,
+			"old_level": payload.OldLevel,
+		},
+	})
+}
+
+func (c *Consumer) handleLucrumAdvisorOutput(ctx context.Context, msg *natsgo.Msg) error {
+	var ev event.LucrumEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		return fmt.Errorf("unmarshal lucrum.advisor.output: %w", err)
+	}
+	if ev.AccountID <= 0 {
+		return skipNoAccount(event.SubjectLucrumAdvisorOutput, ev.EventID)
+	}
+	var payload event.LucrumAdvisorOutputPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal advisor payload: %w", err)
+	}
+	return c.notifSvc.Send(ctx, app.SendRequest{
+		AccountID: ev.AccountID,
+		EventType: event.SubjectLucrumAdvisorOutput,
+		EventID:   ev.EventID,
+		Channels:  []entity.Channel{entity.ChannelInApp},
+		Vars: map[string]string{
+			"advisor_name": payload.AdvisorName,
+			"symbol":       payload.Symbol,
+			"summary":      payload.Summary,
+		},
+		Payload: map[string]any{
+			"advisor_id":   payload.AdvisorID,
+			"advisor_name": payload.AdvisorName,
+			"symbol":       payload.Symbol,
+			"summary":      payload.Summary,
+		},
+	})
+}
+
+func (c *Consumer) handleLucrumMarketEvent(ctx context.Context, msg *natsgo.Msg) error {
+	var ev event.LucrumEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		return fmt.Errorf("unmarshal lucrum.market.event: %w", err)
+	}
+	if ev.AccountID <= 0 {
+		return skipNoAccount(event.SubjectLucrumMarketEvent, ev.EventID)
+	}
+	var payload event.LucrumMarketEventPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal market payload: %w", err)
+	}
+	return c.notifSvc.Send(ctx, app.SendRequest{
+		AccountID: ev.AccountID,
+		EventType: event.SubjectLucrumMarketEvent,
+		EventID:   ev.EventID,
+		Channels:  []entity.Channel{entity.ChannelInApp},
+		Vars: map[string]string{
+			"symbol":   payload.Symbol,
+			"headline": payload.Headline,
+		},
+		Payload: map[string]any{
+			"symbol":   payload.Symbol,
+			"headline": payload.Headline,
+			"severity": payload.Severity,
+		},
+	})
+}
+
+func (c *Consumer) handleLLMImageGenerated(ctx context.Context, msg *natsgo.Msg) error {
+	var ev event.LLMEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		return fmt.Errorf("unmarshal llm.image.generated: %w", err)
+	}
+	if ev.AccountID <= 0 {
+		return skipNoAccount(event.SubjectLLMImageGenerated, ev.EventID)
+	}
+	var payload event.LLMImageGeneratedPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal image payload: %w", err)
+	}
+	return c.notifSvc.Send(ctx, app.SendRequest{
+		AccountID: ev.AccountID,
+		EventType: event.SubjectLLMImageGenerated,
+		EventID:   ev.EventID,
+		Channels:  []entity.Channel{entity.ChannelInApp, entity.ChannelFCM},
+		Vars: map[string]string{
+			"prompt": payload.Prompt,
+		},
+		Payload: map[string]any{
+			"job_id":    payload.JobID,
+			"image_url": payload.ImageURL,
+			"prompt":    payload.Prompt,
+		},
+	})
+}
+
+func (c *Consumer) handleLLMUsageMilestone(ctx context.Context, msg *natsgo.Msg) error {
+	var ev event.LLMEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		return fmt.Errorf("unmarshal llm.usage.milestone: %w", err)
+	}
+	if ev.AccountID <= 0 {
+		return skipNoAccount(event.SubjectLLMUsageMilestone, ev.EventID)
+	}
+	var payload event.LLMUsageMilestonePayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal usage milestone payload: %w", err)
+	}
+	return c.notifSvc.Send(ctx, app.SendRequest{
+		AccountID: ev.AccountID,
+		EventType: event.SubjectLLMUsageMilestone,
+		EventID:   ev.EventID,
+		Channels:  []entity.Channel{entity.ChannelInApp},
+		Vars: map[string]string{
+			"period":      payload.Period,
+			"tokens_used": fmt.Sprintf("%d", payload.TokensUsed),
+			"milestone":   payload.Milestone,
+		},
+		Payload: map[string]any{
+			"period":      payload.Period,
+			"tokens_used": payload.TokensUsed,
+			"milestone":   payload.Milestone,
+		},
+	})
+}
+
+func (c *Consumer) handlePSIOrderApprovalNeeded(ctx context.Context, msg *natsgo.Msg) error {
+	var ev event.PSIEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		return fmt.Errorf("unmarshal psi.order.approval_needed: %w", err)
+	}
+	if ev.AccountID <= 0 {
+		return skipNoAccount(event.SubjectPSIOrderApprovalNeeded, ev.EventID)
+	}
+	var payload event.PSIOrderApprovalPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal psi order payload: %w", err)
+	}
+	return c.notifSvc.Send(ctx, app.SendRequest{
+		AccountID: ev.AccountID,
+		EventType: event.SubjectPSIOrderApprovalNeeded,
+		EventID:   ev.EventID,
+		Channels:  []entity.Channel{entity.ChannelInApp, entity.ChannelFCM},
+		Vars: map[string]string{
+			"order_no":     payload.OrderNo,
+			"amount_cny":   fmt.Sprintf("%.2f", payload.AmountCNY),
+			"submitted_by": payload.SubmittedBy,
+		},
+		Payload: map[string]any{
+			"order_id":     payload.OrderID,
+			"order_no":     payload.OrderNo,
+			"amount_cny":   payload.AmountCNY,
+			"submitted_by": payload.SubmittedBy,
+		},
+	})
+}
+
+func (c *Consumer) handlePSIInventoryRedline(ctx context.Context, msg *natsgo.Msg) error {
+	var ev event.PSIEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		return fmt.Errorf("unmarshal psi.inventory.redline: %w", err)
+	}
+	if ev.AccountID <= 0 {
+		return skipNoAccount(event.SubjectPSIInventoryRedline, ev.EventID)
+	}
+	var payload event.PSIInventoryRedlinePayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal psi inventory payload: %w", err)
+	}
+	return c.notifSvc.Send(ctx, app.SendRequest{
+		AccountID: ev.AccountID,
+		EventType: event.SubjectPSIInventoryRedline,
+		EventID:   ev.EventID,
+		Channels:  []entity.Channel{entity.ChannelInApp},
+		Vars: map[string]string{
+			"sku":       payload.SKU,
+			"sku_name":  payload.SKUName,
+			"on_hand":   fmt.Sprintf("%d", payload.OnHand),
+			"threshold": fmt.Sprintf("%d", payload.Threshold),
+		},
+		Payload: map[string]any{
+			"sku":       payload.SKU,
+			"sku_name":  payload.SKUName,
+			"on_hand":   payload.OnHand,
+			"threshold": payload.Threshold,
+		},
+	})
+}
+
+func (c *Consumer) handlePSIPaymentReceived(ctx context.Context, msg *natsgo.Msg) error {
+	var ev event.PSIEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		return fmt.Errorf("unmarshal psi.payment.received: %w", err)
+	}
+	if ev.AccountID <= 0 {
+		return skipNoAccount(event.SubjectPSIPaymentReceived, ev.EventID)
+	}
+	var payload event.PSIPaymentReceivedPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal psi payment payload: %w", err)
+	}
+	return c.notifSvc.Send(ctx, app.SendRequest{
+		AccountID: ev.AccountID,
+		EventType: event.SubjectPSIPaymentReceived,
+		EventID:   ev.EventID,
+		Channels:  []entity.Channel{entity.ChannelInApp},
+		Vars: map[string]string{
+			"amount_cny": fmt.Sprintf("%.2f", payload.AmountCNY),
+			"payer_name": payload.PayerName,
+		},
+		Payload: map[string]any{
+			"payment_id": payload.PaymentID,
+			"amount_cny": payload.AmountCNY,
+			"payer_name": payload.PayerName,
+		},
+	})
 }

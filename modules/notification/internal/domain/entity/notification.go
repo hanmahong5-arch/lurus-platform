@@ -36,21 +36,23 @@ const (
 
 // Notification is the core domain entity.
 type Notification struct {
-	ID         int64     `json:"id" gorm:"primaryKey;autoIncrement"`
-	AccountID  int64     `json:"account_id" gorm:"index;not null"`
-	Channel    Channel   `json:"channel" gorm:"type:varchar(20);not null"`
-	Category   string    `json:"category" gorm:"type:varchar(50);not null"`
-	Title      string    `json:"title" gorm:"type:varchar(200);not null"`
-	Body       string    `json:"body" gorm:"type:text;not null"`
-	Priority   Priority  `json:"priority" gorm:"type:varchar(20);default:'normal'"`
-	Status     Status    `json:"status" gorm:"type:varchar(20);default:'pending'"`
-	EventType  string    `json:"event_type" gorm:"type:varchar(100)"`
-	EventID    string    `json:"event_id" gorm:"type:varchar(50);index"`
-	Metadata   string    `json:"metadata" gorm:"type:jsonb;default:'{}'"`
+	ID         int64      `json:"id" gorm:"primaryKey;autoIncrement"`
+	AccountID  int64      `json:"account_id" gorm:"index;not null"`
+	Channel    Channel    `json:"channel" gorm:"type:varchar(20);not null"`
+	Source     string     `json:"source" gorm:"type:varchar(20);not null;default:'identity';index"`
+	Category   string     `json:"category" gorm:"type:varchar(50);not null"`
+	Title      string     `json:"title" gorm:"type:varchar(200);not null"`
+	Body       string     `json:"body" gorm:"type:text;not null"`
+	Priority   Priority   `json:"priority" gorm:"type:varchar(20);default:'normal'"`
+	Status     Status     `json:"status" gorm:"type:varchar(20);default:'pending'"`
+	EventType  string     `json:"event_type" gorm:"type:varchar(100)"`
+	EventID    string     `json:"event_id" gorm:"type:varchar(50);index"`
+	Metadata   string     `json:"metadata" gorm:"type:jsonb;default:'{}'"`
+	Payload    string     `json:"payload" gorm:"type:jsonb;not null;default:'{}'"`
 	ReadAt     *time.Time `json:"read_at"`
 	SentAt     *time.Time `json:"sent_at"`
-	CreatedAt  time.Time `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt  time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+	CreatedAt  time.Time  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt  time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 // TableName sets the PostgreSQL table name.

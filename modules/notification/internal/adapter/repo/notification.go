@@ -44,6 +44,93 @@ func (r *NotificationRepo) ListByAccount(ctx context.Context, accountID int64, l
 	return items, total, nil
 }
 
+// ListFilter narrows the notification list by source/category/unread.
+// Empty Source/Category mean "no filter on that field".
+type ListFilter struct {
+	Source     string
+	Category   string
+	UnreadOnly bool
+}
+
+// ListByAccountFiltered is like ListByAccount but supports source/category/unread filters.
+// Filter strings are matched verbatim against the indexed columns; the caller is
+// responsible for any normalization. Both count and slice queries share the same
+// WHERE clause so total reflects the visible page set.
+func (r *NotificationRepo) ListByAccountFiltered(ctx context.Context, accountID int64, f ListFilter, limit, offset int) ([]entity.Notification, int64, error) {
+	var items []entity.Notification
+	var total int64
+
+	q := r.db.WithContext(ctx).Model(&entity.Notification{}).Where("account_id = ?", accountID)
+	if f.Source != "" {
+		q = q.Where("source = ?", f.Source)
+	}
+	if f.Category != "" {
+		q = q.Where("category = ?", f.Category)
+	}
+	if f.UnreadOnly {
+		q = q.Where("channel = ? AND read_at IS NULL", entity.ChannelInApp)
+	}
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count notifications (filtered): %w", err)
+	}
+	if err := q.Order("created_at DESC").Limit(limit).Offset(offset).Find(&items).Error; err != nil {
+		return nil, 0, fmt.Errorf("list notifications (filtered): %w", err)
+	}
+	return items, total, nil
+}
+
+// CountUnreadBySource groups unread in-app notifications by source.
+// Always returns a non-nil map, possibly empty.
+func (r *NotificationRepo) CountUnreadBySource(ctx context.Context, accountID int64) (map[string]int64, error) {
+	type row struct {
+		Source string
+		Count  int64
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).Model(&entity.Notification{}).
+		Select("source, COUNT(*) AS count").
+		Where("account_id = ? AND channel = ? AND read_at IS NULL", accountID, entity.ChannelInApp).
+		Group("source").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("count unread by source: %w", err)
+	}
+	out := make(map[string]int64, len(rows))
+	for _, r := range rows {
+		if r.Source == "" {
+			continue
+		}
+		out[r.Source] = r.Count
+	}
+	return out, nil
+}
+
+// CountUnreadByCategory groups unread in-app notifications by category.
+// Always returns a non-nil map, possibly empty.
+func (r *NotificationRepo) CountUnreadByCategory(ctx context.Context, accountID int64) (map[string]int64, error) {
+	type row struct {
+		Category string
+		Count    int64
+	}
+	var rows []row
+	err := r.db.WithContext(ctx).Model(&entity.Notification{}).
+		Select("category, COUNT(*) AS count").
+		Where("account_id = ? AND channel = ? AND read_at IS NULL", accountID, entity.ChannelInApp).
+		Group("category").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("count unread by category: %w", err)
+	}
+	out := make(map[string]int64, len(rows))
+	for _, r := range rows {
+		if r.Category == "" {
+			continue
+		}
+		out[r.Category] = r.Count
+	}
+	return out, nil
+}
+
 // CountUnread returns the number of unread notifications for an account.
 func (r *NotificationRepo) CountUnread(ctx context.Context, accountID int64) (int64, error) {
 	var count int64

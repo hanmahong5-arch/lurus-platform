@@ -69,14 +69,36 @@ type SendRequest struct {
 	AccountID int64
 	EventType string
 	EventID   string
-	Channels  []entity.Channel // which channels to dispatch to
+	Source    string            // identity|lucrum|llm|psi; auto-derived from EventType if empty
+	Channels  []entity.Channel  // which channels to dispatch to
 	Vars      map[string]string // template variable substitutions
-	EmailAddr string // recipient email (for email channel)
+	Payload   map[string]any    // client-facing event payload (deep-link data); marshaled to JSONB
+	EmailAddr string            // recipient email (for email channel)
 }
 
 // Send creates and dispatches a notification across requested channels.
 // Idempotent: if a notification for the same event_id + channel already exists, it skips.
+//
+// TODO(spec E.4 Q3): respect existing user preferences uniformly today; an
+// "urgent bypass" toggle is pending product decision.
 func (s *NotificationService) Send(ctx context.Context, req SendRequest) error {
+	source := req.Source
+	if source == "" {
+		source = sourceFromEvent(req.EventType)
+	}
+
+	// Marshal client-facing payload once. Empty/nil maps become "{}" so the
+	// JSONB column stays a valid JSON object (never NULL or "null").
+	payloadJSON := "{}"
+	if len(req.Payload) > 0 {
+		if b, err := json.Marshal(req.Payload); err == nil {
+			payloadJSON = string(b)
+		} else {
+			slog.Warn("send: payload marshal failed, defaulting to {}",
+				"event_type", req.EventType, "err", err)
+		}
+	}
+
 	for _, ch := range req.Channels {
 		// Idempotency check
 		if req.EventID != "" {
@@ -107,6 +129,7 @@ func (s *NotificationService) Send(ctx context.Context, req SendRequest) error {
 		notif := &entity.Notification{
 			AccountID: req.AccountID,
 			Channel:   ch,
+			Source:    source,
 			Category:  categoryFromEvent(req.EventType),
 			Title:     title,
 			Body:      body,
@@ -114,6 +137,7 @@ func (s *NotificationService) Send(ctx context.Context, req SendRequest) error {
 			Status:    entity.StatusPending,
 			EventType: req.EventType,
 			EventID:   req.EventID,
+			Payload:   payloadJSON,
 		}
 
 		if err := s.notifRepo.Create(ctx, notif); err != nil {
@@ -164,7 +188,13 @@ func (s *NotificationService) dispatch(ctx context.Context, notif *entity.Notifi
 			err = s.fcm.Send(ctx, msg)
 		}
 	case entity.ChannelInApp:
-		if s.ws != nil {
+		// Push the full notification entity over the hub so clients receive
+		// id/source/category/priority/payload/created_at — the Sender
+		// interface only carries Subject+Body which loses those fields.
+		if s.hub != nil {
+			s.hub.Broadcast(notif.AccountID, sender.WSMessageFromNotification(notif))
+		} else if s.ws != nil {
+			// Backstop for tests/wiring that still rely on the Sender path.
 			err = s.ws.Send(ctx, msg)
 		}
 	}
@@ -334,14 +364,77 @@ func categoryFromEvent(eventType string) string {
 	return "general"
 }
 
+// sourceFromEvent extracts the product source (first dot-segment) from an
+// event type. Falls back to "identity" so legacy non-namespaced events
+// keep their historical bucket.
+//   "lucrum.strategy.triggered" -> "lucrum"
+//   "psi.order.approval_needed" -> "psi"
+//   "simple"                    -> "identity"
+func sourceFromEvent(eventType string) string {
+	parts := strings.SplitN(eventType, ".", 2)
+	if len(parts) < 2 || parts[0] == "" {
+		return "identity"
+	}
+	return parts[0]
+}
+
 // ListByAccount returns paginated notifications for an account.
 func (s *NotificationService) ListByAccount(ctx context.Context, accountID int64, limit, offset int) ([]entity.Notification, int64, error) {
 	return s.notifRepo.ListByAccount(ctx, accountID, limit, offset)
 }
 
+// ListFilter narrows ListByAccountFiltered results.
+type ListFilter struct {
+	Source     string // identity|lucrum|llm|psi (empty = all)
+	Category   string // optional second-segment filter
+	UnreadOnly bool
+}
+
+// ListByAccountFiltered returns paginated notifications filtered by source/category/unread.
+func (s *NotificationService) ListByAccountFiltered(ctx context.Context, accountID int64, filter ListFilter, limit, offset int) ([]entity.Notification, int64, error) {
+	return s.notifRepo.ListByAccountFiltered(ctx, accountID, repo.ListFilter{
+		Source:     filter.Source,
+		Category:   filter.Category,
+		UnreadOnly: filter.UnreadOnly,
+	}, limit, offset)
+}
+
 // CountUnread returns unread in-app notification count.
 func (s *NotificationService) CountUnread(ctx context.Context, accountID int64) (int64, error) {
 	return s.notifRepo.CountUnread(ctx, accountID)
+}
+
+// UnreadBreakdown is the per-source / per-category unread aggregation
+// returned to the unified-inbox client.
+type UnreadBreakdown struct {
+	Total      int64            `json:"total"`
+	BySource   map[string]int64 `json:"by_source"`
+	ByCategory map[string]int64 `json:"by_category"`
+}
+
+// CountUnreadBreakdown returns total + per-source + per-category unread counts
+// for the in_app channel. Maps are always non-nil (empty maps for users with
+// zero unread notifications) so the wire shape is stable for client parsing.
+func (s *NotificationService) CountUnreadBreakdown(ctx context.Context, accountID int64) (UnreadBreakdown, error) {
+	total, err := s.notifRepo.CountUnread(ctx, accountID)
+	if err != nil {
+		return UnreadBreakdown{BySource: map[string]int64{}, ByCategory: map[string]int64{}}, err
+	}
+	bySource, err := s.notifRepo.CountUnreadBySource(ctx, accountID)
+	if err != nil {
+		return UnreadBreakdown{Total: total, BySource: map[string]int64{}, ByCategory: map[string]int64{}}, err
+	}
+	byCategory, err := s.notifRepo.CountUnreadByCategory(ctx, accountID)
+	if err != nil {
+		return UnreadBreakdown{Total: total, BySource: bySource, ByCategory: map[string]int64{}}, err
+	}
+	if bySource == nil {
+		bySource = map[string]int64{}
+	}
+	if byCategory == nil {
+		byCategory = map[string]int64{}
+	}
+	return UnreadBreakdown{Total: total, BySource: bySource, ByCategory: byCategory}, nil
 }
 
 // MarkRead marks a single notification as read.

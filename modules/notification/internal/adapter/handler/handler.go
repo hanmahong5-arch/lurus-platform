@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -14,9 +15,21 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/modules/notification/internal/domain/entity"
 )
 
+// notificationSvc is the minimal surface area NotificationHandler needs from
+// the app layer. Defined here so tests can substitute a stub without touching
+// the full *app.NotificationService dependency graph (gorm/redis/nats).
+type notificationSvc interface {
+	ListByAccountFiltered(ctx context.Context, accountID int64, f app.ListFilter, limit, offset int) ([]entity.Notification, int64, error)
+	CountUnread(ctx context.Context, accountID int64) (int64, error)
+	CountUnreadBreakdown(ctx context.Context, accountID int64) (app.UnreadBreakdown, error)
+	MarkRead(ctx context.Context, id, accountID int64) error
+	MarkAllRead(ctx context.Context, accountID int64) (int64, error)
+	Send(ctx context.Context, req app.SendRequest) error
+}
+
 // NotificationHandler exposes notification APIs.
 type NotificationHandler struct {
-	svc        *app.NotificationService
+	svc        notificationSvc
 	hub        *sender.Hub
 	adminEmail string
 }
@@ -27,7 +40,20 @@ func NewNotificationHandler(svc *app.NotificationService, hub *sender.Hub, admin
 }
 
 // List returns paginated notifications for the authenticated account.
-// GET /api/v1/notifications?limit=20&offset=0
+//
+// GET /api/v1/notifications?page=1&limit=20
+//   or  /api/v1/notifications?limit=20&offset=0
+//
+// Optional filters:
+//   ?source=lucrum
+//   ?category=strategy
+//   ?unread_only=true
+//
+// Response shape (BREAKING vs the prior {items, total} body):
+//   { "data": [<notification>...], "meta": { "total": <int>, "limit": <int>, "offset": <int> } }
+//
+// This matches the envelope of every other list endpoint in the platform —
+// see spec C.6 for rationale.
 func (h *NotificationHandler) List(c *gin.Context) {
 	accountID := c.GetInt64("account_id")
 	if accountID == 0 {
@@ -36,28 +62,61 @@ func (h *NotificationHandler) List(c *gin.Context) {
 	}
 
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	if offset < 0 {
-		offset = 0
+
+	// Pagination accepts either ?page (1-indexed) or ?offset.
+	// `page` wins if both are passed, mirroring the client's expectation.
+	offset := 0
+	if pageStr := c.Query("page"); pageStr != "" {
+		page, err := strconv.Atoi(pageStr)
+		if err != nil || page < 1 {
+			page = 1
+		}
+		offset = (page - 1) * limit
+	} else {
+		offset, _ = strconv.Atoi(c.DefaultQuery("offset", "0"))
+		if offset < 0 {
+			offset = 0
+		}
 	}
 
-	items, total, err := h.svc.ListByAccount(c.Request.Context(), accountID, limit, offset)
+	filter := app.ListFilter{
+		Source:     c.Query("source"),
+		Category:   c.Query("category"),
+		UnreadOnly: c.Query("unread_only") == "true" || c.Query("unread_only") == "1",
+	}
+
+	items, total, err := h.svc.ListByAccountFiltered(c.Request.Context(), accountID, filter, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list notifications"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"items": items,
-		"total": total,
+		"data": items,
+		"meta": gin.H{
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
+		},
 	})
 }
 
-// Unread returns the unread count.
+// Unread returns the in-app unread count plus per-source / per-category breakdown.
+//
 // GET /api/v1/notifications/unread
+//
+// Response shape (BREAKING vs the prior {unread: N}):
+//   {
+//     "total":       <int>,
+//     "by_source":   {"identity": N, "lucrum": N, "llm": N, "psi": N},
+//     "by_category": {"account": N, "strategy": N, ...}
+//   }
+//
+// `by_source` and `by_category` are always present (empty objects rather than
+// null) so the client can call `data.by_source['lucrum'] ?? 0` safely.
 func (h *NotificationHandler) Unread(c *gin.Context) {
 	accountID := c.GetInt64("account_id")
 	if accountID == 0 {
@@ -65,13 +124,24 @@ func (h *NotificationHandler) Unread(c *gin.Context) {
 		return
 	}
 
-	count, err := h.svc.CountUnread(c.Request.Context(), accountID)
+	breakdown, err := h.svc.CountUnreadBreakdown(c.Request.Context(), accountID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to count unread"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"unread": count})
+	if breakdown.BySource == nil {
+		breakdown.BySource = map[string]int64{}
+	}
+	if breakdown.ByCategory == nil {
+		breakdown.ByCategory = map[string]int64{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"total":       breakdown.Total,
+		"by_source":   breakdown.BySource,
+		"by_category": breakdown.ByCategory,
+	})
 }
 
 // MarkRead marks a single notification as read.
