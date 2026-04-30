@@ -162,3 +162,76 @@ func TestWebhookDeduper_RedisKeyFormat(t *testing.T) {
 		t.Errorf("expected key 'webhook:seen:test-key-format' in Redis, got keys: %v", keys)
 	}
 }
+
+// ── Fail-closed mode (money/billing pipelines) ─────────────────────────────
+
+func TestWebhookDeduper_FailClosed_RedisDownReturnsErrRedisUnavailable(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	d := New(rdb, DefaultWebhookTTL).WithFailClosed()
+
+	// Sanity check: works while Redis is up.
+	if err := d.TryProcess(context.Background(), "evt-fc-ok"); err != nil {
+		t.Fatalf("first call should succeed: %v", err)
+	}
+
+	// Kill Redis: fail-closed mode must surface ErrRedisUnavailable so
+	// the caller NAKs the message rather than silently double-processing.
+	mr.Close()
+	err := d.TryProcess(context.Background(), "evt-fc-down")
+	if err != ErrRedisUnavailable {
+		t.Errorf("fail-closed + Redis down: got %v, want ErrRedisUnavailable", err)
+	}
+}
+
+func TestWebhookDeduper_FailClosed_NoChangeOnHappyPath(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	d := New(rdb, DefaultWebhookTTL).WithFailClosed()
+	ctx := context.Background()
+
+	if err := d.TryProcess(ctx, "evt-fc-1"); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if err := d.TryProcess(ctx, "evt-fc-1"); err != ErrAlreadyProcessed {
+		t.Errorf("duplicate in fail-closed: got %v, want ErrAlreadyProcessed", err)
+	}
+}
+
+func TestWebhookDeduper_FailClosed_NilRedisStillNoOps(t *testing.T) {
+	// Even fail-closed must let traffic through when Redis is not wired
+	// at all (operator hasn't configured it yet) — this is a
+	// configuration state, not a runtime failure.
+	d := New(nil, DefaultWebhookTTL).WithFailClosed()
+	if err := d.TryProcess(context.Background(), "evt-nil"); err != nil {
+		t.Errorf("nil Redis + fail-closed: %v, want nil", err)
+	}
+}
+
+func TestWebhookDeduper_WithKeyPrefix_NamespacesKeys(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	d := New(rdb, DefaultWebhookTTL).WithKeyPrefix("newapi:topup:seen:")
+
+	if err := d.TryProcess(context.Background(), "evt-ns"); err != nil {
+		t.Fatalf("TryProcess: %v", err)
+	}
+
+	// Verify custom prefix is honoured (so two pipelines don't collide).
+	if !mr.Exists("newapi:topup:seen:evt-ns") {
+		t.Errorf("expected custom-prefix key, got: %v", mr.Keys())
+	}
+	// Default prefix must NOT have been written.
+	if mr.Exists("webhook:seen:evt-ns") {
+		t.Errorf("default prefix unexpectedly populated: %v", mr.Keys())
+	}
+}
+
+func TestWebhookDeduper_FailOpenPolicyUnchanged(t *testing.T) {
+	// Regression guard: existing webhook callers must continue seeing
+	// the fail-open behaviour (don't break callers who chose the default).
+	mr, rdb := setupMiniredis(t)
+	d := New(rdb, DefaultWebhookTTL) // no WithFailClosed
+
+	mr.Close()
+	if err := d.TryProcess(context.Background(), "evt-fo"); err != nil {
+		t.Errorf("fail-open + Redis down: got %v, want nil (fail-open)", err)
+	}
+}

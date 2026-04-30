@@ -227,7 +227,13 @@ func run(ctx context.Context, cfg *config.Config) error {
 		if err != nil {
 			slog.Warn("newapi_sync: client init failed, sync disabled", "err", err)
 		} else {
-			newapiSyncMod = newapi_sync.New(nclient, accountRepo)
+			// Money-path deduper: fail-closed so a Redis outage NAKs
+			// JetStream redeliveries instead of letting them double-credit.
+			// See docs/平台硬化清单.md P0-1+P0-2 for the rationale.
+			topupDedup := idempotency.New(rdb, idempotency.DefaultWebhookTTL).
+				WithFailClosed().
+				WithKeyPrefix("newapi_sync:topup:seen:")
+			newapiSyncMod = newapi_sync.New(nclient, accountRepo).WithDeduper(topupDedup)
 			if newapiSyncMod != nil {
 				newapiSyncMod.Register(registry)
 			}

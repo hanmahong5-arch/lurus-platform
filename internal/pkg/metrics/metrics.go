@@ -248,6 +248,32 @@ var (
 		},
 		[]string{"app", "env", "trigger"},
 	)
+
+	// newapi_sync (C.2 NewAPI quota mirror) operation counter — single
+	// metric covers all three entry points (account create / topup credit
+	// / llm-token issue) so dashboards and alerts can pivot on `op` while
+	// keeping a stable, low-cardinality series count.
+	//
+	// `op` is one of:
+	//   account_provisioned — OnAccountCreated (4c hook)
+	//   topup_synced        — OnTopupCompleted (4d hook)
+	//   llm_token_issued    — EnsureUserLLMToken (4e endpoint)
+	//
+	// `result` is one of:
+	//   success | skipped | duplicate | error
+	//
+	// Specifically, "duplicate" is reserved for topup_synced events that
+	// the deduper caught — the count is also the count of double-credits
+	// avoided. Sustained non-zero suggests JetStream redelivery is firing
+	// (probably fine) or a malformed publisher (probably not).
+	newapiSyncOpsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "newapi_sync_ops_total",
+			Help:      "newapi_sync operation outcomes by op and result. op∈{account_provisioned,topup_synced,llm_token_issued}; result∈{success,skipped,duplicate,error}.",
+		},
+		[]string{"op", "result"},
+	)
 )
 
 // Handler returns the standard Prometheus /metrics HTTP handler.
@@ -409,4 +435,22 @@ func RecordAppRegistryReconcile(outcome string) {
 // periodic reconciler) or "manual" (admin endpoint).
 func RecordOIDCSecretRotation(app, env, trigger string) {
 	oidcSecretRotatedTotal.WithLabelValues(app, env, trigger).Inc()
+}
+
+// RecordNewAPISyncOp increments the newapi_sync operation counter.
+//
+// `op` ∈ {"account_provisioned","topup_synced","llm_token_issued"} —
+// each newapi_sync entry point. `result` ∈ {"success","skipped","duplicate","error"}:
+//
+//   - success    happy path; the operation reached NewAPI and recorded its work
+//   - skipped    correctly bypassed (e.g. account not yet mapped, amount ≤ 0)
+//   - duplicate  dedup caught a JetStream redelivery (only relevant to topup);
+//                count = how often we saved the user from double-credit
+//   - error      anything else; should also create a log entry. Sustained
+//                non-zero error rate is the alerting signal.
+//
+// Cardinality is bounded (3×4 = 12 series total) so safe for high-rate
+// dashboards and Prometheus federation.
+func RecordNewAPISyncOp(op, result string) {
+	newapiSyncOpsTotal.WithLabelValues(op, result).Inc()
 }

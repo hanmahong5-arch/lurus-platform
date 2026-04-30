@@ -23,7 +23,23 @@ import (
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/idempotency"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/metrics"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/newapi"
+)
+
+// Metric op + result label vocabularies (also documented on
+// metrics.RecordNewAPISyncOp). Centralised here so every call site uses
+// the same strings — typos break dashboards silently.
+const (
+	opAccountProvisioned = "account_provisioned"
+	opTopupSynced        = "topup_synced"
+	opLLMTokenIssued     = "llm_token_issued"
+
+	resultSuccess   = "success"
+	resultSkipped   = "skipped"
+	resultDuplicate = "duplicate"
+	resultError     = "error"
 )
 
 // AccountStore 是模块对 platform account 仓储的最小依赖。
@@ -64,10 +80,23 @@ const DefaultTokenName = "lurus-platform-default"
 // 不该被 platform 直接依赖；如果上游改了，对账 cron (4g) 会暴露差异。
 const QuotaPerUnit = 500_000
 
+// Deduper is the contract the module uses for at-least-once → at-most-once
+// upgrade on event handlers. Money flows MUST run on a fail-closed
+// implementation (e.g. idempotency.WebhookDeduper.WithFailClosed()) so
+// Redis outage NAKs the message instead of risking double-credit.
+//
+// nil-safe: when no Deduper is wired (m.deduper == nil) topup events are
+// processed without dedup. The wiring path in main.go ALWAYS sets this in
+// production; this nil-safe contract only protects unit tests + dev.
+type Deduper interface {
+	TryProcess(ctx context.Context, eventID string) error
+}
+
 // Module 是 newapi_sync 模块。零值不可用 — 必须通过 New 构造。
 type Module struct {
 	client   NewAPIClient
 	accounts AccountStore
+	deduper  Deduper // nil = no dedup (dev/test only); prod must wire fail-closed
 }
 
 // New 构造 module。client 或 accounts 为 nil 时返 nil — main.go 据此决定是否
@@ -78,6 +107,21 @@ func New(client NewAPIClient, accounts AccountStore) *Module {
 		return nil
 	}
 	return &Module{client: client, accounts: accounts}
+}
+
+// WithDeduper wires an idempotency deduper for OnTopupCompleted (money
+// path). For correctness on JetStream's at-least-once delivery, the
+// passed deduper SHOULD be fail-closed (idempotency.WebhookDeduper.
+// WithFailClosed()) so Redis outages NAK instead of silently duplicating.
+//
+// Safe to call with nil — disables dedup (returns receiver unchanged).
+// Chainable.
+func (m *Module) WithDeduper(d Deduper) *Module {
+	if m == nil {
+		return nil
+	}
+	m.deduper = d
+	return m
 }
 
 // usernameFor 返回 NewAPI 端使用的 username。约定见 ADR：
@@ -102,10 +146,12 @@ func usernameFor(accountID int64) string {
 // 任一 NewAPI 调用失败 → 立即返错（registry 会记 warn，不阻塞调用方）。
 func (m *Module) OnAccountCreated(ctx context.Context, account *entity.Account) error {
 	if account == nil {
+		metrics.RecordNewAPISyncOp(opAccountProvisioned, resultError)
 		return errors.New("newapi_sync: nil account")
 	}
 	if account.NewAPIUserID != nil {
 		// Already synced — repeat-trigger is a no-op (idempotent).
+		metrics.RecordNewAPISyncOp(opAccountProvisioned, resultSkipped)
 		return nil
 	}
 	username := usernameFor(account.ID)
@@ -119,23 +165,28 @@ func (m *Module) OnAccountCreated(ctx context.Context, account *entity.Account) 
 			displayName = username // NewAPI 校验非空
 		}
 		if cerr := m.client.CreateUser(ctx, username, displayName); cerr != nil {
+			metrics.RecordNewAPISyncOp(opAccountProvisioned, resultError)
 			return fmt.Errorf("newapi_sync: create user %s: %w", username, cerr)
 		}
 		// NewAPI CreateUser 不返 id — 再 search 一次。
 		id, err = m.client.FindUserByUsername(ctx, username)
 		if err != nil {
+			metrics.RecordNewAPISyncOp(opAccountProvisioned, resultError)
 			return fmt.Errorf("newapi_sync: post-create lookup %s: %w", username, err)
 		}
 	} else if err != nil {
+		metrics.RecordNewAPISyncOp(opAccountProvisioned, resultError)
 		return fmt.Errorf("newapi_sync: find user %s: %w", username, err)
 	}
 
 	if err := m.accounts.SetNewAPIUserID(ctx, account.ID, id); err != nil {
+		metrics.RecordNewAPISyncOp(opAccountProvisioned, resultError)
 		// NewAPI user 已经存在但 platform 没记下来 — 下次 hook 触发会走"先 search
 		// 再 Set"的幂等分支。这里返错让 registry 记 warn 引起注意。
 		return fmt.Errorf("newapi_sync: set newapi_user_id account=%d newapi=%d: %w", account.ID, id, err)
 	}
 
+	metrics.RecordNewAPISyncOp(opAccountProvisioned, resultSuccess)
 	slog.InfoContext(ctx, "newapi_sync: account synced",
 		"account_id", account.ID, "newapi_user_id", id, "username", username)
 	return nil
@@ -171,15 +222,21 @@ func (m *Module) EnsureUserLLMToken(ctx context.Context, accountID int64, name s
 	}
 	account, err := m.accounts.GetByID(ctx, accountID)
 	if err != nil {
+		metrics.RecordNewAPISyncOp(opLLMTokenIssued, resultError)
 		return nil, fmt.Errorf("newapi_sync: lookup account %d: %w", accountID, err)
 	}
 	if account == nil || account.NewAPIUserID == nil {
+		// "skipped" — caller will retry; this is not an error in our metric
+		// view, but if sustained it signals 4c is stuck.
+		metrics.RecordNewAPISyncOp(opLLMTokenIssued, resultSkipped)
 		return nil, ErrAccountNotProvisioned
 	}
 	key, err := m.client.EnsureUserAPIKey(ctx, *account.NewAPIUserID, name)
 	if err != nil {
+		metrics.RecordNewAPISyncOp(opLLMTokenIssued, resultError)
 		return nil, fmt.Errorf("newapi_sync: ensure api key for account=%d: %w", accountID, err)
 	}
+	metrics.RecordNewAPISyncOp(opLLMTokenIssued, resultSuccess)
 	return &LLMToken{
 		Key:            key.Key,
 		Name:           key.Name,
@@ -199,22 +256,64 @@ var ErrAccountNotProvisioned = fmt.Errorf("newapi_sync: account not yet provisio
 // 由 NATS consumer 订阅 `identity.topup.completed` subject 后调用（详见
 // internal/adapter/nats/consumer.go）。NATS-free 设计让单元测试不需要起 NATS。
 //
-// 无 NewAPIUserID 映射 → 跳过（账户尚未同步，4g 对账 cron 后会补上）。
-// IncrementUserQuota 失败 → 返错给 Consumer 决定 ack/nak，让 JetStream 重试。
+// **idempotency** (P0-1, 平台硬化清单)：
+// JetStream 至少一次投递，重发会双扣。eventID（由上游 envelope.event_id 透传）
+// 走 fail-closed Redis SETNX：
+//   - 第一次见 → 处理 + 在 Redis 留 24h marker
+//   - 重发      → ErrAlreadyProcessed → 视作成功（ack 消息但跳过 NewAPI 调用）
+//   - Redis 挂 → ErrRedisUnavailable → 返错，consumer NAK，JetStream 重投
+//   - eventID 空 → 警告但仍处理（envelope bug 不阻断流量）
 //
-// **注意**：方法非幂等。NATS JetStream 至少一次投递，理论上重发会双扣（增）。
-// 当前规模下罕见、可接受；4g 对账 cron 会暴露差异。生产规模上线前应加 Redis
-// SETNX 基于 event_id 去重。
-func (m *Module) OnTopupCompleted(ctx context.Context, accountID int64, amountCNY float64) error {
+// 处理失败的边缘案例：
+//   - 账户不存在 / 未同步 → 跳过 + 记日志 + 返 nil（ack）；对账 cron 会回填
+//   - amountCNY ≤ 0 → 早返 nil（ack）；不污染 dedup key
+//   - NewAPI 失败 → 返错，consumer NAK，**dedup key 保留** — 重试时会被识别
+//     为重复，需要业务层判断"上次到底有没有真扣到"。当前简化处理：dedup TTL 24h
+//     内重复都视为成功，**接受单次 NewAPI 失败 = 那次 topup 没同步**（4g 对账
+//     cron 兜底）。如果要更严格，需要 2-phase commit (mark-in-flight → mark-done)
+//     这是 P1 的事。
+func (m *Module) OnTopupCompleted(ctx context.Context, eventID string, accountID int64, amountCNY float64) error {
 	if amountCNY <= 0 {
+		metrics.RecordNewAPISyncOp(opTopupSynced, resultSkipped)
 		return nil
 	}
+
+	// Idempotency check first — short-circuits both happy-path and
+	// error-path so a missing eventID can't bypass the gate silently.
+	if m.deduper != nil {
+		switch err := m.deduper.TryProcess(ctx, eventID); {
+		case err == nil:
+			// First time we've seen this event — proceed.
+		case errors.Is(err, idempotency.ErrAlreadyProcessed):
+			metrics.RecordNewAPISyncOp(opTopupSynced, resultDuplicate)
+			slog.InfoContext(ctx, "newapi_sync: skip topup (duplicate event)",
+				"event_id", eventID, "account_id", accountID, "amount_cny", amountCNY)
+			return nil
+		case errors.Is(err, idempotency.ErrEmptyEventID):
+			// Empty eventID — process anyway but loud warning so the
+			// upstream (NATS publisher / Temporal workflow) can be fixed.
+			slog.WarnContext(ctx, "newapi_sync: topup event missing event_id, dedup bypassed",
+				"account_id", accountID, "amount_cny", amountCNY)
+		case errors.Is(err, idempotency.ErrRedisUnavailable):
+			metrics.RecordNewAPISyncOp(opTopupSynced, resultError)
+			// Fail-closed: caller MUST NAK. Bubbling the error up does
+			// exactly that. JetStream will retry once Redis recovers.
+			return fmt.Errorf("newapi_sync: dedup unavailable, will retry: %w", err)
+		default:
+			metrics.RecordNewAPISyncOp(opTopupSynced, resultError)
+			// Unknown deduper error — also fail-closed for money safety.
+			return fmt.Errorf("newapi_sync: dedup error: %w", err)
+		}
+	}
+
 	account, err := m.accounts.GetByID(ctx, accountID)
 	if err != nil {
+		metrics.RecordNewAPISyncOp(opTopupSynced, resultError)
 		return fmt.Errorf("newapi_sync: lookup account %d: %w", accountID, err)
 	}
 	if account == nil || account.NewAPIUserID == nil {
 		// 账户不存在或尚未同步 NewAPI — 跳过；对账 cron 会处理。
+		metrics.RecordNewAPISyncOp(opTopupSynced, resultSkipped)
 		slog.InfoContext(ctx, "newapi_sync: skip topup (no newapi mapping)",
 			"account_id", accountID, "amount_cny", amountCNY)
 		return nil
@@ -222,9 +321,12 @@ func (m *Module) OnTopupCompleted(ctx context.Context, accountID int64, amountCN
 	delta := int64(amountCNY * QuotaPerUnit)
 	newQuota, err := m.client.IncrementUserQuota(ctx, *account.NewAPIUserID, delta)
 	if err != nil {
+		metrics.RecordNewAPISyncOp(opTopupSynced, resultError)
 		return fmt.Errorf("newapi_sync: increment quota account=%d delta=%d: %w", accountID, delta, err)
 	}
+	metrics.RecordNewAPISyncOp(opTopupSynced, resultSuccess)
 	slog.InfoContext(ctx, "newapi_sync: topup synced",
+		"event_id", eventID,
 		"account_id", accountID,
 		"newapi_user_id", *account.NewAPIUserID,
 		"amount_cny", amountCNY,

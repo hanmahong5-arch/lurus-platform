@@ -8,8 +8,46 @@ import (
 	"testing"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/idempotency"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/newapi"
 )
+
+// fakeDeduper is a minimal in-memory Deduper for unit tests. It mimics
+// the behaviour of idempotency.WebhookDeduper without needing miniredis.
+//
+// Behaviour switches let tests target each branch:
+//
+//	emptyEventErr    — return ErrEmptyEventID for ""
+//	redisErr         — simulate fail-closed: ErrRedisUnavailable
+//	emitDuplicate    — second TryProcess for same id returns ErrAlreadyProcessed
+type fakeDeduper struct {
+	mu               sync.Mutex
+	seen             map[string]bool
+	emitDuplicate    bool
+	redisErr         bool
+	tryCalls         int
+	emptyEventReject bool
+}
+
+func (f *fakeDeduper) TryProcess(_ context.Context, eventID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tryCalls++
+	if eventID == "" && f.emptyEventReject {
+		return idempotency.ErrEmptyEventID
+	}
+	if f.redisErr {
+		return idempotency.ErrRedisUnavailable
+	}
+	if f.seen == nil {
+		f.seen = map[string]bool{}
+	}
+	if f.emitDuplicate && f.seen[eventID] {
+		return idempotency.ErrAlreadyProcessed
+	}
+	f.seen[eventID] = true
+	return nil
+}
 
 // fakeClient 是 NewAPIClient 的内存实现，记录调用次数 + 模拟 user 库。
 type fakeClient struct {
@@ -306,7 +344,7 @@ func TestOnTopupCompleted_HappyPath(t *testing.T) {
 	}
 	m := New(c, s)
 
-	if err := m.OnTopupCompleted(context.Background(), 42, 100.0); err != nil {
+	if err := m.OnTopupCompleted(context.Background(), "evt-test", 42, 100.0); err != nil {
 		t.Fatalf("OnTopupCompleted: %v", err)
 	}
 	if c.incCalls != 1 {
@@ -327,7 +365,7 @@ func TestOnTopupCompleted_NoMapping_Skips(t *testing.T) {
 	}
 	m := New(c, s)
 
-	if err := m.OnTopupCompleted(context.Background(), 42, 50.0); err != nil {
+	if err := m.OnTopupCompleted(context.Background(), "evt-1", 42, 50.0); err != nil {
 		t.Fatalf("expected nil error on missing mapping, got: %v", err)
 	}
 	if c.incCalls != 0 {
@@ -340,7 +378,7 @@ func TestOnTopupCompleted_AccountNotFound_Skips(t *testing.T) {
 	s := &fakeStore{accounts: map[int64]*entity.Account{}}
 	m := New(c, s)
 
-	if err := m.OnTopupCompleted(context.Background(), 999, 50.0); err != nil {
+	if err := m.OnTopupCompleted(context.Background(), "evt-2", 999, 50.0); err != nil {
 		t.Fatalf("expected nil error on missing account, got: %v", err)
 	}
 	if c.incCalls != 0 {
@@ -354,7 +392,7 @@ func TestOnTopupCompleted_ZeroOrNegative_NoOp(t *testing.T) {
 	m := New(c, s)
 
 	for _, amount := range []float64{0, -5.0} {
-		if err := m.OnTopupCompleted(context.Background(), 42, amount); err != nil {
+		if err := m.OnTopupCompleted(context.Background(), "evt-z", 42, amount); err != nil {
 			t.Errorf("amount=%v: expected nil error, got %v", amount, err)
 		}
 	}
@@ -455,6 +493,94 @@ func TestEnsureUserLLMToken_NewAPIError_Propagates(t *testing.T) {
 	}
 }
 
+// ── Deduper integration (P0-1 平台硬化) ─────────────────────────────────
+
+func TestOnTopupCompleted_DuplicateEvent_SkipsAndReturnsNil(t *testing.T) {
+	c := newFakeClient()
+	newapiID := 7
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: &newapiID},
+		},
+	}
+	d := &fakeDeduper{emitDuplicate: true}
+	m := New(c, s).WithDeduper(d)
+
+	if err := m.OnTopupCompleted(context.Background(), "evt-1", 42, 100.0); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	// Replay — should be a no-op AND no NewAPI call (no double-credit).
+	if err := m.OnTopupCompleted(context.Background(), "evt-1", 42, 100.0); err != nil {
+		t.Fatalf("duplicate replay should not error: %v", err)
+	}
+	if c.incCalls != 1 {
+		t.Errorf("expected exactly 1 NewAPI call, got %d (DOUBLE-CREDIT BUG)", c.incCalls)
+	}
+}
+
+func TestOnTopupCompleted_RedisDown_FailClosed_ReturnsError(t *testing.T) {
+	c := newFakeClient()
+	newapiID := 7
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: &newapiID},
+		},
+	}
+	d := &fakeDeduper{redisErr: true}
+	m := New(c, s).WithDeduper(d)
+
+	err := m.OnTopupCompleted(context.Background(), "evt-x", 42, 50.0)
+	if err == nil {
+		t.Fatal("Redis unavailable should bubble up so consumer NAKs (fail-closed)")
+	}
+	if !errors.Is(err, idempotency.ErrRedisUnavailable) {
+		t.Errorf("expected wrapped ErrRedisUnavailable, got %v", err)
+	}
+	if c.incCalls != 0 {
+		t.Errorf("must not credit NewAPI when dedup is unavailable; got %d calls", c.incCalls)
+	}
+}
+
+func TestOnTopupCompleted_EmptyEventID_ProcessesWithWarning(t *testing.T) {
+	c := newFakeClient()
+	newapiID := 7
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: &newapiID},
+		},
+	}
+	d := &fakeDeduper{emptyEventReject: true}
+	m := New(c, s).WithDeduper(d)
+
+	// Empty event ID = upstream envelope bug; we don't drop the topup.
+	if err := m.OnTopupCompleted(context.Background(), "", 42, 50.0); err != nil {
+		t.Fatalf("empty event ID should not block traffic, got: %v", err)
+	}
+	if c.incCalls != 1 {
+		t.Errorf("expected NewAPI to be credited despite missing event_id, got %d", c.incCalls)
+	}
+}
+
+func TestOnTopupCompleted_NoDeduper_StillWorks(t *testing.T) {
+	// dev / unit-test path: module without WithDeduper still functions
+	// (no dedup, but no panic). Production main.go ALWAYS wires one.
+	c := newFakeClient()
+	newapiID := 7
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: &newapiID},
+		},
+	}
+	m := New(c, s) // no WithDeduper
+
+	if err := m.OnTopupCompleted(context.Background(), "evt-no-dedup", 42, 50.0); err != nil {
+		t.Fatalf("module without deduper should still work: %v", err)
+	}
+	if c.incCalls != 1 {
+		t.Errorf("expected 1 credit, got %d", c.incCalls)
+	}
+}
+
 func TestOnTopupCompleted_IncrementError_Propagates(t *testing.T) {
 	c := newFakeClient()
 	c.incError = errors.New("newapi down")
@@ -466,7 +592,7 @@ func TestOnTopupCompleted_IncrementError_Propagates(t *testing.T) {
 	}
 	m := New(c, s)
 
-	err := m.OnTopupCompleted(context.Background(), 42, 100.0)
+	err := m.OnTopupCompleted(context.Background(), "evt-test", 42, 100.0)
 	if err == nil {
 		t.Fatal("expected error to propagate so consumer can NAK")
 	}
