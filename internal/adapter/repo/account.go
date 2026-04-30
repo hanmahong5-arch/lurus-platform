@@ -35,6 +35,25 @@ func (r *AccountRepo) SetNewAPIUserID(ctx context.Context, accountID int64, newa
 		Error
 }
 
+// ListWithoutNewAPIUser 返回还没绑 NewAPI 用户的 platform 账号（最旧的优先）。
+// limit 防止单次扫描扛起整个表 — reconcile cron 每 tick 处理一批，多轮追平。
+//
+// 用 partial unique index `idx_accounts_newapi_user_id_unique`（migration 027）
+// 覆盖 NULL 行的查询，所以即便 accounts 表很大，这个 query 仍然 cheap。
+func (r *AccountRepo) ListWithoutNewAPIUser(ctx context.Context, limit int) ([]*entity.Account, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var out []*entity.Account
+	err := r.db.WithContext(ctx).
+		Where("newapi_user_id IS NULL").
+		Order("id ASC").
+		Limit(limit).
+		Find(&out).
+		Error
+	return out, err
+}
+
 func (r *AccountRepo) GetByID(ctx context.Context, id int64) (*entity.Account, error) {
 	var a entity.Account
 	err := r.db.WithContext(ctx).First(&a, id).Error

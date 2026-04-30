@@ -802,6 +802,19 @@ func run(ctx context.Context, cfg *config.Config) error {
 		})
 	}
 
+	// newapi_sync reconcile cron — backfill orphan accounts that missed
+	// the OnAccountCreated hook (NewAPI down at signup, hook crashed
+	// mid-flight). Ticks every 5 minutes by default; idempotent retry
+	// via OnAccountCreated's find-then-create. See P1-4 in the
+	// hardening list and internal/module/newapi_sync/reconcile.go.
+	// Disabled (loop blocks on ctx) when newapiSyncMod is nil — same
+	// nil-safety as the rest of the integration.
+	if newapiSyncMod != nil {
+		g.Go(func() error {
+			return newapiSyncMod.RunReconcileLoop(gctx, newapi_sync.DefaultReconcileInterval, newapi_sync.DefaultReconcileBatch)
+		})
+	}
+
 	// Graceful shutdown trigger. The grace window must exceed the 30s QR
 	// long-poll cap (see qrMaxPollWait) so in-flight long polls can return
 	// naturally instead of being severed mid-flight. gRPC shutdown piggybacks

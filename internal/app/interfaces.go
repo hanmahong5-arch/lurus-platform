@@ -27,6 +27,16 @@ type accountStore interface {
 	// NewAPI sync flow to remember the just-created NewAPI user_id so
 	// subsequent top-ups know whom to credit.
 	SetNewAPIUserID(ctx context.Context, accountID int64, newapiUserID int) error
+	// ListWithoutNewAPIUser returns up to `limit` accounts whose NewAPI
+	// user mapping is NULL. Used by the newapi_sync reconciliation cron
+	// (P1-4) to backfill accounts that missed the OnAccountCreated hook
+	// (NewAPI down at signup, hook crashed mid-flight, etc.).
+	//
+	// Order is FIFO by id so older orphans get retried first. Caller
+	// processes each account, marks it (via SetNewAPIUserID), then re-
+	// queries for the next batch — eventual consistency without a single
+	// big LIMIT scan.
+	ListWithoutNewAPIUser(ctx context.Context, limit int) ([]*entity.Account, error)
 }
 
 // walletStore is the minimal DB interface required by WalletService and VIPService.

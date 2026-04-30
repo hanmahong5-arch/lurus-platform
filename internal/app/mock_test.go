@@ -189,6 +189,25 @@ func (m *mockAccountStore) SetNewAPIUserID(_ context.Context, accountID int64, n
 	return nil
 }
 
+func (m *mockAccountStore) ListWithoutNewAPIUser(_ context.Context, limit int) ([]*entity.Account, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	out := make([]*entity.Account, 0, len(m.byID))
+	for _, a := range m.byID {
+		if a.NewAPIUserID == nil {
+			cp := *a
+			out = append(out, &cp)
+		}
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // ── walletStore mock ──────────────────────────────────────────────────────────
 
 type mockWalletStore struct {

@@ -49,6 +49,10 @@ const (
 type AccountStore interface {
 	SetNewAPIUserID(ctx context.Context, accountID int64, newapiUserID int) error
 	GetByID(ctx context.Context, id int64) (*entity.Account, error)
+	// ListWithoutNewAPIUser returns up to `limit` accounts whose NewAPI
+	// mapping is NULL — used by the reconciliation cron (P1-4) to backfill
+	// orphans from earlier failed OnAccountCreated hooks.
+	ListWithoutNewAPIUser(ctx context.Context, limit int) ([]*entity.Account, error)
 }
 
 // NewAPIClient 是 NewAPI admin 客户端契约 — 形状和 *newapi.Client 一致，但

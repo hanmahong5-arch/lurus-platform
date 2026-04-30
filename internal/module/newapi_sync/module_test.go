@@ -187,6 +187,25 @@ func (s *fakeStore) GetByID(_ context.Context, id int64) (*entity.Account, error
 	return &cp, nil
 }
 
+// ListWithoutNewAPIUser — used by ReconcileTick. Default fake returns
+// orphans from the in-memory map; tests that need error injection
+// embed this fake (see reconcileFakeStore).
+func (s *fakeStore) ListWithoutNewAPIUser(_ context.Context, limit int) ([]*entity.Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*entity.Account, 0, len(s.accounts))
+	for _, a := range s.accounts {
+		if a.NewAPIUserID == nil {
+			cp := *a
+			out = append(out, &cp)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func TestNew_NilDeps(t *testing.T) {
 	if New(nil, &fakeStore{}) != nil {
 		t.Error("expected nil when client is nil")

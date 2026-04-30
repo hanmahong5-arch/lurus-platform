@@ -141,6 +141,10 @@ func (m *mockAccountStore) SetNewAPIUserID(_ context.Context, _ int64, _ int) er
 	return nil
 }
 
+func (m *mockAccountStore) ListWithoutNewAPIUser(_ context.Context, _ int) ([]*entity.Account, error) {
+	return nil, nil
+}
+
 // seed inserts a test account and returns a copy.
 func (m *mockAccountStore) seed(a entity.Account) *entity.Account {
 	_ = m.Create(context.Background(), &a)

@@ -57,6 +57,9 @@ func (s *adminHandlerAccountStub) GetByOAuthBinding(context.Context, string, str
 	return nil, nil
 }
 func (s *adminHandlerAccountStub) SetNewAPIUserID(context.Context, int64, int) error { return nil }
+func (s *adminHandlerAccountStub) ListWithoutNewAPIUser(context.Context, int) ([]*entity.Account, error) {
+	return nil, nil
+}
 
 // minimal walletStore + vipStore stubs that AccountService can swallow.
 // Neither is invoked along the DeleteRequest path (which only reads

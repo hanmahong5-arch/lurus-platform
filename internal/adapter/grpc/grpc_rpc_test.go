@@ -151,6 +151,10 @@ func (m *grpcMockAccountStore) SetNewAPIUserID(_ context.Context, _ int64, _ int
 	return nil
 }
 
+func (m *grpcMockAccountStore) ListWithoutNewAPIUser(_ context.Context, _ int) ([]*entity.Account, error) {
+	return nil, nil
+}
+
 // grpcMockWalletStore satisfies app.walletStore.
 type grpcMockWalletStore struct {
 	mu        sync.Mutex
