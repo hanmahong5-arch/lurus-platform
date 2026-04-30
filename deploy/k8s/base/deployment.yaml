@@ -28,7 +28,7 @@ spec:
         prometheus.io/path: "/metrics"
         # Bump to force rollout when image tag :main moves. Value is
         # the short SHA of the last commit we want this deploy to track.
-        rollout.lurus.cn/revision: "87d4b19"
+        rollout.lurus.cn/revision: "f4183c7"
     spec:
       # ServiceAccount grants scoped Secret/Deployment RBAC needed by the
       # app_registry reconciler (see rbac-app-registry.yaml).
