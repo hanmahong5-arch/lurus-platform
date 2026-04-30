@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -96,20 +97,42 @@ func (s *CheckinService) GetStatus(ctx context.Context, accountID int64) (*Check
 	}, nil
 }
 
+// ErrCheckinAlreadyToday is the typed error every layer (repo / service /
+// handler) returns when the (account_id, checkin_date) unique constraint
+// rejects an INSERT. Caller branches on errors.Is to render a friendly
+// message instead of a DB-level "duplicate key" surface.
+//
+// Defined here (not in a separate errors.go) because it's the ONLY
+// app-layer sentinel anyone needs from this service — premature
+// generalisation would just add files for no caller win.
+var ErrCheckinAlreadyToday = errors.New("checkin: already checked in today")
+
 // DoCheckin performs a daily check-in for the account.
+//
+// Concurrency model: the previous read-then-write pattern (GetByAccountAndDate
+// then Create) was a TOCTOU race — two concurrent callers would BOTH pass
+// the read check then both attempt Create, and only the DB-level unique
+// constraint kept us from double-crediting the wallet. The race window
+// was small but real and caught by TestCheckinService_DoCheckin_Concurrent.
+//
+// Fixed by collapsing into a single atomic insert with ON CONFLICT DO
+// NOTHING on (account_id, checkin_date). The repo signals "the row was
+// already there" via ErrCheckinAlreadyToday. We branch on that and
+// return cleanly WITHOUT crediting the wallet — eliminating the
+// double-credit class of bugs.
+//
+// Note: CountConsecutive runs BEFORE the insert. That's safe because the
+// streak count is monotonic up to today's insertion — a concurrent
+// successful insert by another goroutine for the SAME account would mean
+// only one of us wins the OnConflict race, and we'd return early on the
+// loser side without crediting. The winner sees a valid (read-then-insert)
+// streak count for itself. (Different accounts are never racing on the
+// same row.)
 func (s *CheckinService) DoCheckin(ctx context.Context, accountID int64) (*CheckinResult, error) {
 	today := time.Now().Format("2006-01-02")
 
-	// Check if already checked in today.
-	existing, err := s.checkins.GetByAccountAndDate(ctx, accountID, today)
-	if err != nil {
-		return nil, fmt.Errorf("checkin: lookup today: %w", err)
-	}
-	if existing != nil {
-		return nil, fmt.Errorf("checkin: already checked in today")
-	}
-
-	// Count consecutive days (including yesterday).
+	// Count consecutive days (including yesterday). Reads only — concurrent
+	// callers reading the same value is fine.
 	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
 	consecutiveDays, err := s.checkins.CountConsecutive(ctx, accountID, yesterday)
 	if err != nil {
@@ -118,21 +141,26 @@ func (s *CheckinService) DoCheckin(ctx context.Context, accountID int64) (*Check
 	// Today's checkin makes it consecutive+1.
 	consecutiveDays++
 
-	// Calculate reward based on streak.
 	reward := calculateCheckinReward(consecutiveDays)
 
-	// Create checkin record.
 	checkin := &entity.Checkin{
 		AccountID:   accountID,
 		CheckinDate: today,
 		RewardType:  "credits",
 		RewardValue: reward,
 	}
+	// Atomic insert-or-noop. Repo returns ErrCheckinAlreadyToday when
+	// the row already existed (DB unique constraint enforced).
 	if err := s.checkins.Create(ctx, checkin); err != nil {
+		if errors.Is(err, ErrCheckinAlreadyToday) {
+			return nil, ErrCheckinAlreadyToday
+		}
 		return nil, fmt.Errorf("checkin: create record: %w", err)
 	}
 
-	// Credit wallet.
+	// We won the race for today. Credit the wallet. (Concurrent caller
+	// for the same account would have returned ErrCheckinAlreadyToday
+	// above and never reached here, so no double-credit.)
 	tx, err := s.wallets.Credit(ctx, accountID, reward,
 		entity.TxTypeCheckinReward,
 		fmt.Sprintf("Daily checkin reward (day %d streak)", consecutiveDays),

@@ -1,8 +1,8 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
@@ -42,8 +42,15 @@ func (h *CheckinHandler) DoCheckin(c *gin.Context) {
 	}
 	result, err := h.checkin.DoCheckin(c.Request.Context(), accountID)
 	if err != nil {
-		if strings.Contains(err.Error(), "already checked in") {
-			c.JSON(http.StatusConflict, gin.H{"error": "already checked in today"})
+		// Branch on the typed sentinel rather than substring-matching on
+		// err.Error() — the previous strings.Contains check broke as soon
+		// as the message wording was tweaked. errors.Is is stable across
+		// wrapping (fmt.Errorf %w) too.
+		if errors.Is(err, app.ErrCheckinAlreadyToday) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":      "already_checked_in_today",
+				"message":    "今天已经签到过了，明天再来吧",
+			})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "checkin failed"})

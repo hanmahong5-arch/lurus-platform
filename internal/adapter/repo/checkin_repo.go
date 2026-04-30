@@ -5,8 +5,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // CheckinRepo provides persistence operations for daily check-ins.
@@ -19,9 +21,31 @@ func NewCheckinRepo(db *gorm.DB) *CheckinRepo {
 	return &CheckinRepo{db: db}
 }
 
-// Create inserts a new checkin record. Returns an error if the daily unique constraint is violated.
+// Create inserts a new checkin record. Uses ON CONFLICT DO NOTHING on the
+// (account_id, checkin_date) unique constraint to make the insert
+// idempotent — a concurrent caller racing on the same (account, day)
+// pair will see app.ErrCheckinAlreadyToday rather than the DB-level
+// "duplicate key" surface, and the wallet-credit step downstream can be
+// skipped cleanly. This collapses the previous TOCTOU read-then-write
+// pattern in CheckinService.DoCheckin into a single atomic statement.
+//
+// Returns:
+//   - nil                          on successful insert
+//   - app.ErrCheckinAlreadyToday   on conflict (today already checked-in)
+//   - any other DB error           on infrastructure failure
 func (r *CheckinRepo) Create(ctx context.Context, c *entity.Checkin) error {
-	return r.db.WithContext(ctx).Create(c).Error
+	res := r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(c)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		// DB-level uniqueness rejected the insert without raising an
+		// error (DoNothing path). This IS the "already today" condition.
+		return app.ErrCheckinAlreadyToday
+	}
+	return nil
 }
 
 // GetByAccountAndDate returns the checkin for the given account and date, or nil if not found.

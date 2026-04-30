@@ -1161,13 +1161,13 @@ func (m *mockCheckinStore) Create(_ context.Context, c *entity.Checkin) error {
 	if m.createErr != nil {
 		return m.createErr
 	}
-	// Mirror the prod DB's UNIQUE(account_id, checkin_date) so the
-	// concurrent-checkin test exercises the real conflict path. Without
-	// this, the read-then-write TOCTOU in CheckinService lets multiple
-	// goroutines all "succeed" against the mock.
+	// Mirror the prod DB's UNIQUE(account_id, checkin_date) + the repo's
+	// ON CONFLICT DO NOTHING contract: duplicate insert returns the typed
+	// ErrCheckinAlreadyToday so the service can branch cleanly without
+	// double-crediting the wallet.
 	for _, existing := range m.checkins {
 		if existing.AccountID == c.AccountID && existing.CheckinDate == c.CheckinDate {
-			return fmt.Errorf("mock checkin store: duplicate (account_id=%d date=%s)", c.AccountID, c.CheckinDate)
+			return ErrCheckinAlreadyToday
 		}
 	}
 	c.ID = m.nextID

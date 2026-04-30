@@ -33,6 +33,12 @@ func checkinKey(accountID int64, date string) string {
 
 func (m *mockCheckinStoreH) Create(_ context.Context, c *entity.Checkin) error {
 	key := formatCheckinKey(c.AccountID, c.CheckinDate)
+	// Mirror prod DB UNIQUE(account_id, checkin_date) + the repo's
+	// ON CONFLICT DO NOTHING contract: duplicate insert returns the
+	// typed sentinel so the service can branch cleanly.
+	if _, exists := m.checkins[key]; exists {
+		return app.ErrCheckinAlreadyToday
+	}
 	m.checkins[key] = c
 	ym := c.CheckinDate[:7]
 	monthKey := formatMonthKey(c.AccountID, ym)
@@ -222,10 +228,15 @@ func TestCheckinHandler_GetStatus_AfterCheckin(t *testing.T) {
 
 // ---------- error-injecting store ----------
 
-// errCheckinStoreH wraps mockCheckinStoreH with a configurable lookup error.
+// errCheckinStoreH wraps mockCheckinStoreH with configurable per-method
+// errors. lookupErr remains for GetStatus path coverage; createErr +
+// countErr exercise the new ON-CONFLICT-DO-NOTHING flow on DoCheckin
+// (GetByAccountAndDate is no longer in DoCheckin's hot path post-TOCTOU-fix).
 type errCheckinStoreH struct {
 	*mockCheckinStoreH
 	lookupErr error
+	countErr  error
+	createErr error
 }
 
 func (s *errCheckinStoreH) GetByAccountAndDate(ctx context.Context, accountID int64, date string) (*entity.Checkin, error) {
@@ -233,6 +244,20 @@ func (s *errCheckinStoreH) GetByAccountAndDate(ctx context.Context, accountID in
 		return nil, s.lookupErr
 	}
 	return s.mockCheckinStoreH.GetByAccountAndDate(ctx, accountID, date)
+}
+
+func (s *errCheckinStoreH) CountConsecutive(ctx context.Context, accountID int64, date string) (int, error) {
+	if s.countErr != nil {
+		return 0, s.countErr
+	}
+	return s.mockCheckinStoreH.CountConsecutive(ctx, accountID, date)
+}
+
+func (s *errCheckinStoreH) Create(ctx context.Context, c *entity.Checkin) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
+	return s.mockCheckinStoreH.Create(ctx, c)
 }
 
 // ---------- error path tests ----------
@@ -259,11 +284,12 @@ func TestCheckinHandler_GetStatus_Error(t *testing.T) {
 }
 
 // TestCheckinHandler_DoCheckin_GenericError verifies that a non-duplicate store error
-// returns 500 (not 409).
+// returns 500 (not 409). Post TOCTOU-fix the failure surface is the
+// Create call, not GetByAccountAndDate.
 func TestCheckinHandler_DoCheckin_GenericError(t *testing.T) {
 	errStore := &errCheckinStoreH{
 		mockCheckinStoreH: newMockCheckinStoreH(),
-		lookupErr:         fmt.Errorf("connection reset"),
+		createErr:         fmt.Errorf("connection reset"),
 	}
 	svc := app.NewCheckinService(errStore, newMockWalletStore())
 	h := NewCheckinHandler(svc)

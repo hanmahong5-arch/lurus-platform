@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -365,17 +366,23 @@ func TestCheckinService_GetStatus_ListError(t *testing.T) {
 	}
 }
 
-// TestCheckinService_DoCheckin_LookupError verifies DoCheckin propagates lookup error.
-func TestCheckinService_DoCheckin_LookupError(t *testing.T) {
-	errStore := &errCheckinLookupStore{
-		mockCheckinStore: newMockCheckinStore(),
-		lookupErr:        fmt.Errorf("lookup failed"),
-	}
-	svc := NewCheckinService(errStore, newMockWalletStore())
+// TestCheckinService_DoCheckin_AlreadyToday returns ErrCheckinAlreadyToday
+// (not a wrapped DB error) when the account already checked in today.
+// This is the post-TOCTOU-fix flow: the service no longer reads-then-writes;
+// the repo's ON CONFLICT path returns the typed sentinel directly.
+func TestCheckinService_DoCheckin_AlreadyToday(t *testing.T) {
+	store := newMockCheckinStore()
+	// Pre-seed today's checkin so the next DoCheckin's Create hits the
+	// uniqueness conflict.
+	today := time.Now().Format("2006-01-02")
+	_ = store.Create(context.Background(), &entity.Checkin{
+		AccountID: 1, CheckinDate: today, RewardType: "credits", RewardValue: 0.10,
+	})
 
+	svc := NewCheckinService(store, newMockWalletStore())
 	_, err := svc.DoCheckin(context.Background(), 1)
-	if err == nil {
-		t.Error("expected error from GetByAccountAndDate, got nil")
+	if !errors.Is(err, ErrCheckinAlreadyToday) {
+		t.Errorf("expected ErrCheckinAlreadyToday, got %v", err)
 	}
 }
 
