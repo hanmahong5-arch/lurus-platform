@@ -179,6 +179,56 @@ func TestIncrementUserQuota_ReadModifyWrite(t *testing.T) {
 	}
 }
 
+func TestEnsureUserAPIKey_HappyPath(t *testing.T) {
+	called := false
+	c, _ := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if !strings.HasSuffix(r.URL.Path, "/api/user/42/api-key") {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["name"] != "lucrum" {
+			t.Errorf("name in body = %v", body["name"])
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":99,"user_id":42,"name":"lucrum","key":"sk-abc123","unlimited_quota":true}}`))
+	})
+	key, err := c.EnsureUserAPIKey(context.Background(), 42, "lucrum")
+	if err != nil {
+		t.Fatalf("EnsureUserAPIKey: %v", err)
+	}
+	if !called {
+		t.Error("server never called")
+	}
+	if key.Key != "sk-abc123" || key.ID != 99 || key.UserID != 42 {
+		t.Errorf("unexpected key: %+v", key)
+	}
+}
+
+func TestEnsureUserAPIKey_EmptyKeyIsError(t *testing.T) {
+	c, _ := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":99,"user_id":42,"name":"x","key":""}}`))
+	})
+	_, err := c.EnsureUserAPIKey(context.Background(), 42, "x")
+	if err == nil || !strings.Contains(err.Error(), "empty api key") {
+		t.Errorf("expected empty-key error, got %v", err)
+	}
+}
+
+func TestEnsureUserAPIKey_404SurfacesAsErr(t *testing.T) {
+	c, _ := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"success":false,"message":"endpoint not found — newapi fork not deployed"}`))
+	})
+	_, err := c.EnsureUserAPIKey(context.Background(), 42, "x")
+	if err == nil {
+		t.Fatal("expected error on 404")
+	}
+}
+
 func TestDo_HTTP404IsStatusErr(t *testing.T) {
 	c, _ := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

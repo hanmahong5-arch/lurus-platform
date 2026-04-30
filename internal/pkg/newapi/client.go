@@ -185,6 +185,47 @@ func (c *Client) IncrementUserQuota(ctx context.Context, id int, delta int64) (i
 	return newQuota, nil
 }
 
+// APIKey 是 NewAPI per-user API token 的对外契约（不是 admin access_token）。
+// .Key 是用户的 OpenAI-compatible bearer：products 用 `Authorization: Bearer <Key>`
+// 直连 newapi.lurus.cn 的 /v1/* endpoints。
+type APIKey struct {
+	ID             int    `json:"id"`
+	UserID         int    `json:"user_id"`
+	Name           string `json:"name"`
+	Key            string `json:"key"`
+	UnlimitedQuota bool   `json:"unlimited_quota"`
+}
+
+// EnsureUserAPIKey upserts a per-user API key keyed by name, returning the
+// existing entry on repeated calls. Idempotent on (user_id, name) — NewAPI
+// admin endpoint enforces that contract; this client just forwards.
+//
+// Default behaviour (empty name) → NewAPI uses "lurus-platform-default"
+// per the admin endpoint's contract.
+//
+// 注意：requires the local NewAPI fork to expose POST /api/user/:id/api-key
+// (上游 QuantumNous/new-api 没这个端点)。404 → 返回 statusErr，调用方据此
+// 提示运维 NewAPI 镜像未升级。
+func (c *Client) EnsureUserAPIKey(ctx context.Context, userID int, name string) (*APIKey, error) {
+	body := map[string]any{}
+	if strings.TrimSpace(name) != "" {
+		body["name"] = name
+	}
+	path := "/api/user/" + strconv.Itoa(userID) + "/api-key"
+	resp, err := c.do(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return nil, fmt.Errorf("newapi: ensure api key user=%d name=%q: %w", userID, name, err)
+	}
+	var key APIKey
+	if err := json.Unmarshal(resp, &key); err != nil {
+		return nil, fmt.Errorf("newapi: decode api key response: %w", err)
+	}
+	if key.Key == "" {
+		return nil, fmt.Errorf("newapi: empty api key returned for user %d", userID)
+	}
+	return &key, nil
+}
+
 // ── HTTP 底层 ─────────────────────────────────────────────────────────────
 
 // statusErr 包装 NewAPI 的 4xx/5xx 响应，让 callers 可以 errors.As 出来。

@@ -41,7 +41,22 @@ type NewAPIClient interface {
 	CreateUser(ctx context.Context, username, displayName string) error
 	FindUserByUsername(ctx context.Context, username string) (int, error)
 	IncrementUserQuota(ctx context.Context, id int, delta int64) (int64, error)
+	EnsureUserAPIKey(ctx context.Context, userID int, name string) (*newapi.APIKey, error)
 }
+
+// LLMToken is the per-product LLM credential the platform hands out via
+// /api/v1/account/me/llm-token. Stable wire shape — products consume `Key`
+// as `Authorization: Bearer <key>` against newapi.lurus.cn.
+type LLMToken struct {
+	Key            string `json:"key"`
+	Name           string `json:"name"`
+	UnlimitedQuota bool   `json:"unlimited_quota"`
+}
+
+// DefaultTokenName is the per-account default key name. Each platform account
+// gets one such key; products can request scoped keys later via name=...
+// (extension point — current callers only use the default).
+const DefaultTokenName = "lurus-platform-default"
 
 // QuotaPerUnit 把"1 CNY"换算为 NewAPI quota 单位。NewAPI 上游硬编码
 // `common.QuotaPerUnit = 500000` — 即 ¥1 = 500_000 quota。我们在 platform 侧
@@ -135,6 +150,48 @@ func (m *Module) Register(r *module.Registry) {
 	r.OnAccountCreated(m.OnAccountCreated)
 	slog.Info("module registered", "module", "newapi_sync")
 }
+
+// EnsureUserLLMToken returns a usable per-account LLM token (idempotent on
+// repeated calls — same key comes back every time). Implements C.2 step 4e.
+//
+// Decoupling: handler layer calls this; module orchestrates account lookup
+// + NewAPI admin call. No DB persistence on platform side — NewAPI is the
+// source of truth for keys, and its admin endpoint is itself idempotent.
+//
+// Error shape:
+//   - account not found / not yet synced → ErrAccountNotProvisioned
+//     (caller maps to 503 + "try again later" so user knows it's transient)
+//   - NewAPI down or 5xx → wrapped error (caller maps to 502)
+//
+// Extensibility: `name` argument lets future callers request product-scoped
+// keys ("lucrum", "tally"). DefaultTokenName covers the common case.
+func (m *Module) EnsureUserLLMToken(ctx context.Context, accountID int64, name string) (*LLMToken, error) {
+	if name == "" {
+		name = DefaultTokenName
+	}
+	account, err := m.accounts.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("newapi_sync: lookup account %d: %w", accountID, err)
+	}
+	if account == nil || account.NewAPIUserID == nil {
+		return nil, ErrAccountNotProvisioned
+	}
+	key, err := m.client.EnsureUserAPIKey(ctx, *account.NewAPIUserID, name)
+	if err != nil {
+		return nil, fmt.Errorf("newapi_sync: ensure api key for account=%d: %w", accountID, err)
+	}
+	return &LLMToken{
+		Key:            key.Key,
+		Name:           key.Name,
+		UnlimitedQuota: key.UnlimitedQuota,
+	}, nil
+}
+
+// ErrAccountNotProvisioned signals "account exists in platform but its
+// NewAPI mirror hasn't been created yet" — distinct from NewAPI-side
+// failures so callers can show a transient-please-retry state instead
+// of a hard error.
+var ErrAccountNotProvisioned = fmt.Errorf("newapi_sync: account not yet provisioned in NewAPI")
 
 // OnTopupCompleted 是充值同步钩子（C.2 step 4d）：用户在 platform 钱包成功
 // 充值 amountCNY 后调用，把等额 quota 增加到对应的 NewAPI user 上。

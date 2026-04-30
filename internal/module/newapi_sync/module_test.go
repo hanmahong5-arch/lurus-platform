@@ -3,6 +3,7 @@ package newapi_sync
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -15,13 +16,16 @@ type fakeClient struct {
 	mu              sync.Mutex
 	users           map[string]int // username -> id
 	quotas          map[int]int64  // id -> quota (for IncrementUserQuota)
+	apiKeys         []apiKeyEntry
 	nextID          int
+	nextKey         int
 	createCalls     int
 	findCalls       int
 	incCalls        int
 	createUserError error
 	findError       error
 	incError        error
+	ensureKeyError  error
 }
 
 func newFakeClient() *fakeClient {
@@ -37,6 +41,39 @@ func (f *fakeClient) IncrementUserQuota(_ context.Context, id int, delta int64) 
 	}
 	f.quotas[id] += delta
 	return f.quotas[id], nil
+}
+
+// fakeAPIKeys: per (userID, name) → APIKey. EnsureUserAPIKey is idempotent
+// so we record the issued key on first call and replay on subsequent ones.
+type apiKeyEntry struct {
+	userID int
+	name   string
+	key    *newapi.APIKey
+}
+
+func (f *fakeClient) EnsureUserAPIKey(_ context.Context, userID int, name string) (*newapi.APIKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ensureKeyError != nil {
+		return nil, f.ensureKeyError
+	}
+	for _, e := range f.apiKeys {
+		if e.userID == userID && e.name == name {
+			cp := *e.key
+			return &cp, nil
+		}
+	}
+	f.nextKey++
+	key := &newapi.APIKey{
+		ID:             f.nextKey,
+		UserID:         userID,
+		Name:           name,
+		Key:            "sk-fake-" + strings.ToLower(name),
+		UnlimitedQuota: true,
+	}
+	f.apiKeys = append(f.apiKeys, apiKeyEntry{userID, name, key})
+	cp := *key
+	return &cp, nil
 }
 
 func (f *fakeClient) CreateUser(_ context.Context, username, _ string) error {
@@ -323,6 +360,98 @@ func TestOnTopupCompleted_ZeroOrNegative_NoOp(t *testing.T) {
 	}
 	if c.incCalls != 0 {
 		t.Error("expected zero NewAPI calls for non-positive amounts")
+	}
+}
+
+// ── EnsureUserLLMToken (4e) ───────────────────────────────────────────────
+
+func TestEnsureUserLLMToken_HappyPath_DefaultName(t *testing.T) {
+	c := newFakeClient()
+	newapiID := 7
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: &newapiID},
+		},
+	}
+	m := New(c, s)
+
+	tok, err := m.EnsureUserLLMToken(context.Background(), 42, "")
+	if err != nil {
+		t.Fatalf("EnsureUserLLMToken: %v", err)
+	}
+	if tok.Key == "" || !strings.HasPrefix(tok.Key, "sk-fake-") {
+		t.Errorf("unexpected key %q", tok.Key)
+	}
+	if tok.Name != DefaultTokenName {
+		t.Errorf("name = %q, want %q", tok.Name, DefaultTokenName)
+	}
+}
+
+func TestEnsureUserLLMToken_Idempotent(t *testing.T) {
+	c := newFakeClient()
+	newapiID := 7
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: &newapiID},
+		},
+	}
+	m := New(c, s)
+
+	t1, _ := m.EnsureUserLLMToken(context.Background(), 42, "lucrum")
+	t2, _ := m.EnsureUserLLMToken(context.Background(), 42, "lucrum")
+	if t1.Key != t2.Key {
+		t.Errorf("expected same key on repeat, got %q vs %q", t1.Key, t2.Key)
+	}
+	// Different name → different key.
+	t3, _ := m.EnsureUserLLMToken(context.Background(), 42, "tally")
+	if t3.Key == t1.Key {
+		t.Errorf("expected distinct key for different name, got same %q", t3.Key)
+	}
+}
+
+func TestEnsureUserLLMToken_UnprovisionedAccount_TypedError(t *testing.T) {
+	c := newFakeClient()
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: nil}, // not yet synced
+		},
+	}
+	m := New(c, s)
+
+	_, err := m.EnsureUserLLMToken(context.Background(), 42, "")
+	if !errors.Is(err, ErrAccountNotProvisioned) {
+		t.Errorf("expected ErrAccountNotProvisioned, got %v", err)
+	}
+}
+
+func TestEnsureUserLLMToken_AccountMissing_TypedError(t *testing.T) {
+	c := newFakeClient()
+	s := &fakeStore{accounts: map[int64]*entity.Account{}}
+	m := New(c, s)
+
+	_, err := m.EnsureUserLLMToken(context.Background(), 999, "")
+	if !errors.Is(err, ErrAccountNotProvisioned) {
+		t.Errorf("expected ErrAccountNotProvisioned for missing account, got %v", err)
+	}
+}
+
+func TestEnsureUserLLMToken_NewAPIError_Propagates(t *testing.T) {
+	c := newFakeClient()
+	c.ensureKeyError = errors.New("newapi 503")
+	newapiID := 7
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: &newapiID},
+		},
+	}
+	m := New(c, s)
+
+	_, err := m.EnsureUserLLMToken(context.Background(), 42, "")
+	if err == nil {
+		t.Fatal("expected error to propagate")
+	}
+	if errors.Is(err, ErrAccountNotProvisioned) {
+		t.Errorf("NewAPI error should NOT be ErrAccountNotProvisioned (different surface)")
 	}
 }
 

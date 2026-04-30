@@ -42,6 +42,7 @@ type Deps struct {
 	OpsCatalog      *handler.OpsCatalogHandler      // privileged-op catalogue (Phase 4 / Sprint 2)
 	APIKeysAdmin    *handler.APIKeysAdminHandler    // /admin/v1/api-keys/* — Lurus API key abstraction over Zitadel
 	Whoami          *handler.WhoamiHandler          // /api/v1/whoami — drop-in identity contract for *.lurus.cn products
+	LLMToken        *handler.LLMTokenHandler        // /api/v1/account/me/llm-token — drop-in NewAPI bearer for LLM products
 	NewAPIProxy     *handler.NewAPIProxyHandler     // nil when newapi proxy is not configured
 	MemorusProxy    *handler.MemorusProxyHandler    // nil when memorus URL/key not configured
 	ServiceKeyAdmin *handler.AdminServiceKeyHandler // nil when service key management not wired
@@ -184,6 +185,13 @@ func Build(deps Deps) *gin.Engine {
 		r.POST("/api/v1/auth/logout", func(c *gin.Context) {
 			deps.Whoami.Logout(c, deps.CookieDomain)
 		})
+	}
+
+	// /api/v1/account/me/llm-token — drop-in NewAPI bearer for LLM
+	// products. Same auth shape as /whoami (cookie OR Bearer); see
+	// handler/llm_token_handler.go.
+	if deps.LLMToken != nil {
+		r.GET("/api/v1/account/me/llm-token", deps.LLMToken.Get)
 	}
 
 	// Public user API — requires Zitadel JWT or lurus session token

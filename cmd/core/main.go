@@ -468,6 +468,10 @@ func run(ctx context.Context, cfg *config.Config) error {
 		WithCookieDomain(cookieDomain)
 	registrationH := handler.NewRegistrationHandler(registrationSvc).WithCookieDomain(cookieDomain)
 	whoamiH := handler.NewWhoamiHandler(accountSvc, cfg.SessionSecret)
+	// LLM-token handler is wired with the same newapi_sync.Module that
+	// powers 4c+4d. nil-safe: when env vars are unset the module is nil
+	// and the endpoint returns a clear 503 (not a silent SPA fallback).
+	llmTokenH := handler.NewLLMTokenHandler(cfg.SessionSecret, newapiSyncMod)
 	checkinH := handler.NewCheckinHandler(checkinSvc)
 	orgH := handler.NewOrganizationHandler(orgSvc)
 	qrLoginH := handler.NewQRLoginHandler(rdb, cfg.SessionSecret)
@@ -663,6 +667,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		OpsCatalog:        opsCatalogH,
 		APIKeysAdmin:      apiKeysAdminH,
 		Whoami:            whoamiH,
+		LLMToken:          llmTokenH,
 		CookieDomain:      cookieDomain,
 		NewAPIProxy:       newAPIProxyH,
 		MemorusProxy:      memorusProxyH,
