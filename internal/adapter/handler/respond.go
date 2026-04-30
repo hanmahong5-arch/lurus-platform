@@ -24,6 +24,11 @@ const (
 	ErrCodeInsufficientBalance = "insufficient_balance"
 	ErrCodeRateLimited         = "rate_limited"
 	ErrCodeInternal            = "internal_error"
+	// ErrCodeUpstreamFailed signals a downstream dependency failed mid-request.
+	// Used when the platform itself is healthy but a third-party (NewAPI,
+	// lurus-api, payment gateway) returned a transport/business error after
+	// we already mutated state — typically paired with a rollback.
+	ErrCodeUpstreamFailed = "upstream_failed"
 )
 
 // respondError sends a structured JSON error response.

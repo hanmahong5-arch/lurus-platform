@@ -325,6 +325,77 @@ func TestBuild_ZLogin_RoutesRegistered(t *testing.T) {
 	}
 }
 
+// ---------- CORS allow-list (P1-3) ----------
+
+// TestCORS_DefaultAllowsHistoricalOrigins verifies that an unconfigured
+// router (deps.CORSOrigins empty) keeps allowing the original 5 *.lurus.cn
+// products. Critical: missing env must NOT silently tighten access.
+func TestCORS_DefaultAllowsHistoricalOrigins(t *testing.T) {
+	r := Build(minimalDeps()) // CORSOrigins empty → defaults
+
+	for _, origin := range []string{
+		"https://admin.lurus.cn",
+		"https://identity.lurus.cn",
+		"https://auth.lurus.cn",
+		"https://lucrum.lurus.cn",
+		"https://www.lurus.cn",
+	} {
+		req := httptest.NewRequest(http.MethodOptions, "/health", nil)
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", "GET")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		got := w.Header().Get("Access-Control-Allow-Origin")
+		if got != origin {
+			t.Errorf("origin %s: want Access-Control-Allow-Origin=%s, got %s",
+				origin, origin, got)
+		}
+	}
+}
+
+// TestCORS_ConfiguredOriginsReplaceDefault verifies that providing an
+// explicit allow-list takes effect — env-driven onboarding requires no
+// code change.
+func TestCORS_ConfiguredOriginsReplaceDefault(t *testing.T) {
+	deps := minimalDeps()
+	deps.CORSOrigins = []string{"https://newapp.example.com"}
+	r := Build(deps)
+
+	// Configured origin allowed.
+	req := httptest.NewRequest(http.MethodOptions, "/health", nil)
+	req.Header.Set("Origin", "https://newapp.example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://newapp.example.com" {
+		t.Errorf("configured origin: want Access-Control-Allow-Origin=https://newapp.example.com, got %s", got)
+	}
+
+	// Default origin NOT in the explicit list anymore — must be denied.
+	req2 := httptest.NewRequest(http.MethodOptions, "/health", nil)
+	req2.Header.Set("Origin", "https://admin.lurus.cn")
+	req2.Header.Set("Access-Control-Request-Method", "GET")
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	if got := w2.Header().Get("Access-Control-Allow-Origin"); got == "https://admin.lurus.cn" {
+		t.Errorf("default origin should NOT be allowed when CORSOrigins is set explicitly, got Access-Control-Allow-Origin=%s", got)
+	}
+}
+
+// TestResolveCORSOrigins_DefensiveCopy verifies the helper returns a fresh
+// slice so callers can't mutate the package-level default.
+func TestResolveCORSOrigins_DefensiveCopy(t *testing.T) {
+	got := resolveCORSOrigins(nil)
+	if len(got) != len(defaultCORSOrigins) {
+		t.Fatalf("default fallback length: want %d, got %d", len(defaultCORSOrigins), len(got))
+	}
+	got[0] = "MUTATED"
+	if defaultCORSOrigins[0] == "MUTATED" {
+		t.Error("default slice must not be mutated through caller-side writes")
+	}
+}
+
 // TestBuild_Registration_RoutesRegistered verifies that registration routes appear when the handler is non-nil.
 func TestBuild_Registration_RoutesRegistered(t *testing.T) {
 	var rh handler.RegistrationHandler

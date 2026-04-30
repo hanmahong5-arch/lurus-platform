@@ -686,11 +686,11 @@ func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
 	if err != nil {
 		slog.WarnContext(ctx, "currency exchange: wallet debit failed",
 			"account_id", accountID, "amount", req.Amount, "error", err)
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":      "insufficient_balance",
-			"error_code": "INSUFFICIENT_BALANCE",
-			"message":    "Not enough LuCoin balance for this exchange",
-		})
+		// P1-10: standard envelope is {error: <snake_code>, message: <text>}.
+		// Removed redundant "error_code" UPPERCASE field — clients keying off
+		// "error" already have a stable machine code.
+		respondError(c, http.StatusBadRequest, ErrCodeInsufficientBalance,
+			"Not enough LuCoin balance for this exchange")
 		return
 	}
 
@@ -715,11 +715,10 @@ func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
 			slog.ErrorContext(ctx, "currency exchange: CRITICAL rollback failed",
 				"account_id", accountID, "debit_tx_id", debitTx.ID, "rollback_error", rollbackErr)
 		}
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error":      "exchange_failed",
-			"error_code": "EXCHANGE_FAILED",
-			"message":    "Failed to credit Lute to API account. Wallet has been refunded.",
-		})
+		// P1-10: unified envelope. Code stays "upstream_failed" (machine-readable);
+		// the human message tells the user the wallet was refunded.
+		respondError(c, http.StatusBadGateway, ErrCodeUpstreamFailed,
+			"Failed to credit Lute to API account. Wallet has been refunded.")
 		return
 	}
 

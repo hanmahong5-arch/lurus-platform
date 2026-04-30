@@ -60,6 +60,13 @@ type Deps struct {
 	// in cluster private ranges.
 	TrustedProxyCIDRs []string
 
+	// CORSOrigins is the explicit allow-list passed to gin-contrib/cors.
+	// Empty/nil = fall back to the historical default set so unconfigured
+	// deployments keep working. Tip: pass a single "*" only in dev — in
+	// prod always enumerate exact schemes+hosts because AllowCredentials=true
+	// + wildcard origin is rejected by every browser.
+	CORSOrigins []string
+
 	// Readiness is the pluggable readiness probe set. nil = /readyz is
 	// wired with an empty set (always 200), which matches the pre-PT7.4
 	// behaviour of a naked /health probe.
@@ -91,7 +98,7 @@ func Build(deps Deps) *gin.Engine {
 	r.Use(handler.MaxBodySize(handler.DefaultMaxRequestBodyBytes)) // Reject >2 MB request bodies (413).
 	r.Use(handler.RequestTimeout(handler.DefaultRequestTimeout))   // Cancel stuck requests after 30s (504).
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"https://admin.lurus.cn", "https://identity.lurus.cn", "https://auth.lurus.cn", "https://lucrum.lurus.cn", "https://www.lurus.cn"},
+		AllowOrigins:     resolveCORSOrigins(deps.CORSOrigins),
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Authorization", "Content-Type", "X-Request-ID", "X-Idempotency-Key"},
 		ExposeHeaders:    []string{"X-Request-ID", "Retry-After"},
@@ -523,4 +530,30 @@ func internalKeyAuth(keyStore *app.ServiceKeyStore) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// defaultCORSOrigins is the historical 5-product allow-list. Kept here as
+// the fallback for deployments that don't set CORS_ALLOWED_ORIGINS so a
+// missing env never silently tightens access. Mirrors what the hardcoded
+// list used to be before P1-3.
+var defaultCORSOrigins = []string{
+	"https://admin.lurus.cn",
+	"https://identity.lurus.cn",
+	"https://auth.lurus.cn",
+	"https://lucrum.lurus.cn",
+	"https://www.lurus.cn",
+}
+
+// resolveCORSOrigins returns the configured allow-list when non-empty,
+// otherwise the default set. Returning a defensive copy keeps the global
+// default slice immutable from caller-side mutation.
+func resolveCORSOrigins(configured []string) []string {
+	if len(configured) == 0 {
+		out := make([]string, len(defaultCORSOrigins))
+		copy(out, defaultCORSOrigins)
+		return out
+	}
+	out := make([]string, len(configured))
+	copy(out, configured)
+	return out
 }

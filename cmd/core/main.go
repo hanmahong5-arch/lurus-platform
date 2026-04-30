@@ -696,6 +696,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		JWT:               jwtMiddleware,
 		RateLimit:         rateLimiter,
 		TrustedProxyCIDRs: parseCSVList(cfg.TrustedProxiesCIDRs),
+		CORSOrigins:       parseCSVList(cfg.CORSAllowedOrigins),
 		Readiness:         readinessSet,
 		ExtraMiddleware: []gin.HandlerFunc{
 			metrics.HTTPMiddleware(),
