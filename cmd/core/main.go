@@ -217,13 +217,20 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// a matching NewAPI user (1:1 mapping by username "lurus_<id>").
 	// All three NewAPI env vars must be set; otherwise the module is
 	// silently disabled (dev / standalone deployments).
-	// See docs/ADR-newapi-billing-sync.md (C.2 step 4c).
+	// See docs/ADR-newapi-billing-sync.md (C.2 step 4c+4d).
+	//
+	// The reference is captured in newapiSyncMod so the NATS topup
+	// consumer (constructed below) can wire its OnTopupCompleted hook.
+	var newapiSyncMod *newapi_sync.Module
 	if cfg.NewAPIInternalURL != "" && cfg.NewAPIAdminAccessToken != "" && cfg.NewAPIAdminUserID != "" {
 		nclient, err := newapi.New(cfg.NewAPIInternalURL, cfg.NewAPIAdminAccessToken, cfg.NewAPIAdminUserID)
 		if err != nil {
 			slog.Warn("newapi_sync: client init failed, sync disabled", "err", err)
-		} else if mod := newapi_sync.New(nclient, accountRepo); mod != nil {
-			mod.Register(registry)
+		} else {
+			newapiSyncMod = newapi_sync.New(nclient, accountRepo)
+			if newapiSyncMod != nil {
+				newapiSyncMod.Register(registry)
+			}
 		}
 	}
 
@@ -262,6 +269,12 @@ func run(ctx context.Context, cfg *config.Config) error {
 	consumer, err := identitynats.NewConsumer(nc, vipSvc)
 	if err != nil {
 		slog.Warn("nats consumer init failed, event consumption disabled", "err", err)
+	}
+	// Plug newapi_sync into the topup-completed subscription so wallet
+	// credit events propagate to NewAPI quota (C.2 step 4d). When the
+	// module is nil (env unset) the subscription is simply not opened.
+	if consumer != nil && newapiSyncMod != nil {
+		consumer = consumer.WithTopupHandler(newapiSyncMod.OnTopupCompleted)
 	}
 
 	// --- Payment Providers ---

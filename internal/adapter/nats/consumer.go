@@ -12,11 +12,23 @@ import (
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
 )
 
+// TopupHandler is the callback shape for "wallet credited via topup" events.
+// Implementation lives in newapi_sync.Module (C.2 step 4d) — kept as a func
+// signature here so the NATS layer doesn't import the module package.
+//
+// Returning a non-nil error → message is NAK'd and JetStream retries up to
+// MaxDeliver. Idempotency on the implementor's side is required because
+// JetStream is at-least-once.
+type TopupHandler func(ctx context.Context, accountID int64, amountCNY float64) error
+
 // Consumer subscribes to the LLM_EVENTS stream (published by lurus-api) and
 // processes messages relevant to lurus-platform (VIP accumulation, etc.).
+// Optionally also subscribes to IDENTITY_EVENTS topup-completed for
+// downstream sync hooks (NewAPI quota mirroring).
 type Consumer struct {
-	js  natsgo.JetStreamContext
-	vip *app.VIPService
+	js          natsgo.JetStreamContext
+	vip         *app.VIPService
+	onTopup     TopupHandler
 }
 
 // NewConsumer creates a NATS JetStream consumer.
@@ -26,6 +38,14 @@ func NewConsumer(nc *natsgo.Conn, vip *app.VIPService) (*Consumer, error) {
 		return nil, fmt.Errorf("jetstream context: %w", err)
 	}
 	return &Consumer{js: js, vip: vip}, nil
+}
+
+// WithTopupHandler wires the topup-completed callback. Chainable; nil disables
+// the subscription (default). Used by main.go to plug newapi_sync.Module's
+// OnTopupCompleted method.
+func (c *Consumer) WithTopupHandler(h TopupHandler) *Consumer {
+	c.onTopup = h
+	return c
 }
 
 // Run starts consuming messages until ctx is cancelled.
@@ -67,8 +87,61 @@ func (c *Consumer) Run(ctx context.Context) error {
 	}
 	defer sub.Unsubscribe()
 
+	// Optional second subscription: IDENTITY_EVENTS / topup completed.
+	// Only wired when WithTopupHandler was called (nil = skip). Failures
+	// to subscribe degrade gracefully — the LLM-usage path still works.
+	if c.onTopup != nil {
+		topupSub, terr := c.js.QueueSubscribe(
+			event.SubjectTopupCompleted,
+			"lurus-platform-topup-newapi-sync",
+			func(msg *natsgo.Msg) {
+				if err := c.handleTopup(ctx, msg); err != nil {
+					slog.Warn("handle topup", "err", err)
+					_ = msg.Nak()
+					return
+				}
+				_ = msg.Ack()
+			},
+			natsgo.Durable("lurus-platform-topup-newapi-sync"),
+			natsgo.AckExplicit(),
+			natsgo.MaxDeliver(5),
+		)
+		if terr != nil {
+			slog.Warn("nats consumer: topup subscription failed; newapi quota sync disabled",
+				"subject", event.SubjectTopupCompleted, "err", terr)
+		} else {
+			defer topupSub.Unsubscribe()
+		}
+	}
+
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// handleTopup parses an IDENTITY_EVENTS envelope carrying a TopupCompleted
+// payload and forwards (account_id, amount_cny) to the registered handler.
+// Malformed messages are dropped (Ack returned by caller) so they don't
+// trigger redelivery storms; only handler errors trigger NAK.
+func (c *Consumer) handleTopup(ctx context.Context, msg *natsgo.Msg) error {
+	if c.onTopup == nil {
+		return nil
+	}
+	var env event.IdentityEvent
+	if err := json.Unmarshal(msg.Data, &env); err != nil {
+		slog.Warn("topup: drop malformed envelope", "err", err, "len", len(msg.Data))
+		return nil // ack; replaying won't help
+	}
+	if env.AccountID <= 0 {
+		return nil
+	}
+	var p struct {
+		AmountCNY float64 `json:"amount_cny"`
+	}
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		slog.Warn("topup: drop malformed payload", "err", err, "event_id", env.EventID)
+		return nil
+	}
+	return c.onTopup(ctx, env.AccountID, p.AmountCNY)
 }
 
 func (c *Consumer) handleLLMUsage(ctx context.Context, msg *natsgo.Msg) error {

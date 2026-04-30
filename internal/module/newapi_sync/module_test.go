@@ -14,15 +14,29 @@ import (
 type fakeClient struct {
 	mu              sync.Mutex
 	users           map[string]int // username -> id
+	quotas          map[int]int64  // id -> quota (for IncrementUserQuota)
 	nextID          int
 	createCalls     int
 	findCalls       int
+	incCalls        int
 	createUserError error
 	findError       error
+	incError        error
 }
 
 func newFakeClient() *fakeClient {
-	return &fakeClient{users: map[string]int{}, nextID: 1000}
+	return &fakeClient{users: map[string]int{}, quotas: map[int]int64{}, nextID: 1000}
+}
+
+func (f *fakeClient) IncrementUserQuota(_ context.Context, id int, delta int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.incCalls++
+	if f.incError != nil {
+		return 0, f.incError
+	}
+	f.quotas[id] += delta
+	return f.quotas[id], nil
 }
 
 func (f *fakeClient) CreateUser(_ context.Context, username, _ string) error {
@@ -62,6 +76,8 @@ type fakeStore struct {
 		NewAPIUserID int
 	}
 	setError error
+	// accounts indexed by id, returned by GetByID. nil means "not found".
+	accounts map[int64]*entity.Account
 }
 
 func (s *fakeStore) SetNewAPIUserID(_ context.Context, accountID int64, newapiUserID int) error {
@@ -74,7 +90,26 @@ func (s *fakeStore) SetNewAPIUserID(_ context.Context, accountID int64, newapiUs
 		AccountID    int64
 		NewAPIUserID int
 	}{accountID, newapiUserID})
+	if s.accounts != nil {
+		if a, ok := s.accounts[accountID]; ok {
+			a.NewAPIUserID = &newapiUserID
+		}
+	}
 	return nil
+}
+
+func (s *fakeStore) GetByID(_ context.Context, id int64) (*entity.Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.accounts == nil {
+		return nil, nil
+	}
+	a, ok := s.accounts[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *a
+	return &cp, nil
 }
 
 func TestNew_NilDeps(t *testing.T) {
@@ -218,5 +253,92 @@ func TestOnAccountCreated_NilAccount(t *testing.T) {
 	m := New(newFakeClient(), &fakeStore{})
 	if err := m.OnAccountCreated(context.Background(), nil); err == nil {
 		t.Error("expected error on nil account")
+	}
+}
+
+// ── OnTopupCompleted (4d) ─────────────────────────────────────────────────
+
+func TestOnTopupCompleted_HappyPath(t *testing.T) {
+	c := newFakeClient()
+	c.quotas[7] = 0 // pre-existing user with 0 quota
+	newapiID := 7
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: &newapiID},
+		},
+	}
+	m := New(c, s)
+
+	if err := m.OnTopupCompleted(context.Background(), 42, 100.0); err != nil {
+		t.Fatalf("OnTopupCompleted: %v", err)
+	}
+	if c.incCalls != 1 {
+		t.Errorf("incCalls = %d, want 1", c.incCalls)
+	}
+	expectedDelta := int64(100.0 * QuotaPerUnit) // 100 * 500_000 = 50_000_000
+	if c.quotas[7] != expectedDelta {
+		t.Errorf("quota = %d, want %d", c.quotas[7], expectedDelta)
+	}
+}
+
+func TestOnTopupCompleted_NoMapping_Skips(t *testing.T) {
+	c := newFakeClient()
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: nil}, // not yet synced
+		},
+	}
+	m := New(c, s)
+
+	if err := m.OnTopupCompleted(context.Background(), 42, 50.0); err != nil {
+		t.Fatalf("expected nil error on missing mapping, got: %v", err)
+	}
+	if c.incCalls != 0 {
+		t.Error("expected zero NewAPI calls when mapping is nil")
+	}
+}
+
+func TestOnTopupCompleted_AccountNotFound_Skips(t *testing.T) {
+	c := newFakeClient()
+	s := &fakeStore{accounts: map[int64]*entity.Account{}}
+	m := New(c, s)
+
+	if err := m.OnTopupCompleted(context.Background(), 999, 50.0); err != nil {
+		t.Fatalf("expected nil error on missing account, got: %v", err)
+	}
+	if c.incCalls != 0 {
+		t.Error("expected zero NewAPI calls on missing account")
+	}
+}
+
+func TestOnTopupCompleted_ZeroOrNegative_NoOp(t *testing.T) {
+	c := newFakeClient()
+	s := &fakeStore{}
+	m := New(c, s)
+
+	for _, amount := range []float64{0, -5.0} {
+		if err := m.OnTopupCompleted(context.Background(), 42, amount); err != nil {
+			t.Errorf("amount=%v: expected nil error, got %v", amount, err)
+		}
+	}
+	if c.incCalls != 0 {
+		t.Error("expected zero NewAPI calls for non-positive amounts")
+	}
+}
+
+func TestOnTopupCompleted_IncrementError_Propagates(t *testing.T) {
+	c := newFakeClient()
+	c.incError = errors.New("newapi down")
+	newapiID := 7
+	s := &fakeStore{
+		accounts: map[int64]*entity.Account{
+			42: {ID: 42, NewAPIUserID: &newapiID},
+		},
+	}
+	m := New(c, s)
+
+	err := m.OnTopupCompleted(context.Background(), 42, 100.0)
+	if err == nil {
+		t.Fatal("expected error to propagate so consumer can NAK")
 	}
 }

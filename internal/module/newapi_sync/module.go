@@ -28,10 +28,11 @@ import (
 
 // AccountStore 是模块对 platform account 仓储的最小依赖。
 //
-// 故意不引整个 accountStore 接口 — 模块只需要"写映射 ID"的能力。这让单元
-// 测试可以用一个超薄的 fake 替代，不需要 mock 整套 Account CRUD。
+// 故意不引整个 accountStore 接口 — 模块只需要"写映射 ID"和"按 ID 取 account"
+// 两个能力。让单元测试可以用一个超薄的 fake 替代，不需要 mock 整套 CRUD。
 type AccountStore interface {
 	SetNewAPIUserID(ctx context.Context, accountID int64, newapiUserID int) error
+	GetByID(ctx context.Context, id int64) (*entity.Account, error)
 }
 
 // NewAPIClient 是 NewAPI admin 客户端契约 — 形状和 *newapi.Client 一致，但
@@ -39,7 +40,14 @@ type AccountStore interface {
 type NewAPIClient interface {
 	CreateUser(ctx context.Context, username, displayName string) error
 	FindUserByUsername(ctx context.Context, username string) (int, error)
+	IncrementUserQuota(ctx context.Context, id int, delta int64) (int64, error)
 }
+
+// QuotaPerUnit 把"1 CNY"换算为 NewAPI quota 单位。NewAPI 上游硬编码
+// `common.QuotaPerUnit = 500000` — 即 ¥1 = 500_000 quota。我们在 platform 侧
+// 复制一份这个常量而不是 import NewAPI 包，因为 NewAPI 是一个独立服务的 fork
+// 不该被 platform 直接依赖；如果上游改了，对账 cron (4g) 会暴露差异。
+const QuotaPerUnit = 500_000
 
 // Module 是 newapi_sync 模块。零值不可用 — 必须通过 New 构造。
 type Module struct {
@@ -126,4 +134,44 @@ func (m *Module) Register(r *module.Registry) {
 	}
 	r.OnAccountCreated(m.OnAccountCreated)
 	slog.Info("module registered", "module", "newapi_sync")
+}
+
+// OnTopupCompleted 是充值同步钩子（C.2 step 4d）：用户在 platform 钱包成功
+// 充值 amountCNY 后调用，把等额 quota 增加到对应的 NewAPI user 上。
+//
+// 由 NATS consumer 订阅 `identity.topup.completed` subject 后调用（详见
+// internal/adapter/nats/consumer.go）。NATS-free 设计让单元测试不需要起 NATS。
+//
+// 无 NewAPIUserID 映射 → 跳过（账户尚未同步，4g 对账 cron 后会补上）。
+// IncrementUserQuota 失败 → 返错给 Consumer 决定 ack/nak，让 JetStream 重试。
+//
+// **注意**：方法非幂等。NATS JetStream 至少一次投递，理论上重发会双扣（增）。
+// 当前规模下罕见、可接受；4g 对账 cron 会暴露差异。生产规模上线前应加 Redis
+// SETNX 基于 event_id 去重。
+func (m *Module) OnTopupCompleted(ctx context.Context, accountID int64, amountCNY float64) error {
+	if amountCNY <= 0 {
+		return nil
+	}
+	account, err := m.accounts.GetByID(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("newapi_sync: lookup account %d: %w", accountID, err)
+	}
+	if account == nil || account.NewAPIUserID == nil {
+		// 账户不存在或尚未同步 NewAPI — 跳过；对账 cron 会处理。
+		slog.InfoContext(ctx, "newapi_sync: skip topup (no newapi mapping)",
+			"account_id", accountID, "amount_cny", amountCNY)
+		return nil
+	}
+	delta := int64(amountCNY * QuotaPerUnit)
+	newQuota, err := m.client.IncrementUserQuota(ctx, *account.NewAPIUserID, delta)
+	if err != nil {
+		return fmt.Errorf("newapi_sync: increment quota account=%d delta=%d: %w", accountID, delta, err)
+	}
+	slog.InfoContext(ctx, "newapi_sync: topup synced",
+		"account_id", accountID,
+		"newapi_user_id", *account.NewAPIUserID,
+		"amount_cny", amountCNY,
+		"delta_quota", delta,
+		"new_quota", newQuota)
+	return nil
 }
