@@ -8,7 +8,23 @@ import (
 	"time"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
 )
+
+// AccountPurgePublisher is the narrow event-publish surface used by
+// the worker after a cascade success — kept as a local interface so
+// the worker file stays free of the concrete *outbox.DLQPublisher
+// type and tests can inject a capture/error fake. Mirrors the shape
+// of RefundPublisher in refund_service.go.
+type AccountPurgePublisher interface {
+	Publish(ctx context.Context, ev *event.IdentityEvent) error
+}
+
+// purgeEmitTimeout bounds the best-effort emit of identity.account.deleted
+// after MarkCompleted. The publish is a notification, not a transaction;
+// a hung NATS broker must not pin the worker tick long enough to delay
+// the next claimed row.
+const purgeEmitTimeout = 5 * time.Second
 
 // Default tuning for AccountPurgeWorker. Operators override via env
 // (CRON_PURGE_INTERVAL, CRON_PURGE_BATCH).
@@ -78,11 +94,12 @@ type AccountPurgeCascade interface {
 // CRON_PURGE_ENABLED=true after the first deployment window so the
 // rollout can be observed without flipping behavior.
 type AccountPurgeWorker struct {
-	store    AccountPurgeStore
-	cascade  AccountPurgeCascade
-	interval time.Duration
-	batch    int
-	enabled  bool
+	store     AccountPurgeStore
+	cascade   AccountPurgeCascade
+	publisher AccountPurgePublisher // optional; nil = no PIPL §47 emit
+	interval  time.Duration
+	batch     int
+	enabled   bool
 }
 
 // AccountPurgeWorkerConfig is the wiring shape. Zero-valued fields fall
@@ -111,6 +128,16 @@ func NewAccountPurgeWorker(store AccountPurgeStore, cascade AccountPurgeCascade,
 		batch:    cfg.Batch,
 		enabled:  cfg.Enabled,
 	}
+}
+
+// WithPublisher attaches an event publisher used to emit
+// identity.account.deleted after a successful cascade + MarkCompleted.
+// Nil-safe: passing nil simply skips the emit branch, which keeps the
+// boot path resilient when NATS wiring is not yet in place. Returns
+// the worker for chaining.
+func (w *AccountPurgeWorker) WithPublisher(p AccountPurgePublisher) *AccountPurgeWorker {
+	w.publisher = p
+	return w
 }
 
 // Name implements lifecycle.Task.
@@ -198,6 +225,7 @@ func (w *AccountPurgeWorker) processRow(ctx context.Context, row *entity.Account
 			"account_id", row.AccountID,
 			"requested_at", row.RequestedAt.Format(time.RFC3339),
 			"outcome", "completed")
+		w.emitAccountDeleted(ctx, row, now)
 		return
 	}
 
@@ -216,4 +244,54 @@ func (w *AccountPurgeWorker) processRow(ctx context.Context, row *entity.Account
 		"requested_at", row.RequestedAt.Format(time.RFC3339),
 		"outcome", "expired",
 		"cascade_err", fmt.Sprintf("%v", cascadeErr))
+}
+
+// emitAccountDeleted publishes identity.account.deleted as a
+// best-effort PIPL §47 cascade signal to downstream services
+// (newapi / memorus / lucrum / tally). Failure to publish does NOT
+// undo the purge — purge already succeeded; this is a notification,
+// not a transaction. NATS delivery is at-least-once, so consumers
+// MUST be idempotent.
+//
+// LurusID is derived deterministically from AccountID via
+// entity.GenerateLurusID, so the worker does not need to round-trip
+// through the accounts table just to populate the envelope. The
+// payload is deliberately minimal — the whole point of the event
+// is to trigger downstream deletion of personal data, so including
+// any here would just leak it again into NATS audit logs.
+func (w *AccountPurgeWorker) emitAccountDeleted(parent context.Context, row *entity.AccountDeleteRequest, purgedAt time.Time) {
+	if w.publisher == nil {
+		return
+	}
+	payload := event.AccountDeletedPayload{
+		PurgedAt: purgedAt.Format(time.RFC3339),
+	}
+	ev, err := event.NewEvent(
+		event.SubjectAccountDeleted,
+		row.AccountID,
+		entity.GenerateLurusID(row.AccountID),
+		"", // no product scope — cascade spans all products
+		payload,
+	)
+	if err != nil {
+		slog.Warn("account_purge_worker.emit_build_failed",
+			"request_id", row.ID,
+			"account_id", row.AccountID,
+			"err", err)
+		return
+	}
+	pubCtx, cancel := context.WithTimeout(parent, purgeEmitTimeout)
+	defer cancel()
+	if perr := w.publisher.Publish(pubCtx, ev); perr != nil {
+		slog.Warn("account_purge_worker.emit_failed",
+			"request_id", row.ID,
+			"account_id", row.AccountID,
+			"subject", event.SubjectAccountDeleted,
+			"err", perr)
+		return
+	}
+	slog.Info("account_purge_worker.emitted",
+		"request_id", row.ID,
+		"account_id", row.AccountID,
+		"subject", event.SubjectAccountDeleted)
 }

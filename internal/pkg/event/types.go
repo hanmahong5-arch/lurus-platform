@@ -14,6 +14,7 @@ const (
 
 	SubjectAccountCreated         = "identity.account.created"
 	SubjectAccountDeleteRequested = "identity.account.delete_requested"
+	SubjectAccountDeleted         = "identity.account.deleted"
 	SubjectSubscriptionActivated  = "identity.subscription.activated"
 	SubjectSubscriptionExpired    = "identity.subscription.expired"
 	SubjectTopupCompleted         = "identity.topup.completed"
@@ -74,6 +75,29 @@ type AccountDeleteRequestedPayload struct {
 	CoolingOffUntil string `json:"cooling_off_until"`
 }
 
+// AccountDeletedPayload is the payload for identity.account.deleted.
+// Emitted by account_purge_worker after the platform-side PIPL §47
+// cascade (wallet zero, subscription cancel, Zitadel deactivate, …)
+// completes successfully — i.e. AFTER MarkCompleted lands.
+//
+// Downstream subscribers (newapi / memorus / lucrum / tally) MUST
+// idempotently delete personal data tied to the AccountID. NATS
+// delivery is at-least-once, so consumers MUST tolerate "already
+// deleted" gracefully (a no-op replay).
+//
+// The payload is deliberately minimal: AccountID + LurusID are
+// already on the IdentityEvent envelope; PurgedAt records when the
+// cascade-success bookkeeping landed. NO personal data here — the
+// whole point of the event is to trigger downstream deletion of
+// personal data, so including any here would just leak it again
+// into NATS audit logs.
+type AccountDeletedPayload struct {
+	// PurgedAt is the RFC3339 timestamp when MarkCompleted ran. Receivers
+	// can use it to bound replay decisions (e.g. ignore events older than
+	// their own retention window).
+	PurgedAt string `json:"purged_at"`
+}
+
 // SubscriptionActivatedPayload is the payload for identity.subscription.activated.
 type SubscriptionActivatedPayload struct {
 	SubscriptionID int64  `json:"subscription_id"`
@@ -112,9 +136,9 @@ type OrgMemberJoinedPayload struct {
 
 // LLMUsageReportedPayload is the payload consumed from llm.usage.reported.
 type LLMUsageReportedPayload struct {
-	AccountID   int64   `json:"account_id"`
-	LurusID     string  `json:"lurus_id"`
-	AmountCNY   float64 `json:"amount_cny"`
-	TokensUsed  int64   `json:"tokens_used"`
-	ModelName   string  `json:"model_name"`
+	AccountID  int64   `json:"account_id"`
+	LurusID    string  `json:"lurus_id"`
+	AmountCNY  float64 `json:"amount_cny"`
+	TokensUsed int64   `json:"tokens_used"`
+	ModelName  string  `json:"model_name"`
 }
