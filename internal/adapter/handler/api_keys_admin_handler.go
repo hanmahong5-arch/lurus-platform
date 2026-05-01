@@ -104,7 +104,7 @@ type apiKeySummary struct {
 func (h *APIKeysAdminHandler) Create(c *gin.Context) {
 	var req createAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		handleBindError(c, err)
 		return
 	}
 
@@ -124,19 +124,17 @@ func (h *APIKeysAdminHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusConflict, resp)
 		return
 	case errors.Is(err, identity_admin.ErrAPIKeyCreating):
-		c.JSON(http.StatusConflict, gin.H{
-			"error":   err.Error(),
-			"hint":    "another create call is in flight or stuck; revoke and retry if it stays this way >5min",
-		})
+		respondError(c, http.StatusConflict, ErrCodeConflict,
+			"Another create call is in flight; if it stays this way >5min, revoke and retry")
 		return
 	case errors.Is(err, identity_admin.ErrInvalidName):
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, err.Error())
 		return
 	case errors.Is(err, identity_admin.ErrInvalidPurpose):
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, err.Error())
 		return
 	case err != nil:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, "api_keys.create", err)
 		return
 	}
 
@@ -149,16 +147,16 @@ func (h *APIKeysAdminHandler) Create(c *gin.Context) {
 func (h *APIKeysAdminHandler) Rotate(c *gin.Context) {
 	name := c.Param("name")
 	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name path param required"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, "name path param required")
 		return
 	}
 	out, err := h.svc.Rotate(c.Request.Context(), name)
 	switch {
 	case errors.Is(err, identity_admin.ErrAPIKeyNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
+		respondNotFound(c, "api key")
 		return
 	case err != nil:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, "api_keys.rotate", err)
 		return
 	}
 	c.JSON(http.StatusOK, mkResponse(out, out.Token))
@@ -171,16 +169,16 @@ func (h *APIKeysAdminHandler) Rotate(c *gin.Context) {
 func (h *APIKeysAdminHandler) Revoke(c *gin.Context) {
 	name := c.Param("name")
 	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name path param required"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, "name path param required")
 		return
 	}
 	err := h.svc.Revoke(c.Request.Context(), name)
 	switch {
 	case errors.Is(err, identity_admin.ErrAPIKeyNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": "api key not found"})
+		respondNotFound(c, "api key")
 		return
 	case err != nil:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, "api_keys.revoke", err)
 		return
 	}
 	c.Status(http.StatusNoContent)
@@ -197,7 +195,7 @@ func (h *APIKeysAdminHandler) List(c *gin.Context) {
 
 	rows, total, err := h.svc.List(c.Request.Context(), purpose, status, limit, offset)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternalError(c, "api_keys.list", err)
 		return
 	}
 

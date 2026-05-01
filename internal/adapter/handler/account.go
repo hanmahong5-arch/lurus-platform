@@ -38,7 +38,7 @@ func (h *AccountHandler) GetMe(c *gin.Context) {
 	}
 	a, err := h.accounts.GetByID(c.Request.Context(), accountID)
 	if err != nil || a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "account")
 		return
 	}
 	vipInfo, _ := h.vip.Get(c.Request.Context(), accountID)
@@ -59,7 +59,7 @@ func (h *AccountHandler) UpdateMe(c *gin.Context) {
 	}
 	a, err := h.accounts.GetByID(c.Request.Context(), accountID)
 	if err != nil || a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "account")
 		return
 	}
 	var req struct {
@@ -85,7 +85,7 @@ func (h *AccountHandler) UpdateMe(c *gin.Context) {
 		a.Locale = req.Locale
 	}
 	if err := h.accounts.Update(c.Request.Context(), a); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "update failed"})
+		respondInternalError(c, "account.update", err)
 		return
 	}
 	c.JSON(http.StatusOK, a)
@@ -100,7 +100,7 @@ func (h *AccountHandler) GetServices(c *gin.Context) {
 	}
 	subs, err := h.subs.ListByAccount(c.Request.Context(), accountID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list services"})
+		respondInternalError(c, "account.list_services", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"services": subs})
@@ -122,7 +122,7 @@ func (h *AccountHandler) AdminListAccounts(c *gin.Context) {
 	}
 	accounts, total, err := h.accounts.List(c.Request.Context(), keyword, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed"})
+		respondInternalError(c, "account.admin_list", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": accounts, "total": total, "page": page, "page_size": pageSize})
@@ -131,14 +131,13 @@ func (h *AccountHandler) AdminListAccounts(c *gin.Context) {
 // AdminGetAccount returns full account details for an admin.
 // GET /admin/v1/accounts/:id
 func (h *AccountHandler) AdminGetAccount(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "account id")
+	if !ok {
 		return
 	}
 	a, err := h.accounts.GetByID(c.Request.Context(), id)
 	if err != nil || a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "account")
 		return
 	}
 	vipInfo, _ := h.vip.Get(c.Request.Context(), id)
@@ -153,15 +152,14 @@ func (h *AccountHandler) AdminGetAccount(c *gin.Context) {
 // AdminGrantEntitlement manually grants an entitlement to an account.
 // POST /admin/v1/accounts/:id/grant
 func (h *AccountHandler) AdminGrantEntitlement(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "account id")
+	if !ok {
 		return
 	}
 	// Verify account exists
 	a, err := h.accounts.GetByID(c.Request.Context(), id)
 	if err != nil || a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "account")
 		return
 	}
 	_ = a
@@ -196,7 +194,7 @@ func (h *AccountHandler) GetMeReferral(c *gin.Context) {
 	}
 	a, err := h.accounts.GetByID(c.Request.Context(), accountID)
 	if err != nil || a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "account")
 		return
 	}
 
@@ -227,7 +225,7 @@ func (h *AccountHandler) GetMeOverview(c *gin.Context) {
 	productID := c.Query("product_id")
 	ov, err := h.overview.Get(c.Request.Context(), accountID, productID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get overview"})
+		respondInternalError(c, "account.overview", err)
 		return
 	}
 	c.JSON(http.StatusOK, ov)

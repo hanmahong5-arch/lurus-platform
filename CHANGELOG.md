@@ -16,7 +16,38 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
 
 ## [Unreleased]
 
-_No staged changes._
+### Security
+
+- Error responses sanitized across the highest-traffic paths (`P2-6` partial).
+  `internal/pkg/auth/middleware.go` no longer leaks raw `err.Error()` from the
+  Zitadel validator; `api_keys_admin_handler.go` generic 500s now route through
+  `respondInternalError` (internal err logged, client sees `internal_error` +
+  generic message). Remaining leak sites (`apps_admin_handler.go:231,331`,
+  `account_admin_handler.go:128`, `refund.go:202`,
+  `internal_api.go:712`) queued for next sweep.
+
+### Changed
+
+- **Rate-limit response shape** — `429` body changed from
+  `{"error": "rate limit exceeded", "retry_after": N}` to
+  `{"error": "rate_limited", "message": "...", "retry_after": N}` to match the
+  platform-wide envelope. Clients that read the `error` field as a free-form
+  string need to switch to a code lookup. Status code, header `Retry-After`,
+  and `retry_after` body field are unchanged.
+- **Auth middleware error shape** — 401/403 responses from
+  `internal/pkg/auth/middleware.go` now use the canonical envelope
+  `{"error": "<code>", "message": "<text>"}` (codes: `unauthorized`,
+  `forbidden`). Previously emitted raw `{"error": "<text>"}`. The auth package
+  duplicates the envelope shape locally (`abortAuthError`) rather than
+  importing the handler package — same contract, no import cycle.
+- **API keys admin handler envelope** — `Create` / `Rotate` / `Revoke` /
+  `List` migrated to `respondError` / `respondNotFound` /
+  `respondInternalError`; the bind-error path now goes through
+  `handleBindError` for field-level validator feedback. The `hint` field on
+  `ErrAPIKeyCreating` was folded into the standard `message`.
+- **`/api/v1/account/me*` and `/admin/v1/accounts/*` envelope** — all error
+  paths in `account.go` migrated. `:id` parsing now goes through the shared
+  `parsePathInt64` helper for a unified `invalid_parameter` envelope.
 
 ---
 

@@ -50,7 +50,7 @@ func (m *JWTMiddleware) Auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, err := extractBearerToken(c)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			abortAuthError(c, http.StatusUnauthorized, codeUnauthorized, err.Error())
 			return
 		}
 
@@ -73,7 +73,7 @@ func (m *JWTMiddleware) Auth() gin.HandlerFunc {
 				"err", err,
 				"token_prefix", safeTokenPrefix(token),
 			)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			abortAuthError(c, http.StatusUnauthorized, codeUnauthorized, "Invalid or expired token")
 			return
 		}
 
@@ -84,7 +84,7 @@ func (m *JWTMiddleware) Auth() gin.HandlerFunc {
 				"sub", claims.Sub,
 				"err", err,
 			)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "account lookup failed"})
+			abortAuthError(c, http.StatusUnauthorized, codeUnauthorized, "Authentication failed")
 			return
 		}
 
@@ -104,7 +104,7 @@ func (m *JWTMiddleware) AdminAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, err := extractBearerToken(c)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			abortAuthError(c, http.StatusUnauthorized, codeUnauthorized, err.Error())
 			return
 		}
 
@@ -115,7 +115,7 @@ func (m *JWTMiddleware) AdminAuth() gin.HandlerFunc {
 				"err", err,
 				"token_prefix", safeTokenPrefix(token),
 			)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			abortAuthError(c, http.StatusUnauthorized, codeUnauthorized, "Invalid or expired token")
 			return
 		}
 
@@ -125,7 +125,7 @@ func (m *JWTMiddleware) AdminAuth() gin.HandlerFunc {
 				"sub", claims.Sub,
 				"roles", claims.Roles,
 			)
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin role required"})
+			abortAuthError(c, http.StatusForbidden, codeForbidden, "Admin role required")
 			return
 		}
 
@@ -136,7 +136,7 @@ func (m *JWTMiddleware) AdminAuth() gin.HandlerFunc {
 				"sub", claims.Sub,
 				"err", err,
 			)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "account lookup failed"})
+			abortAuthError(c, http.StatusUnauthorized, codeUnauthorized, "Authentication failed")
 			return
 		}
 
@@ -168,6 +168,23 @@ func extractBearerToken(c *gin.Context) (string, error) {
 type errUnauthorized struct{ msg string }
 
 func (e *errUnauthorized) Error() string { return e.msg }
+
+// abortAuthError emits a JSON error in the canonical platform envelope:
+//
+//	{"error": "<machine_code>", "message": "<human_text>"}
+//
+// Mirrors the shape produced by handler.respondError so clients see a single
+// schema regardless of which middleware short-circuits the request. We can't
+// import handler from this package (cycle), so the helper is duplicated; the
+// shape is the contract.
+func abortAuthError(c *gin.Context, status int, code, message string) {
+	c.AbortWithStatusJSON(status, gin.H{"error": code, "message": message})
+}
+
+const (
+	codeUnauthorized = "unauthorized"
+	codeForbidden    = "forbidden"
+)
 
 // safeTokenPrefix returns the first 16 chars of a token for debug logging.
 func safeTokenPrefix(token string) string {

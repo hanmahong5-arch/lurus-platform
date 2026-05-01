@@ -89,7 +89,8 @@ func (l *Limiter) PerIP() gin.HandlerFunc {
 			retryAfter := int(l.cfg.Window.Seconds())
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-				"error":       "rate limit exceeded",
+				"error":       "rate_limited",
+				"message":     "Rate limit exceeded; retry later",
 				"retry_after": retryAfter,
 			})
 			return
@@ -123,7 +124,8 @@ func (l *Limiter) PerUser() gin.HandlerFunc {
 			retryAfter := int(l.cfg.Window.Seconds())
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
-				"error":       "rate limit exceeded",
+				"error":       "rate_limited",
+				"message":     "Rate limit exceeded; retry later",
 				"retry_after": retryAfter,
 			})
 			return
