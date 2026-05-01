@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
 )
 
 // fakePurgeStore is an in-memory AccountPurgeStore used by every
@@ -122,9 +123,9 @@ func (f *fakePurgeStore) statusOf(id int64) string {
 // is returned for whichever account_id matches failOn; everything else
 // succeeds.
 type fakePurgeCascade struct {
-	mu        sync.Mutex
-	calls     []int64
-	failOn    int64
+	mu         sync.Mutex
+	calls      []int64
+	failOn     int64
 	cascadeErr error
 }
 
@@ -344,5 +345,122 @@ func TestAccountPurgeWorker_Defaults_FillFromZero(t *testing.T) {
 	}
 	if w.Name() != "account_purge_worker" {
 		t.Errorf("Name() = %q; want %q", w.Name(), "account_purge_worker")
+	}
+}
+
+// ── PIPL §47 emit: capturePublisher records every Publish call ──────
+
+type capturePublisher struct {
+	mu     sync.Mutex
+	events []*event.IdentityEvent
+}
+
+func (c *capturePublisher) Publish(_ context.Context, ev *event.IdentityEvent) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, ev)
+	return nil
+}
+
+func (c *capturePublisher) snapshot() []*event.IdentityEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]*event.IdentityEvent, len(c.events))
+	copy(out, c.events)
+	return out
+}
+
+// errorPublisher always fails — used to prove emit failure does not
+// undo the purge bookkeeping.
+type errorPublisher struct {
+	calls int
+	mu    sync.Mutex
+	err   error
+}
+
+func (e *errorPublisher) Publish(_ context.Context, _ *event.IdentityEvent) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.calls++
+	return e.err
+}
+
+func (e *errorPublisher) callCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
+}
+
+// TestPurgeWorker_EmitsAccountDeleted_AfterCascadeSuccess proves the
+// cascade-success path also publishes identity.account.deleted with
+// the expected envelope. Asserts subject + AccountID round-trip and
+// that LurusID is the deterministic GenerateLurusID derivation.
+func TestPurgeWorker_EmitsAccountDeleted_AfterCascadeSuccess(t *testing.T) {
+	store := newFakePurgeStore()
+	cascade := &fakePurgeCascade{}
+	pub := &capturePublisher{}
+	store.seed(&entity.AccountDeleteRequest{
+		ID: 10, AccountID: 4242,
+		CoolingOffUntil: time.Now().Add(-time.Hour),
+	})
+	w := NewAccountPurgeWorker(store, cascade, AccountPurgeWorkerConfig{
+		Interval: time.Hour, Batch: 20, Enabled: true,
+	}).WithPublisher(pub)
+
+	runOneTick(t, w)
+
+	if got := cascade.callCount(); got != 1 {
+		t.Fatalf("cascade calls = %d; want 1", got)
+	}
+	if got := store.statusOf(10); got != entity.AccountDeleteRequestStatusCompleted {
+		t.Fatalf("status = %q; want %q", got, entity.AccountDeleteRequestStatusCompleted)
+	}
+	got := pub.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("captured events = %d; want 1", len(got))
+	}
+	ev := got[0]
+	if ev.EventType != event.SubjectAccountDeleted {
+		t.Errorf("EventType = %q; want %q", ev.EventType, event.SubjectAccountDeleted)
+	}
+	if ev.AccountID != 4242 {
+		t.Errorf("AccountID = %d; want 4242", ev.AccountID)
+	}
+	if want := entity.GenerateLurusID(4242); ev.LurusID != want {
+		t.Errorf("LurusID = %q; want %q", ev.LurusID, want)
+	}
+	if len(ev.Payload) == 0 {
+		t.Errorf("Payload is empty; expected AccountDeletedPayload JSON")
+	}
+}
+
+// TestPurgeWorker_PublishFailureDoesNotFailPurge proves the emit is
+// best-effort: a publisher that always errors must not leave the row
+// stuck in 'processing' nor flip it to 'expired'. The bookkeeping
+// already landed before the publish was attempted, and that is the
+// load-bearing invariant for PIPL §47 audit semantics.
+func TestPurgeWorker_PublishFailureDoesNotFailPurge(t *testing.T) {
+	store := newFakePurgeStore()
+	cascade := &fakePurgeCascade{}
+	pub := &errorPublisher{err: errors.New("nats down")}
+	store.seed(&entity.AccountDeleteRequest{
+		ID: 11, AccountID: 5555,
+		CoolingOffUntil: time.Now().Add(-time.Hour),
+	})
+	w := NewAccountPurgeWorker(store, cascade, AccountPurgeWorkerConfig{
+		Interval: time.Hour, Batch: 20, Enabled: true,
+	}).WithPublisher(pub)
+
+	runOneTick(t, w)
+
+	if got := cascade.callCount(); got != 1 {
+		t.Fatalf("cascade calls = %d; want 1", got)
+	}
+	if got := store.statusOf(11); got != entity.AccountDeleteRequestStatusCompleted {
+		t.Errorf("status = %q; want %q (publish failure must NOT undo purge)",
+			got, entity.AccountDeleteRequestStatusCompleted)
+	}
+	if got := pub.callCount(); got != 1 {
+		t.Errorf("publisher calls = %d; want 1", got)
 	}
 }

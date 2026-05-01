@@ -888,6 +888,12 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// returns immediately so this code path lands without changing
 	// behavior. callerID=0 is the synthetic "automation" caller; the
 	// audit row records the requesting user via RequestedBy.
+	// PIPL §47 cascade signal: after a purge completes, the worker emits
+	// identity.account.deleted via the DLQ-monitored publisher so
+	// downstream services (newapi / memorus / lucrum / tally) can drop
+	// their own personal-data copies. WithPublisher is nil-safe — when
+	// the outbox publisher itself failed to construct, the worker still
+	// runs the cascade, only the emit branch is skipped.
 	purgeWorker := app.NewAccountPurgeWorker(
 		accountDeleteRequestRepo,
 		cronPurgeCascadeAdapter{exec: accountDeleteExec},
@@ -896,7 +902,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 			Batch:    cfg.CronPurgeBatch,
 			Enabled:  cfg.CronPurgeEnabled,
 		},
-	)
+	).WithPublisher(publisher)
 	g.Go(func() error { return purgeWorker.Run(gctx) })
 
 	// Hook DLQ depth sampler — refreshes the hook_dlq_pending gauge

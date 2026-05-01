@@ -16,6 +16,23 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
 
 ## [Unreleased]
 
+### Added
+
+- **`identity.account.deleted` NATS event** — emitted by
+  `account_purge_worker` after the platform-side PIPL §47 cascade
+  completes (i.e. AFTER `MarkCompleted` lands). Subject + payload in
+  `internal/pkg/event/types.go` (`SubjectAccountDeleted`,
+  `AccountDeletedPayload`). Envelope carries `account_id` + `lurus_id`;
+  payload deliberately minimal (`purged_at` only — including any
+  personal data here would just leak it again into NATS audit logs).
+  Emit is **best-effort**: a publish failure logs at WARN but does NOT
+  undo the purge bookkeeping (purge already succeeded; this is a
+  notification, not a transaction). Re-delivery is possible (NATS
+  at-least-once) so consumers MUST be idempotent. Downstream subscriber
+  implementations (newapi / memorus / lucrum / tally cleaning their own
+  personal-data copies) are out of scope for this commit and ship as
+  separate PRs in those repos.
+
 ### Security
 
 - **`P2-6` closed for explicit leak sites** (round 2). Five remaining
