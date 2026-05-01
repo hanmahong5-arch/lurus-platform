@@ -50,6 +50,7 @@ type Deps struct {
 	MemorusProxy      *handler.MemorusProxyHandler      // nil when memorus URL/key not configured
 	ServiceKeyAdmin   *handler.AdminServiceKeyHandler   // nil when service key management not wired
 	SMSRelay          *handler.SMSRelayHandler          // nil when SMS relay is not configured
+	SLI               *handler.SLIHandler               // /sli — public read-only SLO snapshot (dev-mode aspirational, prod-mode contractual)
 	InternalKey       string                            // legacy INTERNAL_API_KEY (fallback during migration)
 	CookieDomain      string                            // parent domain for lurus_session cookie (e.g. ".lurus.cn"); empty = host-only
 	ServiceKeys       *app.ServiceKeyStore              // scoped service key resolver (nil = legacy-only mode)
@@ -142,6 +143,15 @@ func Build(deps Deps) *gin.Engine {
 		readinessSet = readiness.NewSet() // empty set = always ready
 	}
 	r.GET("/readyz", readinessSet.HTTPHandler())
+
+	// SLI snapshot — unauthenticated, read-only. Documents the current
+	// SLO targets and exposes the in-process `hook_dlq_pending` value
+	// alongside null placeholders for the latency / uptime targets that
+	// will be wired once Prometheus is queryable from the process.
+	// Status endpoint, not a critical path: never 500s.
+	if deps.SLI != nil {
+		r.GET("/sli", deps.SLI.Get)
+	}
 
 	// WeChat OAuth routes — no JWT auth (handles the browser redirect dance).
 	if deps.WechatAuth != nil {

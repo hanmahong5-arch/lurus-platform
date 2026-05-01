@@ -701,6 +701,13 @@ func run(ctx context.Context, cfg *config.Config) error {
 	opsCatalogH := handler.NewOpsCatalogHandler(opsRegistry)
 	onboardingFailH := handler.NewOnboardingFailureHandler(hookFailureRepo, registry)
 
+	// SLI snapshot handler — public read-only SLO targets + the live
+	// hook_dlq_pending value so external probes (status page, uptime
+	// monitors) can scrape one URL without admin auth. The version
+	// string echoes the build SHA so /sli outputs identify the running
+	// image, not the latest git push.
+	sliH := handler.NewSLIHandler(hookFailureRepo, bi.SHA)
+
 	// --- SMS Relay Handler (Zitadel webhook → Aliyun SMS) ---
 	// Active only when SMS_PROVIDER is configured. When noop, the endpoint is
 	// still wired but messages are logged and discarded (useful for staging).
@@ -746,6 +753,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		NewAPIProxy:       newAPIProxyH,
 		MemorusProxy:      memorusProxyH,
 		SMSRelay:          smsRelayH,
+		SLI:               sliH,
 		InternalKey:       cfg.InternalAPIKey,
 		JWT:               jwtMiddleware,
 		RateLimit:         rateLimiter,
