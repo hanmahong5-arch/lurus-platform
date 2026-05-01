@@ -58,6 +58,11 @@ tags:
     description: Admin platform settings
   - name: webhook
     description: Payment provider webhooks
+  - name: kova-provisioning
+    description: |
+      Platform→Kova provisioning bridge (F2 revenue path).
+      Closes the gap audit-2026-04-30.md F2 H-severity:
+      org → R6 tester provisioning + per-run usage ingestion.
 
 # ─────────────────────────────────────────────
 # Security Schemes
@@ -982,6 +987,210 @@ paths:
                   amount:
                     type: number
                     format: double
+
+  /internal/v1/orgs/{id}/services/kova-tester:
+    post:
+      tags: [kova-provisioning]
+      operationId: provisionKovaTester
+      summary: Provision (or refresh) a kova-rest tester for the organization
+      description: |
+        Triggers an R6 tester provisioning RPC and persists the result. The
+        raw admin key is returned exactly once in the response — clients that
+        drop it must rotate (rotation endpoint not yet implemented).
+
+        Idempotent on (org_id, "kova"): re-invoking against an `active` row
+        returns the existing record with `admin_key` omitted. Failed attempts
+        are recorded with `status="failed"` and `metadata.provisioner.error`
+        carries the underlying message; re-POST to retry.
+
+        Server side (R6 `/internal/provision`) is stubbed pending the
+        kova-repo follow-up — when `KOVA_PROVISION_BASE_URL` is unset the
+        platform returns deterministic mock credentials so dev-mode end-to-end
+        flows still work.
+      security:
+        - InternalApiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Provision attempted; row persisted (active or failed)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  org_id:
+                    type: integer
+                    format: int64
+                  service:
+                    type: string
+                    example: kova
+                  status:
+                    type: string
+                    enum: [pending, active, failed]
+                  base_url:
+                    type: string
+                  key_prefix:
+                    type: string
+                  tester_name:
+                    type: string
+                  port:
+                    type: integer
+                  provisioned_at:
+                    type: string
+                    format: date-time
+                  mock_mode:
+                    type: boolean
+                  admin_key:
+                    type: string
+                    description: |
+                      Returned ONLY on the first successful provision (and
+                      after a recovered failure). Subsequent calls against an
+                      active row omit this field.
+                  admin_key_warning:
+                    type: string
+        '404':
+          description: Organization not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: Upstream R6 provisioning RPC failed after retries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/orgs/{id}/services/kova:
+    get:
+      tags: [kova-provisioning]
+      operationId: getOrgKovaService
+      summary: Tenant view of the org's provisioned kova workspace
+      description: |
+        Returns the persisted service row (status, base_url, key_prefix). The
+        full admin key is NEVER returned — it is emitted only at provision
+        time. Caller must be a member of the org.
+      security:
+        - ZitadelJWT: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Provisioned service info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  org_id:
+                    type: integer
+                    format: int64
+                  service:
+                    type: string
+                  status:
+                    type: string
+                  base_url:
+                    type: string
+                  key_prefix:
+                    type: string
+                  tester_name:
+                    type: string
+                  port:
+                    type: integer
+                  provisioned_at:
+                    type: string
+                    format: date-time
+        '403':
+          description: Caller is not a member of the organization
+        '404':
+          description: |
+            Either the organization does not exist, or it has not yet been
+            provisioned. Error code `service_not_provisioned` distinguishes the
+            latter so the dashboard can render a "click to provision" CTA.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /internal/v1/usage/report/kova:
+    post:
+      tags: [kova-provisioning]
+      operationId: reportKovaUsage
+      summary: Ingest a per-run usage report from a kova worker
+      description: |
+        Append-only metering. Distinct from `/internal/v1/usage/report` (which
+        takes account_id + amount_cny for the legacy lurus-api flow) — this
+        endpoint carries token-level granularity from kova workers.
+
+        `cost_micros` uses 1e-6 USD units so we hold both per-token markup and
+        bulk monthly totals in BIGINT without floating-point drift.
+      security:
+        - InternalApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [org_id]
+              properties:
+                org_id:
+                  type: integer
+                  format: int64
+                service:
+                  type: string
+                  default: kova
+                tester_name:
+                  type: string
+                agent_id:
+                  type: string
+                tokens_in:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                tokens_out:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                cost_micros:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                occurred_at:
+                  type: string
+                  format: date-time
+      responses:
+        '202':
+          description: Usage event accepted and persisted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted:
+                    type: boolean
+                  id:
+                    type: integer
+                    format: int64
+        '400':
+          description: Validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Service key missing required scope `usage:report`
 
   /internal/v1/orgs/resolve-api-key:
     post:

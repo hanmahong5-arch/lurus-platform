@@ -37,6 +37,16 @@ const (
 	ScopeWalletCredit = "wallet:credit"
 	ScopeEntitlement  = "entitlement"
 	ScopeCheckout     = "checkout"
+	// ScopeOrgProvision gates POST /internal/v1/orgs/:id/services/kova-tester
+	// — the platform→kova provisioning bridge. Distinct from account/wallet
+	// scopes because the holder mutates external infrastructure (R6 testers),
+	// not just platform DB rows.
+	ScopeOrgProvision = "org:provision"
+	// ScopeUsageReport gates POST /internal/v1/usage/report/kova — the
+	// kova worker callback that lands per-run token + cost numbers in
+	// billing.usage_events. Separate from wallet:debit because reporting
+	// is append-only metering, not a wallet mutation.
+	ScopeUsageReport = "usage:report"
 )
 
 // AllScopes returns all valid scope values.
@@ -45,6 +55,7 @@ func AllScopes() []string {
 		ScopeAccountRead, ScopeAccountWrite,
 		ScopeWalletRead, ScopeWalletDebit, ScopeWalletCredit,
 		ScopeEntitlement, ScopeCheckout,
+		ScopeOrgProvision, ScopeUsageReport,
 	}
 }
 

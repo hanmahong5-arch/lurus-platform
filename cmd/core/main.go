@@ -26,6 +26,7 @@ import (
 	identitygrpc "github.com/hanmahong5-arch/lurus-platform/internal/adapter/grpc"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/handler"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/handler/router"
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/kovaprov"
 	identitynats "github.com/hanmahong5-arch/lurus-platform/internal/adapter/nats"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/payment"
 	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/repo"
@@ -153,6 +154,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	refundRepo := repo.NewRefundRepo(db)
 	adminSettingsRepo := repo.NewAdminSettingsRepo(db)
 	orgRepo := repo.NewOrganizationRepo(db)
+	orgServiceRepo := repo.NewOrgServiceRepo(db)
 
 	// --- Admin Config Service (DB-first payment config override) ---
 	adminConfigSvc := app.NewAdminConfigService(adminSettingsRepo)
@@ -493,6 +495,21 @@ func run(ctx context.Context, cfg *config.Config) error {
 	llmTokenH := handler.NewLLMTokenHandler(cfg.SessionSecret, newapiSyncMod)
 	checkinH := handler.NewCheckinHandler(checkinSvc)
 	orgH := handler.NewOrganizationHandler(orgSvc)
+
+	// --- Kova provisioning bridge (F2 revenue path) ---
+	// KOVA_PROVISION_BASE_URL empty → mock-mode client (synthetic admin
+	// keys, no R6 round-trip). Set it to e.g. "http://100.122.83.20:9999"
+	// once the R6 sidecar is shipped (kova repo follow-up); also set
+	// KOVA_PROVISION_API_KEY to the bearer the sidecar expects.
+	kovaProvClient := kovaprov.New(
+		os.Getenv("KOVA_PROVISION_BASE_URL"),
+		os.Getenv("KOVA_PROVISION_API_KEY"),
+	)
+	kovaProvSvc := app.NewKovaProvisioningService(orgRepo, orgServiceRepo, orgServiceRepo, kovaProvClient)
+	kovaProvH := handler.NewKovaProvisioningHandler(kovaProvSvc)
+	if kovaProvClient.IsMock() {
+		slog.Warn("kova provisioning running in MOCK mode — set KOVA_PROVISION_BASE_URL for live R6 wiring")
+	}
 	qrLoginH := handler.NewQRLoginHandler(rdb, cfg.SessionSecret)
 	// The v2 QR handler fans out to OrganizationService for action=join_org
 	// and (best-effort) to the NATS publisher for identity.org.member_joined.
@@ -697,6 +714,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		Registration:      registrationH,
 		Checkin:           checkinH,
 		Organizations:     orgH,
+		KovaProvisioning:  kovaProvH,
 		QRLogin:           qrLoginH,
 		QR:                qrH,
 		AppsAdmin:         appsAdminH,

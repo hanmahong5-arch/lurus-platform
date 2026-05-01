@@ -35,6 +35,7 @@ type Deps struct {
 	Registration    *handler.RegistrationHandler    // nil when registration is not configured
 	Checkin         *handler.CheckinHandler         // daily check-in
 	Organizations   *handler.OrganizationHandler    // organization management
+	KovaProvisioning *handler.KovaProvisioningHandler // platform→kova provisioning bridge (F2 revenue path); nil → endpoints not registered
 	QRLogin         *handler.QRLoginHandler         // v1 QR login (login-only, legacy)
 	QR              *handler.QRHandler              // v2 multi-action QR primitive (login → join_org/delegate pending)
 	AppsAdmin       *handler.AppsAdminHandler       // read-only viewer over apps.yaml + Zitadel state
@@ -349,6 +350,13 @@ func Build(deps Deps) *gin.Engine {
 		v1.POST("/organizations/:id/api-keys", deps.Organizations.CreateAPIKey)
 		v1.DELETE("/organizations/:id/api-keys/:kid", deps.Organizations.RevokeAPIKey)
 		v1.GET("/organizations/:id/wallet", deps.Organizations.GetWallet)
+
+		// Kova workspace provisioning view (F2 revenue path). Gated on
+		// nil so deployments without the kova bridge wired up keep
+		// returning 404 rather than 500.
+		if deps.KovaProvisioning != nil {
+			v1.GET("/orgs/:id/services/kova", deps.KovaProvisioning.GetKova)
+		}
 	}
 
 	// QR v2 confirm — under /api/v2 with auth. Sibling group to v1 (different prefix).
@@ -415,6 +423,16 @@ func Build(deps Deps) *gin.Engine {
 		internal.POST("/accounts/:id/wallet/transactions", deps.Internal.InternalListWalletTransactions)
 		// Resolve org API key to organization (used by lurus-api and other services)
 		internal.POST("/orgs/resolve-api-key", deps.Organizations.ResolveAPIKey)
+
+		// Kova provisioning bridge (F2 revenue path). The provision call
+		// triggers an R6 RPC + persists the freshly minted credentials;
+		// the usage call ingests per-run metering from kova workers.
+		// Both are gated on nil so legacy deployments keep returning 404
+		// rather than 500.
+		if deps.KovaProvisioning != nil {
+			internal.POST("/orgs/:id/services/kova-tester", deps.KovaProvisioning.ProvisionKovaTester)
+			internal.POST("/usage/report/kova", deps.KovaProvisioning.ReportKovaUsage)
+		}
 		// User preferences sync (cross-device, e.g. Creator model usage stats)
 		internal.POST("/preferences/sync", deps.Internal.SyncPreferences)
 		internal.GET("/preferences/:account_id", deps.Internal.GetPreferences)

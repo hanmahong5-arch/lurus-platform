@@ -135,6 +135,42 @@ Body: `{ account_id, product_id, plan_code, billing_cycle, payment_method, retur
 Query: `page`, `page_size`
 Response: `{ data: Transaction[], total: int }`
 
+## Kova Provisioning Bridge (F2 revenue path, 2026-04-30)
+
+Platform→Kova provisioning + per-run usage ingestion. Closes audit-2026-04-30.md F2 H-severity.
+
+**5 endpoints (all live, R6 server stub still TODO)**:
+
+- `POST /api/v1/organizations` (existing) — create org
+- `POST /api/v1/subscriptions/checkout` (existing) — kova SKU support reuses the existing wallet/external payment paths
+- `POST /internal/v1/orgs/:id/services/kova-tester` (scope `org:provision`) — provision an R6 tester; returns admin key ONCE
+- `GET /api/v1/orgs/:id/services/kova` — tenant view; never returns raw key
+- `POST /internal/v1/usage/report/kova` (scope `usage:report`) — append-only worker callback
+
+**Dev mode** (`KOVA_PROVISION_BASE_URL` unset):
+
+```bash
+# Provision a kova workspace for org 1 — returns synthetic admin_key
+curl -X POST http://localhost:18104/internal/v1/orgs/1/services/kova-tester \
+  -H "Authorization: Bearer $INTERNAL_API_KEY"
+# {"admin_key": "sk-kova-...", "base_url": "http://kova-mock.local", "mock_mode": true, ...}
+```
+
+**Prod mode** requires:
+
+- `KOVA_PROVISION_BASE_URL=http://100.122.83.20:9999` (Tailscale)
+- `KOVA_PROVISION_API_KEY=<bearer for R6 sidecar>`
+- R6 sidecar implementing `POST /internal/provision` (kova repo follow-up — see `doc/coord/contracts.md`)
+
+Schema: `billing.org_services` + `billing.usage_events` (migration 029).
+
+Key files:
+
+- `internal/adapter/kovaprov/client.go` — HTTP client + mock fallback
+- `internal/app/kova_provisioning_service.go` — orchestration (idempotent, failure-preserves-key)
+- `internal/adapter/handler/kova_provisioning.go` — 3 handlers
+- `internal/adapter/repo/org_service.go` — Upsert-on-conflict persistence
+
 ## Ops Catalog
 
 Privileged ops enumerated via `internal/module/ops/`. `GET /admin/v1/ops` (admin JWT) returns catalogue: `{type, description, risk_level, destructive, delegate}`. 当前 ops: `approve_refund` / `delete_account` / `delete_oidc_app` (delegate=true via QR-confirmed APP) · `rotate_secret` (delegate=false direct admin).

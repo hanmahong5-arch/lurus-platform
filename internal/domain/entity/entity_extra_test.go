@@ -98,6 +98,8 @@ func TestAllScopes_ReturnsAllConstants(t *testing.T) {
 		entity.ScopeWalletCredit,
 		entity.ScopeEntitlement,
 		entity.ScopeCheckout,
+		entity.ScopeOrgProvision,
+		entity.ScopeUsageReport,
 	}
 	if len(scopes) != len(expected) {
 		t.Errorf("AllScopes() len = %d, want %d", len(scopes), len(expected))
