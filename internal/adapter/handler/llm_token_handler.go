@@ -74,26 +74,25 @@ type llmTokenResponse struct {
 // can branch on it.
 func (h *LLMTokenHandler) Get(c *gin.Context) {
 	if h.sessionSecret == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session validation not configured"})
+		respondError(c, http.StatusServiceUnavailable, "session_unconfigured",
+			"Session validation is not configured on this deployment")
 		return
 	}
 	if h.module == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":   "newapi_sync_disabled",
-			"message": "platform is not configured to issue LLM tokens — NEWAPI_* env not set",
-		})
+		respondError(c, http.StatusServiceUnavailable, "newapi_sync_disabled",
+			"platform is not configured to issue LLM tokens — NEWAPI_* env not set")
 		return
 	}
 
 	// Reuse /whoami's auth machinery so cookies + Bearer both work.
 	token := ReadSessionToken(c)
 	if token == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "Authentication required")
 		return
 	}
 	accountID, err := auth.ValidateSessionToken(token, h.sessionSecret)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired session"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid or expired session")
 		return
 	}
 
@@ -104,17 +103,13 @@ func (h *LLMTokenHandler) Get(c *gin.Context) {
 	tok, err := h.module.EnsureUserLLMToken(c.Request.Context(), accountID, name)
 	if err != nil {
 		if errors.Is(err, newapi_sync.ErrAccountNotProvisioned) {
-			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error":   "account_not_provisioned",
-				"message": "NewAPI mirror not yet created for this account; retry in a few seconds",
-			})
+			respondError(c, http.StatusServiceUnavailable, "account_not_provisioned",
+				"NewAPI mirror not yet created for this account; retry in a few seconds")
 			return
 		}
 		slog.WarnContext(c.Request.Context(), "llm-token: ensure failed", "account_id", accountID, "err", err)
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error":   "newapi_unavailable",
-			"message": "NewAPI did not return a usable token — platform admin should investigate",
-		})
+		respondError(c, http.StatusBadGateway, "newapi_unavailable",
+			"NewAPI did not return a usable token — platform admin should investigate")
 		return
 	}
 

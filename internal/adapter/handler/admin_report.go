@@ -57,7 +57,8 @@ func (h *ReportHandler) FinancialReport(c *gin.Context) {
 		return
 	}
 	if to.Before(from) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "to must not be before from"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"to must not be before from")
 		return
 	}
 

@@ -70,13 +70,14 @@ func (h *WhoamiHandler) Whoami(c *gin.Context) {
 	if h.sessionSecret == "" {
 		// Refuse to serve unauthenticated traffic when the validating
 		// secret is missing — fail closed.
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session validation not configured"})
+		respondError(c, http.StatusServiceUnavailable, "session_unconfigured",
+			"Session validation is not configured on this deployment")
 		return
 	}
 
 	token := ReadSessionToken(c)
 	if token == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "Authentication required")
 		return
 	}
 
@@ -85,7 +86,7 @@ func (h *WhoamiHandler) Whoami(c *gin.Context) {
 		// Don't disclose whether the token shape was wrong vs expired vs
 		// signature mismatch — clients don't need to know, and detail
 		// helps attackers calibrate.
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired session"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid or expired session")
 		return
 	}
 
@@ -96,7 +97,7 @@ func (h *WhoamiHandler) Whoami(c *gin.Context) {
 		// distinguish "not found" vs "DB error" — clients shouldn't
 		// branch on that, and 401 leaks the least info to stale-token
 		// holders.
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthenticated"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "Authentication required")
 		return
 	}
 

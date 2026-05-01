@@ -46,21 +46,23 @@ func (h *AdminOpsHandler) BatchGenerateCodes(c *gin.Context) {
 	}
 
 	if req.Count < adminOpsMinCount || req.Count > adminOpsMaxCount {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "count must be between 1 and 1000",
-		})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"count must be between 1 and 1000")
 		return
 	}
 	if req.ProductID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "product_id is required"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"product_id is required")
 		return
 	}
 	if req.PlanCode == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "plan_code is required"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"plan_code is required")
 		return
 	}
 	if req.DurationDays <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "duration_days must be positive"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"duration_days must be positive")
 		return
 	}
 

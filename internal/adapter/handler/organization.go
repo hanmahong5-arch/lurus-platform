@@ -49,7 +49,7 @@ func (h *OrganizationHandler) ListMine(c *gin.Context) {
 	}
 	orgs, err := h.svc.ListMine(c.Request.Context(), accountID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list organizations"})
+		respondInternalError(c, "org.list_mine", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": orgs})
@@ -62,9 +62,8 @@ func (h *OrganizationHandler) Get(c *gin.Context) {
 	if !ok {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
+	id, ok := parsePathInt64(c, "id", "Organization ID")
+	if !ok {
 		return
 	}
 	org, err := h.svc.Get(c.Request.Context(), id, accountID)
@@ -73,7 +72,7 @@ func (h *OrganizationHandler) Get(c *gin.Context) {
 		return
 	}
 	if org == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "organization not found"})
+		respondNotFound(c, "Organization")
 		return
 	}
 	c.JSON(http.StatusOK, org)
@@ -86,9 +85,8 @@ func (h *OrganizationHandler) AddMember(c *gin.Context) {
 	if !ok {
 		return
 	}
-	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
+	orgID, ok := parsePathInt64(c, "id", "Organization ID")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -117,14 +115,12 @@ func (h *OrganizationHandler) RemoveMember(c *gin.Context) {
 	if !ok {
 		return
 	}
-	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
+	orgID, ok := parsePathInt64(c, "id", "Organization ID")
+	if !ok {
 		return
 	}
-	targetID, err := strconv.ParseInt(c.Param("uid"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	targetID, ok := parsePathInt64(c, "uid", "Account ID")
+	if !ok {
 		return
 	}
 	if err := h.svc.RemoveMember(c.Request.Context(), orgID, accountID, targetID); err != nil {
@@ -137,14 +133,13 @@ func (h *OrganizationHandler) RemoveMember(c *gin.Context) {
 // ListAPIKeys returns API keys for an organization (key hashes are never exposed).
 // GET /api/v1/organizations/:id/api-keys
 func (h *OrganizationHandler) ListAPIKeys(c *gin.Context) {
-	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
+	orgID, ok := parsePathInt64(c, "id", "Organization ID")
+	if !ok {
 		return
 	}
 	keys, err := h.svc.ListAPIKeys(c.Request.Context(), orgID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list api keys"})
+		respondInternalError(c, "org.list_api_keys", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": keys})
@@ -157,9 +152,8 @@ func (h *OrganizationHandler) CreateAPIKey(c *gin.Context) {
 	if !ok {
 		return
 	}
-	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
+	orgID, ok := parsePathInt64(c, "id", "Organization ID")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -184,14 +178,12 @@ func (h *OrganizationHandler) RevokeAPIKey(c *gin.Context) {
 	if !ok {
 		return
 	}
-	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
+	orgID, ok := parsePathInt64(c, "id", "Organization ID")
+	if !ok {
 		return
 	}
-	keyID, err := strconv.ParseInt(c.Param("kid"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid key id"})
+	keyID, ok := parsePathInt64(c, "kid", "API key ID")
+	if !ok {
 		return
 	}
 	if err := h.svc.RevokeAPIKey(c.Request.Context(), orgID, accountID, keyID); err != nil {
@@ -204,14 +196,13 @@ func (h *OrganizationHandler) RevokeAPIKey(c *gin.Context) {
 // GetWallet returns the organization's shared token wallet.
 // GET /api/v1/organizations/:id/wallet
 func (h *OrganizationHandler) GetWallet(c *gin.Context) {
-	orgID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
+	orgID, ok := parsePathInt64(c, "id", "Organization ID")
+	if !ok {
 		return
 	}
 	wallet, err := h.svc.GetWallet(c.Request.Context(), orgID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get wallet"})
+		respondInternalError(c, "org.get_wallet", err)
 		return
 	}
 	c.JSON(http.StatusOK, wallet)
@@ -230,7 +221,8 @@ func (h *OrganizationHandler) ResolveAPIKey(c *gin.Context) {
 	}
 	org, err := h.svc.ResolveAPIKey(c.Request.Context(), req.RawKey)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or revoked api key"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized,
+			"Invalid or revoked API key")
 		return
 	}
 	c.JSON(http.StatusOK, org)
@@ -249,7 +241,7 @@ func (h *OrganizationHandler) AdminList(c *gin.Context) {
 	}
 	orgs, err := h.svc.ListAll(c.Request.Context(), limit, offset)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list organizations"})
+		respondInternalError(c, "org.admin_list", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": orgs})
@@ -258,9 +250,8 @@ func (h *OrganizationHandler) AdminList(c *gin.Context) {
 // AdminUpdateStatus updates an organization's status (active | suspended).
 // PATCH /admin/v1/organizations/:id
 func (h *OrganizationHandler) AdminUpdateStatus(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid organization id"})
+	id, ok := parsePathInt64(c, "id", "Organization ID")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -271,7 +262,8 @@ func (h *OrganizationHandler) AdminUpdateStatus(c *gin.Context) {
 		return
 	}
 	if req.Status != "active" && req.Status != "suspended" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "status must be active or suspended"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"status must be active or suspended")
 		return
 	}
 	if err := h.svc.UpdateStatus(c.Request.Context(), id, req.Status); err != nil {

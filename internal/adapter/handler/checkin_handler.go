@@ -27,7 +27,7 @@ func (h *CheckinHandler) GetStatus(c *gin.Context) {
 	}
 	status, err := h.checkin.GetStatus(c.Request.Context(), accountID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get checkin status"})
+		respondInternalError(c, "checkin.get_status", err)
 		return
 	}
 	c.JSON(http.StatusOK, status)
@@ -47,13 +47,11 @@ func (h *CheckinHandler) DoCheckin(c *gin.Context) {
 		// as the message wording was tweaked. errors.Is is stable across
 		// wrapping (fmt.Errorf %w) too.
 		if errors.Is(err, app.ErrCheckinAlreadyToday) {
-			c.JSON(http.StatusConflict, gin.H{
-				"error":      "already_checked_in_today",
-				"message":    "今天已经签到过了，明天再来吧",
-			})
+			respondError(c, http.StatusConflict, "already_checked_in_today",
+				"今天已经签到过了，明天再来吧")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "checkin failed"})
+		respondInternalError(c, "checkin.do", err)
 		return
 	}
 	c.JSON(http.StatusOK, result)

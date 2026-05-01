@@ -76,9 +76,11 @@ func TestAdminOpsHandler_BatchGenerateCodes_Validation(t *testing.T) {
 			if tt.errMsg != "" {
 				var resp map[string]interface{}
 				json.Unmarshal(w.Body.Bytes(), &resp)
-				errStr, _ := resp["error"].(string)
-				if !containsStr(errStr, tt.errMsg) {
-					t.Errorf("error = %q, want containing %q", errStr, tt.errMsg)
+				// Unified envelope: error = machine code, message = human text.
+				// The substring lives in message after P1-10 round 4 sweep.
+				msg, _ := resp["message"].(string)
+				if !containsStr(msg, tt.errMsg) {
+					t.Errorf("message = %q, want containing %q", msg, tt.errMsg)
 				}
 			}
 		})

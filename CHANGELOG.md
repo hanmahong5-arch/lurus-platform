@@ -88,11 +88,34 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
     generic free-form text, so clients can branch on the specific dependency.
   - `strconv` import dropped from `internal_api.go` (no longer needed after
     parsePathInt64 migration).
-  Remaining ~60 raw sites concentrated in `organization.go`,
-  `zlogin_handler.go`, `wechat_oauth.go`, `webhook.go`, `wechat_auth.go`,
-  `product.go`, `whoami_handler.go`, `llm_token_handler.go`, `admin_ops.go`,
-  `checkin_handler.go`, `admin_report.go`. Next batch: per-file sweep of
-  the OAuth cluster.
+- **Org / product / drop-in / admin-ops envelope** (`P1-10` round 4). 37
+  raw `gin.H{"error":...}` callsites across 7 files migrated:
+  - `organization.go` (17 sites: ListMine 500, Get path+404, AddMember
+    path, RemoveMember 2 paths, ListAPIKeys path+500, CreateAPIKey path,
+    RevokeAPIKey 2 paths, GetWallet path+500, ResolveAPIKey 401, AdminList
+    500, AdminUpdateStatus path+validation). Path parsing unified to
+    `parsePathInt64` with semantic labels (`Organization ID` / `Account ID`
+    / `API key ID`).
+  - `product.go` (5 sites: ListProducts/ListPlans 500s, Update/UpdatePlan
+    404s, AdminUpdatePlan path). `strconv` import dropped.
+  - `whoami_handler.go` (4 sites: 503 unconfigured + 3 × 401 paths).
+    Now uses semantic `session_unconfigured` code; 401 messages preserve
+    the deliberately-vague `Authentication required` / `Invalid or
+    expired session` distinction.
+  - `llm_token_handler.go` (3 raw + 3 already-shaped sites): all error
+    paths now go through `respondError`. Domain codes preserved
+    (`newapi_sync_disabled` / `account_not_provisioned` /
+    `newapi_unavailable`).
+  - `checkin_handler.go` (3 sites: GetStatus 500, DoCheckin already-checked
+    409 + 500). The `already_checked_in_today` Chinese message survives
+    intact in the new envelope.
+  - `admin_ops.go` (4 sites: Count / ProductID / PlanCode / DurationDays
+    validators). Test `admin_ops_test.go` updated to read substring from
+    `message` instead of `error` (envelope semantics changed).
+  - `admin_report.go` (1 site: from/to range validation).
+  Remaining ~46 raw sites concentrated in the OAuth cluster
+  (`zlogin_handler.go` 16 / `wechat_oauth.go` 13 / `webhook.go` 12 /
+  `wechat_auth.go` 6) — next round.
 
 ---
 

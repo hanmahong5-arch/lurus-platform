@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
@@ -23,7 +22,7 @@ func NewProductHandler(products *app.ProductService) *ProductHandler {
 func (h *ProductHandler) ListProducts(c *gin.Context) {
 	list, err := h.products.ListActive(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list products"})
+		respondInternalError(c, "product.list_active", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"products": list})
@@ -35,7 +34,7 @@ func (h *ProductHandler) ListPlans(c *gin.Context) {
 	productID := c.Param("id")
 	plans, err := h.products.ListPlans(c.Request.Context(), productID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list plans"})
+		respondInternalError(c, "product.list_plans", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"plans": plans})
@@ -62,7 +61,7 @@ func (h *ProductHandler) AdminUpdateProduct(c *gin.Context) {
 	id := c.Param("id")
 	p, err := h.products.GetByID(c.Request.Context(), id)
 	if err != nil || p == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "product not found"})
+		respondNotFound(c, "Product")
 		return
 	}
 	if err := c.ShouldBindJSON(p); err != nil {
@@ -96,14 +95,13 @@ func (h *ProductHandler) AdminCreatePlan(c *gin.Context) {
 // AdminUpdatePlan updates an existing plan.
 // PUT /admin/v1/plans/:id
 func (h *ProductHandler) AdminUpdatePlan(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid plan id"})
+	id, ok := parsePathInt64(c, "id", "Plan ID")
+	if !ok {
 		return
 	}
 	plan, err := h.products.GetPlanByID(c.Request.Context(), id)
 	if err != nil || plan == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "plan not found"})
+		respondNotFound(c, "Plan")
 		return
 	}
 	if err := c.ShouldBindJSON(plan); err != nil {
