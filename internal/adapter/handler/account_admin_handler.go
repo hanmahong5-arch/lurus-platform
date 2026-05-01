@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/repo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
@@ -28,6 +29,7 @@ type AccountAdminHandler struct {
 	accounts  *app.AccountService
 	qr        *QRHandler
 	publisher QREventPublisher
+	auditRepo *repo.AuditEventRepo
 }
 
 // NewAccountAdminHandler wires the handler. accounts is required for
@@ -52,6 +54,13 @@ func (h *AccountAdminHandler) WithDeleteFlow(qr *QRHandler) *AccountAdminHandler
 // fires on QR confirm".
 func (h *AccountAdminHandler) WithPublisher(p QREventPublisher) *AccountAdminHandler {
 	h.publisher = p
+	return h
+}
+
+// WithAuditRepo wires the persistent audit-events sink. Chainable;
+// nil-safe so existing tests that don't wire a repo continue to pass.
+func (h *AccountAdminHandler) WithAuditRepo(r *repo.AuditEventRepo) *AccountAdminHandler {
+	h.auditRepo = r
 	return h
 }
 
@@ -134,6 +143,10 @@ func (h *AccountAdminHandler) DeleteRequest(c *gin.Context) {
 	}
 	slog.InfoContext(c.Request.Context(), "account_admin.delete_requested",
 		"account_id", accountID, "initiator", callerID, "session_id", session.ID)
+
+	emitAudit(c, h.auditRepo, "account.delete_request", auditEmitResultSuccess,
+		int64Ptr(callerID), int64Ptr(accountID), "account",
+		map[string]string{"session_id": session.ID}, "")
 
 	// Best-effort NATS publish: tell downstream consumers (notification)
 	// that a destructive intent was registered. For admin-initiated

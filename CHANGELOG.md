@@ -18,6 +18,15 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
 
 ### Added
 
+- **`module.audit_events` table** (migration 031) — persistent audit log
+  for destructive admin operations. Today's emit sites: apps_admin
+  (delete-request / clear-tombstone / reconcile-now / rotate-secret),
+  account_admin (delete-request), refund (qr-approve-request),
+  onboarding (replay), and all QR delegate confirms (delete_oidc_app /
+  delete_account / approve_refund). New endpoint
+  `GET /admin/v1/audit-events` returns rows with filters (`op`,
+  `target_kind`, `since`, `until`). Audit emit is best-effort: a Save
+  failure logs WARN but does NOT fail the underlying op.
 - **`identity.account.deleted` NATS event** — emitted by
   `account_purge_worker` after the platform-side PIPL §47 cascade
   completes (i.e. AFTER `MarkCompleted` lands). Subject + payload in

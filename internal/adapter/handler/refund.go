@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/repo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 )
 
@@ -16,7 +17,8 @@ type RefundHandler struct {
 	// qr is the QR-delegate session minter used by the admin
 	// QR-approve flow. Optional: when nil the AdminQRApprove
 	// endpoint stays at 501 so a half-wired deployment is loud.
-	qr *QRHandler
+	qr        *QRHandler
+	auditRepo *repo.AuditEventRepo
 }
 
 // NewRefundHandler creates a new RefundHandler.
@@ -29,6 +31,13 @@ func NewRefundHandler(refunds *app.RefundService) *RefundHandler {
 // to call with nil to leave the endpoint gated.
 func (h *RefundHandler) WithQRApprove(qr *QRHandler) *RefundHandler {
 	h.qr = qr
+	return h
+}
+
+// WithAuditRepo wires the persistent audit-events sink. Chainable;
+// nil-safe.
+func (h *RefundHandler) WithAuditRepo(r *repo.AuditEventRepo) *RefundHandler {
+	h.auditRepo = r
 	return h
 }
 
@@ -202,6 +211,10 @@ func (h *RefundHandler) AdminQRApprove(c *gin.Context) {
 	}
 	slog.InfoContext(c.Request.Context(), "refund.qr_approve_requested",
 		"refund_no", refundNo, "initiator", callerID, "session_id", session.ID)
+
+	emitAudit(c, h.auditRepo, "refund.qr_approve_request", auditEmitResultSuccess,
+		int64Ptr(callerID), nil, "refund",
+		map[string]string{"refund_no": refundNo, "session_id": session.ID}, "")
 
 	c.JSON(http.StatusOK, qrApproveResponse{
 		ID:        session.ID,

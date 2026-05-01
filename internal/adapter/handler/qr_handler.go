@@ -187,6 +187,18 @@ type QRHandler struct {
 	// Buffered struct{} channel is used instead of a semaphore package to
 	// keep zero external deps and a cheap non-blocking select.
 	pollSem chan struct{}
+	// auditRepo is the optional persistent audit-events sink. Used by
+	// confirmDelegate to record every QR-confirmed destructive op so
+	// the trail survives pod restarts. nil = audit emit is a no-op.
+	auditRepo repoAuditSink
+}
+
+// repoAuditSink is the minimal Save surface QRHandler needs from
+// repo.AuditEventRepo. Declared as a local interface so the handler
+// package keeps its existing import surface and tests can supply an
+// in-memory fake without standing up the full repo.
+type repoAuditSink interface {
+	Save(ctx context.Context, e *entity.AuditEvent) error
 }
 
 // NewQRHandler wires a handler. sessionSecret signs login-action JWTs and
@@ -253,6 +265,14 @@ func (h *QRHandler) WithDelegateExecutor(d QRDelegateExecutor) *QRHandler {
 		return h
 	}
 	h.delegates = append(h.delegates, d)
+	return h
+}
+
+// WithAuditRepo wires a persistent audit-events sink for delegate
+// confirms. Chainable; nil-safe so existing tests don't need to
+// update wiring.
+func (h *QRHandler) WithAuditRepo(r repoAuditSink) *QRHandler {
+	h.auditRepo = r
 	return h
 }
 
@@ -1408,6 +1428,7 @@ func (h *QRHandler) confirmDelegate(c *gin.Context, s *entity.QRSession) {
 			"op", p.Op, "app", p.AppName, "env", p.Env,
 			"account_id", p.AccountID, "refund_no", p.RefundNo,
 			"initiator", s.CreatedBy, "scanner", s.AccountID, "err", err)
+		h.emitDelegateAudit(ctx, c, p, s, auditEmitResultFailed, err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "delegate_failed",
 			"message": "Failed to execute delegate operation",
@@ -1436,6 +1457,7 @@ func (h *QRHandler) confirmDelegate(c *gin.Context, s *entity.QRSession) {
 		auditAttrs = append(auditAttrs, "refund_no", p.RefundNo)
 	}
 	slog.InfoContext(ctx, "qr.confirm.delegate", auditAttrs...)
+	h.emitDelegateAudit(ctx, c, p, s, auditEmitResultSuccess, "")
 
 	resp := gin.H{
 		"confirmed": true,
@@ -1455,6 +1477,84 @@ func (h *QRHandler) confirmDelegate(c *gin.Context, s *entity.QRSession) {
 		resp["refund_no"] = p.RefundNo
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// emitDelegateAudit best-effort writes one row to module.audit_events
+// for a QR-confirmed delegate operation. Op is the canonical name
+// (delete_oidc_app / delete_account / approve_refund); the actor is
+// the boss who biometric-confirmed; the target identifies the
+// affected account / refund / oidc_app. Save failures log WARN and
+// do NOT block the user-visible response.
+func (h *QRHandler) emitDelegateAudit(ctx context.Context, c *gin.Context, p QRDelegateParams, s *entity.QRSession, result, errMsg string) {
+	if h.auditRepo == nil {
+		return
+	}
+
+	// Resolve target_id / target_kind from op-specific params.
+	var targetID *int64
+	var targetKind string
+	switch p.Op {
+	case qrDelegateOpDeleteOIDCApp:
+		targetKind = "oidc_app"
+	case qrDelegateOpDeleteAccount:
+		targetKind = "account"
+		if p.AccountID != 0 {
+			id := p.AccountID
+			targetID = &id
+		}
+	case qrDelegateOpApproveRefund:
+		targetKind = "refund"
+	}
+
+	params := map[string]any{}
+	if p.AppName != "" {
+		params["app"] = p.AppName
+	}
+	if p.Env != "" {
+		params["env"] = p.Env
+	}
+	if p.RefundNo != "" {
+		params["refund_no"] = p.RefundNo
+	}
+	if s != nil {
+		params["session_id"] = s.ID
+		if s.AccountID != 0 {
+			params["scanner"] = s.AccountID
+		}
+	}
+
+	rawParams, mErr := json.Marshal(params)
+	if mErr != nil || len(rawParams) == 0 {
+		rawParams = json.RawMessage("{}")
+	}
+	var actor *int64
+	if s != nil && s.CreatedBy != 0 {
+		id := s.CreatedBy
+		actor = &id
+	}
+
+	row := &entity.AuditEvent{
+		Op:         p.Op,
+		ActorID:    actor,
+		TargetID:   targetID,
+		TargetKind: targetKind,
+		Params:     rawParams,
+		Result:     result,
+		Error:      errMsg,
+		OccurredAt: time.Now().UTC(),
+	}
+	if c != nil {
+		row.IP = c.ClientIP()
+		row.UserAgent = c.Request.UserAgent()
+		row.RequestID = c.GetString("request_id")
+	}
+
+	saveCtx, cancel := context.WithTimeout(context.Background(), auditEmitTimeout)
+	defer cancel()
+	if err := h.auditRepo.Save(saveCtx, row); err != nil {
+		slog.WarnContext(ctx, "qr.confirm.delegate.audit_save_failed",
+			"op", p.Op, "result", result, "err", err, "request_id", row.RequestID)
+	}
 }
 
 // ── Helpers: id / payload / HMAC / IP ──────────────────────────────────────

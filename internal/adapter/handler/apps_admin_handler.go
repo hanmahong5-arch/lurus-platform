@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/hanmahong5-arch/lurus-platform/internal/adapter/repo"
 	"github.com/hanmahong5-arch/lurus-platform/internal/module/app_registry"
 	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/zitadel"
 )
@@ -45,6 +46,9 @@ type AppsAdminHandler struct {
 	// qr is the session minter for delegate flows. Nil = DeleteRequest
 	// is gated, same as above.
 	qr *QRHandler
+	// auditRepo is the optional persistent-audit sink. nil = audit
+	// emit is a no-op; the underlying op proceeds unchanged.
+	auditRepo *repo.AuditEventRepo
 }
 
 // NewAppsAdminHandler wires the handler. When zitadel is nil (PAT not
@@ -74,6 +78,14 @@ func (h *AppsAdminHandler) WithDeleteFlow(qr *QRHandler, k8s *app_registry.K8sCl
 		// same handler is a harmless overwrite.
 		qr.WithDelegateExecutor(h)
 	}
+	return h
+}
+
+// WithAuditRepo wires the persistent audit-events sink. Chainable;
+// nil-safe — when unwired all emitAudit calls are no-ops and existing
+// tests need no updates.
+func (h *AppsAdminHandler) WithAuditRepo(r *repo.AuditEventRepo) *AppsAdminHandler {
+	h.auditRepo = r
 	return h
 }
 
@@ -260,6 +272,9 @@ func (h *AppsAdminHandler) RotateSecret(c *gin.Context) {
 	if interval := h.recon.SecretRotationInterval(appName, envName); interval > 0 {
 		resp.NextDueAt = rotatedAt.Add(interval).UTC().Format(time.RFC3339)
 	}
+	emitAudit(c, h.auditRepo, "apps.rotate_secret", auditEmitResultSuccess,
+		actorIDFromContext(c), nil, "oidc_app",
+		map[string]string{"app": appName, "env": envName, "trigger": "manual"}, "")
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -337,6 +352,10 @@ func (h *AppsAdminHandler) DeleteRequest(c *gin.Context) {
 	slog.InfoContext(c.Request.Context(), "apps_admin.delete_requested",
 		"app", name, "env", env, "initiator", callerID, "session_id", session.ID)
 
+	emitAudit(c, h.auditRepo, "apps.delete_request", auditEmitResultSuccess,
+		int64Ptr(callerID), nil, "oidc_app",
+		map[string]string{"app": name, "env": env, "session_id": session.ID}, "")
+
 	c.JSON(http.StatusOK, deleteRequestResponse{
 		ID:        session.ID,
 		QRPayload: session.QRPayload,
@@ -410,6 +429,9 @@ func (h *AppsAdminHandler) ClearTombstone(c *gin.Context) {
 	}
 	slog.InfoContext(ctx, "apps_admin.tombstone_cleared",
 		"app", name, "env", env, "request_id", c.GetString("request_id"))
+	emitAudit(c, h.auditRepo, "apps.clear_tombstone", auditEmitResultSuccess,
+		actorIDFromContext(c), nil, "oidc_app",
+		map[string]string{"app": name, "env": env}, "")
 	c.JSON(http.StatusOK, gin.H{
 		"cleared": true,
 		"app":     name,
@@ -440,6 +462,8 @@ func (h *AppsAdminHandler) ReconcileNow(c *gin.Context) {
 	slog.InfoContext(ctx, "apps_admin.reconcile_now",
 		"request_id", c.GetString("request_id"))
 	h.recon.ReconcileOnce(ctx)
+	emitAudit(c, h.auditRepo, "apps.reconcile_now", auditEmitResultSuccess,
+		actorIDFromContext(c), nil, "", nil, "")
 	c.JSON(http.StatusOK, gin.H{
 		"reconciled": true,
 		"note":       "see /admin/v1/apps for the resulting state and pod logs for per-app errors",

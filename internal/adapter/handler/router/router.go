@@ -43,6 +43,7 @@ type Deps struct {
 	AccountSelfDelete *handler.AccountSelfDeleteHandler // user-self delete-request (PIPL §47 / GDPR Art.17)
 	OpsCatalog        *handler.OpsCatalogHandler        // privileged-op catalogue (Phase 4 / Sprint 2)
 	OnboardingFailure *handler.OnboardingFailureHandler // hook DLQ inspect+replay (P1-9). nil → routes not registered.
+	AuditEvents       *handler.AuditEventHandler        // /admin/v1/audit-events — persistent audit log query. nil → route not registered.
 	APIKeysAdmin      *handler.APIKeysAdminHandler      // /admin/v1/api-keys/* — Lurus API key abstraction over Zitadel
 	Whoami            *handler.WhoamiHandler            // /api/v1/whoami — drop-in identity contract for *.lurus.cn products
 	LLMToken          *handler.LLMTokenHandler          // /api/v1/account/me/llm-token — drop-in NewAPI bearer for LLM products
@@ -553,6 +554,14 @@ func Build(deps Deps) *gin.Engine {
 		if deps.OnboardingFailure != nil {
 			admin.GET("/onboarding-failures", deps.OnboardingFailure.List)
 			admin.POST("/onboarding-failures/:id/replay", deps.OnboardingFailure.Replay)
+		}
+
+		// Persistent audit log — destructive admin operations write a
+		// row in module.audit_events (migration 031) so the trail
+		// survives pod restarts. Read-only query interface for the
+		// admin dashboard; emit happens at the destructive sites.
+		if deps.AuditEvents != nil {
+			admin.GET("/audit-events", deps.AuditEvents.List)
 		}
 
 		// Lurus API keys — abstracts Zitadel Service User + PAT.

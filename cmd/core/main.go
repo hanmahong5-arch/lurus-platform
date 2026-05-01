@@ -156,6 +156,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	orgRepo := repo.NewOrganizationRepo(db)
 	orgServiceRepo := repo.NewOrgServiceRepo(db)
 	hookFailureRepo := repo.NewHookFailureRepo(db)
+	auditEventRepo := repo.NewAuditEventRepo(db)
 
 	// --- Admin Config Service (DB-first payment config override) ---
 	adminConfigSvc := app.NewAdminConfigService(adminSettingsRepo)
@@ -475,7 +476,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		WithPreferenceRepo(preferenceRepo)
 	webhookH := handler.NewWebhookHandler(walletSvc, subSvc, paymentRegistry, webhookDeduper)
 	invoiceH := handler.NewInvoiceHandler(invoiceSvc)
-	refundH := handler.NewRefundHandler(refundSvc)
+	refundH := handler.NewRefundHandler(refundSvc).WithAuditRepo(auditEventRepo)
 	adminOpsH := handler.NewAdminOpsHandler(referralSvc)
 	reportH := handler.NewReportHandler(db)
 	adminConfigH := handler.NewAdminConfigHandler(adminConfigSvc)
@@ -521,7 +522,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// and (best-effort) to the NATS publisher for identity.org.member_joined.
 	qrH := handler.NewQRHandlerWithKeyring(rdb, cfg.SessionSecret, cfg.QRSigningKeys).
 		WithOrgService(orgSvc).
-		WithMaxInflightPolls(cfg.QRMaxInflightPolls)
+		WithMaxInflightPolls(cfg.QRMaxInflightPolls).
+		WithAuditRepo(auditEventRepo)
 	if publisher != nil {
 		// Avoid the typed-nil-pointer-in-interface trap — only wire when
 		// NATS init actually succeeded. Without this check, h.publisher==nil
@@ -592,7 +594,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// DeleteRequest to leave its 501 gate; missing any one keeps the
 	// endpoint disabled rather than half-wired. Tombstones plug into the
 	// reconciler too, so the recreation-suppression survives pod restarts.
-	appsAdminH := handler.NewAppsAdminHandler(getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath), zitadelClient, appRegRecon)
+	appsAdminH := handler.NewAppsAdminHandler(getEnvDefault("APPS_YAML_PATH", app_registry.ConfigPath), zitadelClient, appRegRecon).
+		WithAuditRepo(auditEventRepo)
 	if appRegRecon != nil {
 		// Best-effort K8s client (returns ErrNotInCluster off-cluster) +
 		// Redis-backed tombstone store. Both no-op cleanly when nil so
@@ -613,7 +616,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// failing the whole purge.
 	accountDeleteExec := handler.NewAccountDeleteExecutor(accountSvc, subSvc, walletSvc, zitadelClient)
 	qrH = qrH.WithDelegateExecutor(accountDeleteExec)
-	accountAdminH := handler.NewAccountAdminHandler(accountSvc).WithDeleteFlow(qrH)
+	accountAdminH := handler.NewAccountAdminHandler(accountSvc).WithDeleteFlow(qrH).WithAuditRepo(auditEventRepo)
 	if publisher != nil {
 		// Best-effort identity.account.delete_requested emission on
 		// every admin-initiated destructive intent. Same nil-safety
@@ -699,7 +702,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	opsCatalogH := handler.NewOpsCatalogHandler(opsRegistry)
-	onboardingFailH := handler.NewOnboardingFailureHandler(hookFailureRepo, registry)
+	onboardingFailH := handler.NewOnboardingFailureHandler(hookFailureRepo, registry).WithAuditRepo(auditEventRepo)
+	auditEventH := handler.NewAuditEventHandler(auditEventRepo)
 
 	// SLI snapshot handler — public read-only SLO targets + the live
 	// hook_dlq_pending value so external probes (status page, uptime
@@ -746,6 +750,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		AccountSelfDelete: accountSelfDeleteH,
 		OpsCatalog:        opsCatalogH,
 		OnboardingFailure: onboardingFailH,
+		AuditEvents:       auditEventH,
 		APIKeysAdmin:      apiKeysAdminH,
 		Whoami:            whoamiH,
 		LLMToken:          llmTokenH,

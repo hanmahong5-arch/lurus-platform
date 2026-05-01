@@ -19,8 +19,16 @@ import (
 // admin-JWT middleware. Surfaces the previously-silent failure surface
 // and gives operators a one-click replay path.
 type OnboardingFailureHandler struct {
-	repo     *repo.HookFailureRepo
-	registry *module.Registry
+	repo      *repo.HookFailureRepo
+	registry  *module.Registry
+	auditRepo *repo.AuditEventRepo
+}
+
+// WithAuditRepo wires the persistent audit-events sink. Chainable;
+// nil-safe.
+func (h *OnboardingFailureHandler) WithAuditRepo(r *repo.AuditEventRepo) *OnboardingFailureHandler {
+	h.auditRepo = r
+	return h
 }
 
 // NewOnboardingFailureHandler wires the handler. Both dependencies are
@@ -120,6 +128,9 @@ func (h *OnboardingFailureHandler) Replay(c *gin.Context) {
 		slog.InfoContext(ctx, "onboarding_failures.replay.succeeded",
 			"id", id, "event", row.Event, "hook", row.HookName,
 			"account_id", row.AccountID, "request_id", c.GetString("request_id"))
+		emitAudit(c, h.auditRepo, "hook.replay", auditEmitResultSuccess,
+			actorIDFromContext(c), int64Ptr(id), "hook_failure",
+			map[string]any{"event": row.Event, "hook": row.HookName, "account_id": row.AccountID}, "")
 		c.JSON(http.StatusOK, gin.H{"replayed": true})
 
 	case errors.Is(replayErr, module.ErrAccountAlreadyGone):
@@ -134,6 +145,9 @@ func (h *OnboardingFailureHandler) Replay(c *gin.Context) {
 		slog.InfoContext(ctx, "onboarding_failures.replay.skipped_account_gone",
 			"id", id, "account_id", row.AccountID,
 			"request_id", c.GetString("request_id"))
+		emitAudit(c, h.auditRepo, "hook.replay", auditEmitResultSuccess,
+			actorIDFromContext(c), int64Ptr(id), "hook_failure",
+			map[string]any{"event": row.Event, "hook": row.HookName, "skipped": "account_purged_since_failure"}, "")
 		c.JSON(http.StatusOK, gin.H{
 			"replayed": true,
 			"skipped":  true,
