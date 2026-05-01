@@ -1,0 +1,88 @@
+# PrometheusRule CR for lurus-platform alerts.
+#
+# These rules are migrated from docs/observability/alerts.md. The doc
+# remains the human-readable rationale; this manifest is the runtime
+# source of truth. Adding a new rule means editing BOTH (rationale +
+# manifest), per the convention in docs/平台硬化清单.md P0.
+#
+# All metric names referenced in `expr` were verified against
+# internal/pkg/metrics/metrics.go on 2026-05-01.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: lurus-platform-alerts
+  namespace: monitoring
+  labels:
+    app: lurus-platform
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    # Hook DLQ — async lifecycle hook failures. Two rules: a slow-burn
+    # gauge alert (single broken account no one noticed) and a rate
+    # alert (active outage, every signup failing). See alerts.md.
+    - name: lurus-platform.hook-dlq
+      rules:
+        - alert: HookDLQPendingNonZero
+          expr: lurus_platform_hook_dlq_pending > 0
+          for: 15m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Hook DLQ has {{ $value }} pending failures"
+            description: |
+              At least one async lifecycle hook has permanently failed and
+              landed in module.hook_failures. Inspect at
+              /admin/v1/onboarding-failures and either replay (after fixing
+              the upstream cause) or accept-and-resolve.
+            runbook: "https://lurus-internal.example/runbooks/hook-dlq.md"
+
+        - alert: HookDLQRapidGrowth
+          expr: rate(lurus_platform_hook_outcomes_total{result="dlq"}[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Hook failures landing in DLQ at >0.1/sec"
+            description: |
+              Hooks are failing fast enough to suggest a downstream outage
+              (Stalwart down, NewAPI admin token revoked, notification
+              rate-limited). Check {{ $labels.event }} / {{ $labels.hook }}
+              upstream health before replaying.
+
+    # newapi_sync — NewAPI quota mirror sustained errors. Reconcile
+    # cron retries orphans every 5 min; new accounts fail real-time
+    # until upstream is fixed.
+    - name: lurus-platform.newapi-sync
+      rules:
+        - alert: NewAPISyncErrorRateHigh
+          expr: rate(lurus_platform_newapi_sync_ops_total{result="error"}[5m]) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "newapi_sync error rate >0.05/sec on {{ $labels.op }}"
+            description: |
+              Sustained NewAPI errors. Check NEWAPI_INTERNAL_URL reachability
+              and admin token validity. The reconcile cron will retry orphans
+              every 5 min, but new accounts fail in real time until fixed.
+
+    # QR primitive — Lutu APP scan→confirm flow latency. Histogram
+    # buckets are tight (5ms .. 2.5s); 2s p99 means Redis or Zitadel
+    # callback API is degraded.
+    - name: lurus-platform.qr-latency
+      rules:
+        - alert: QRConfirmLatencyP99High
+          expr: histogram_quantile(0.99, rate(lurus_platform_qr_confirm_latency_seconds_bucket[5m])) > 2
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "QR confirm p99 > 2s on action {{ $labels.action }}"
+            description: |
+              Lutu APP scan→confirm flow is slow. Check Redis latency, Zitadel
+              callback API responsiveness, and platform-core CPU.

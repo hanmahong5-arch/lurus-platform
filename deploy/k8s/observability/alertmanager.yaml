@@ -1,0 +1,130 @@
+# Alertmanager — silenced by default in dev mode.
+#
+# The default route hits a no-op receiver (silenced-default) with no
+# webhook_configs, so warn/info alerts evaporate silently. Critical
+# alerts route to feishu-critical, which currently points at a
+# PLACEHOLDER URL — until an operator replaces it with a real bot URL
+# the webhook POST silently fails (which is also OK in dev mode).
+#
+# Promoting to prod (see deploy/k8s/observability/README.md):
+#   1. kubectl edit secret -n monitoring alertmanager-config
+#      → replace open.feishu.cn/.../PLACEHOLDER with the real bot URL
+#   2. Remove the silenced-default catch-all so warn/info actually fire
+#   3. kubectl rollout restart -n monitoring deploy/alertmanager
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+  labels:
+    app: alertmanager
+type: Opaque
+stringData:
+  # PLACEHOLDER feishu webhook — operator replaces this string with a
+  # real Feishu bot URL when promoting to prod. Until replaced, all
+  # critical alerts go to a non-existent endpoint and silently fail
+  # (which is OK in dev mode).
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: 'silenced-default'   # DEV mode: catch-all to /dev/null
+      routes:
+        - matchers:
+            - severity="critical"
+          receiver: 'feishu-critical'
+          continue: false
+        # No warn/info routes — they all hit silenced-default
+
+    receivers:
+      - name: 'silenced-default'
+        # No webhook_configs / no email_configs — alerts disappear silently.
+
+      - name: 'feishu-critical'
+        webhook_configs:
+          - url: 'https://open.feishu.cn/open-apis/bot/v2/hook/PLACEHOLDER'
+            send_resolved: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  strategy:
+    type: Recreate    # single-replica + emptyDir storage; rolling update would race for the volume
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - name: http
+              containerPort: 9093
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+              readOnly: true
+            - name: storage
+              mountPath: /alertmanager
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: config
+          secret:
+            secretName: alertmanager-config
+        - name: storage
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+spec:
+  type: ClusterIP
+  selector:
+    app: alertmanager
+  ports:
+    - name: http
+      port: 9093
+      targetPort: 9093
+      protocol: TCP

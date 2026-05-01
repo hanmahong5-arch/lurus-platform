@@ -265,3 +265,7 @@ Privileged ops enumerated via `internal/module/ops/`. `GET /admin/v1/ops` (admin
 **Non-delegate op**: 仅 `opsRegistry.MustRegister(ops.Info{...})`。
 
 Metrics: `qr_delegate_confirms_total{op,result}` · `qr_confirmed_total{action}` (login/join_org/delegate).
+
+## Alerting (2026-05-01)
+
+Rules deployed via `deploy/k8s/observability/prometheus-rules.yaml` (4 alerts: `HookDLQPendingNonZero` / `HookDLQRapidGrowth` / `NewAPISyncErrorRateHigh` / `QRConfirmLatencyP99High`). Alertmanager runs in `monitoring` ns, **silenced by default** in dev mode — default route hits a no-op receiver, critical route hits a PLACEHOLDER feishu webhook. Promote per `deploy/k8s/observability/README.md` when going prod (replace webhook URL + drop silenced-default catch-all). Design rationale: `docs/observability/alerts.md`.

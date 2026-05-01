@@ -1,15 +1,15 @@
-# Alert rules — staging area
+# Alert rules — design rationale
 
-This file holds Prometheus alert rules that have been **declared in
-code** (metric exists, instrumentation in place) but not yet wired to
-Alertmanager. The hardening checklist convention is:
+> **Status (2026-05-01)**: Rules MIGRATED to `deploy/k8s/observability/prometheus-rules.yaml`.
+> Alertmanager deployed in `monitoring` namespace, currently silenced by default in dev mode
+> (see `deploy/k8s/observability/README.md`). This file is RETAINED as the human-readable
+> rationale doc; the live source of truth is the K8s manifest. New rules: add to BOTH this file
+> AND the manifest (one is the rationale, the other is the runtime).
 
-> 新加 metric 必须同时加 alert rule（暂存到 `docs/observability/alerts.md`，
-> 下次集中接入 Alertmanager）
+The hardening checklist convention remains:
 
-When wiring to Alertmanager, copy each rule into the platform's
-`PrometheusRule` CR (or equivalent) and **delete the entry from this
-file** with a CHANGELOG note.
+> 新加 metric 必须同时加 alert rule（设计写到 `docs/observability/alerts.md`，
+> 运行时规则同步到 `deploy/k8s/observability/prometheus-rules.yaml`）
 
 ---
 
