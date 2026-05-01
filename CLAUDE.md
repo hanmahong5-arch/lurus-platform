@@ -112,81 +112,17 @@ import identityv1 "github.com/hanmahong5-arch/lurus-platform/proto/gen/go/identi
 |----------|------|
 | Architecture | `../plans/platform-architecture-v1.md` |
 
-## SMS Relay — Zitadel Webhook → Aliyun SMS (2026-04-25)
+## SMS Relay — Zitadel Webhook → Aliyun SMS
 
-Endpoint: `POST /internal/v1/sms/relay` (requires `INTERNAL_API_KEY` bearer auth)
+`POST /internal/v1/sms/relay` (bearer `INTERNAL_API_KEY`). Zitadel SMS webhook → Aliyun Dysms.
 
-**Flow**: Zitadel fires an SMS webhook → platform relays to Aliyun Dysms API.
+Env (all in `platform-core-secrets`): `SMS_PROVIDER=aliyun` · `SMS_ALIYUN_{ACCESS_KEY_ID,ACCESS_KEY_SECRET,SIGN_NAME,TEMPLATE_CODE_VERIFY,TEMPLATE_CODE_RESET}`. 空 SMS_PROVIDER → noop sender.
 
-### Zitadel Webhook Payload
+Response codes: 200 sent · 400 invalid recipient/code/E.164 · 401 missing key · 429 Aliyun rate limit (Retry-After: 60s) · 500 retry-exhausted.
 
-```json
-{
-  "contextInfo": {
-    "eventType": "user.notification.otp.sms",
-    "recipient": "+8613800138000"
-  },
-  "templateData": {
-    "code": "382910",
-    "minutes": "5"
-  },
-  "messageContent": "您的验证码是382910，5分钟内有效。"
-}
-```
+Key files: `internal/app/sms/usecase.go` (validation + 3-retry policy), `internal/adapter/handler/sms_relay_handler.go`, `cmd/sms-test/main.go` (E2E CLI).
 
-One-time prereq: register the webhook in Zitadel with `returnCode: true` to inspect the live payload format and confirm field names match the struct in `sms_relay_handler.go`.
-
-### Configuration
-
-All environment variables are read from K8s secret `platform-core-secrets`:
-
-| Env Var | Description |
-|---------|-------------|
-| `SMS_PROVIDER` | `aliyun` (or empty = noop) |
-| `SMS_ALIYUN_ACCESS_KEY_ID` | Aliyun AccessKey ID |
-| `SMS_ALIYUN_ACCESS_KEY_SECRET` | Aliyun AccessKey Secret |
-| `SMS_ALIYUN_SIGN_NAME` | Aliyun SMS sign name (审核通过的签名) |
-| `SMS_ALIYUN_TEMPLATE_CODE_VERIFY` | Template code for OTP (e.g. SMS_xxxxxxxx) |
-| `SMS_ALIYUN_TEMPLATE_CODE_RESET` | Template code for password reset |
-
-### Response codes
-
-| Code | Meaning |
-|------|---------|
-| 200 | SMS sent (or accepted by noop sender) |
-| 400 | Missing recipient, missing code, or invalid E.164 phone |
-| 401 | Missing/invalid INTERNAL_API_KEY |
-| 429 | Aliyun rate limit — retry after `Retry-After: 60` seconds |
-| 500 | Transient provider failure after 3 retries |
-
-### Key files
-
-- `internal/app/sms/usecase.go` — `SMSRelayUsecase`: phone validation, retry policy (max 3), rate-limit detection
-- `internal/adapter/handler/sms_relay_handler.go` — Gin handler
-- `cmd/sms-test/main.go` — one-shot CLI to verify SMS delivery from the command line
-
-### E2E verification (needs real phone)
-
-```bash
-# Run locally with prod creds loaded
-go run ./cmd/sms-test -phone +86<your_number> -code 654321
-
-# Or from inside the cluster
-kubectl exec -n lurus-platform deploy/platform-core -- \
-  /bin/sh -c 'SMS_PROVIDER=aliyun SMS_ALIYUN_ACCESS_KEY_ID=$SMS_ALIYUN_ACCESS_KEY_ID \
-  SMS_ALIYUN_ACCESS_KEY_SECRET=$SMS_ALIYUN_ACCESS_KEY_SECRET \
-  SMS_ALIYUN_SIGN_NAME=$SMS_ALIYUN_SIGN_NAME \
-  SMS_ALIYUN_TEMPLATE_CODE_VERIFY=$SMS_ALIYUN_TEMPLATE_CODE_VERIFY \
-  /sms-test -phone +86<your_number> -code 654321'
-
-# In-cluster HTTP test
-curl -s -H "Authorization: Bearer $INTERNAL_API_KEY" \
-  -H "Content-Type: application/json" \
-  -X POST http://platform-core.lurus-platform.svc:18104/internal/v1/sms/relay \
-  -d '{"contextInfo":{"recipient":"+86<your_number>"},"templateData":{"code":"123456"}}'
-```
-
-Status: code complete — needs E2E SMS verification with a real test phone number.
+Status: code complete, 待真实手机号 E2E。
 
 ## Internal Subscription Checkout (2026-03-21)
 
@@ -199,32 +135,12 @@ Body: `{ account_id, product_id, plan_code, billing_cycle, payment_method, retur
 Query: `page`, `page_size`
 Response: `{ data: Transaction[], total: int }`
 
-## Ops Catalog (Phase 4 / 2026-04-25)
+## Ops Catalog
 
-Privileged operations the platform exposes are enumerated through `internal/module/ops/`.
+Privileged ops enumerated via `internal/module/ops/`. `GET /admin/v1/ops` (admin JWT) returns catalogue: `{type, description, risk_level, destructive, delegate}`. 当前 ops: `approve_refund` / `delete_account` / `delete_oidc_app` (delegate=true via QR-confirmed APP) · `rotate_secret` (delegate=false direct admin).
 
-`GET /admin/v1/ops` (admin JWT required) returns the full catalogue:
-```json
-{"ops": [
-  {"type": "approve_refund",  "description": "...", "risk_level": "warn",        "destructive": false, "delegate": true},
-  {"type": "delete_account",  "description": "...", "risk_level": "destructive", "destructive": true,  "delegate": true},
-  {"type": "delete_oidc_app", "description": "...", "risk_level": "destructive", "destructive": true,  "delegate": true},
-  {"type": "rotate_secret",   "description": "...", "risk_level": "warn",        "destructive": false, "delegate": false}
-]}
-```
+**Adding a new delegate op** (≤200 LOC e2e): 实装 `QRDelegateExecutor` + 4 metadata methods → 加 `var _ ops.DelegateOp = (*X)(nil)` 编译断言 → 扩 `qr_handler.go` 的 op constants + `QRDelegateParams.Validate()` switch → 新 mint endpoint 调 `qr.CreateDelegateSessionWithParams` → main.go 注册 `qrH.WithDelegateExecutor(exec)` + `opsRegistry.MustRegister(exec)`.
 
-`delegate: true` ops run on the QR-confirmed APP path; `delegate: false` ops are direct admin actions.
+**Non-delegate op**: 仅 `opsRegistry.MustRegister(ops.Info{...})`。
 
-### Adding a new delegate op (≤200 LOC end-to-end)
-1. New executor implementing `QRDelegateExecutor` (ExecuteDelegate + SupportedOps) AND four metadata methods (`Type`/`Description`/`RiskLevel`/`IsDestructive`).
-2. Add `var _ ops.DelegateOp = (*MyExec)(nil)` compile-time assertion.
-3. Add op constant to `qr_handler.go` + extend `QRDelegateParams.Validate()` switch.
-4. Add a mint endpoint that calls `qr.CreateDelegateSessionWithParams(ctx, callerID, params)`.
-5. In `cmd/core/main.go`: `qrH = qrH.WithDelegateExecutor(exec); opsRegistry.MustRegister(exec)`.
-
-### Adding a non-delegate op (admin direct action, no QR)
-Just `opsRegistry.MustRegister(ops.Info{OpType: "x", OpDescription: "...", OpRisk: ops.RiskWarn})`. Catalog will mark `delegate: false`.
-
-### Metrics
-- `qr_delegate_confirms_total{op,result}` — per-op success/failed counter, drives ops dashboards
-- `qr_confirmed_total{action}` — pre-existing, action ∈ {login, join_org, delegate}
+Metrics: `qr_delegate_confirms_total{op,result}` · `qr_confirmed_total{action}` (login/join_org/delegate).
