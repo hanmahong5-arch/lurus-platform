@@ -1,0 +1,173 @@
+# lurus-platform PG backup CronJobs — DEFAULT OFF (dev mode, 2026-05-01)
+#
+# Applying this manifest is harmless: both CronJobs run on schedule but exit 0
+# immediately unless the operator explicitly flips the env-flag in the
+# `lurus-platform-backup-config` ConfigMap. No data is read/written by default.
+#
+# To enable LOCAL pg_dump:
+#   kubectl create cm lurus-platform-backup-config -n database \
+#     --from-literal=BACKUP_ENABLED=true
+#
+# To enable WEEKLY S3 upload (separate flag):
+#   kubectl patch cm lurus-platform-backup-config -n database \
+#     --type=merge -p '{"data":{"BACKUP_S3_ENABLED":"true"}}'
+#   # plus create the lurus-platform-backup-s3 Secret with AWS_* keys
+#
+# Namespace: `database` — co-located with lurus-pg-1. Override per env if needed.
+# R6 disk hard rule: backups land in /data/lurus-platform/backups (root /var has 30G only).
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lurus-pg-backup
+  namespace: database
+  labels:
+    app.kubernetes.io/name: lurus-platform
+    app.kubernetes.io/component: backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  # storageClassName intentionally omitted; cluster default StorageClass on R6
+  # binds to a hostPath PV under /data/lurus-platform/backups (per R6 disk hard rule).
+  # If your StorageClass needs an explicit name, set it here.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daily-pg-dump
+  namespace: database
+  labels:
+    app.kubernetes.io/name: lurus-platform
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "0 2 * * *"  # daily 02:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - configMapRef:
+                    name: lurus-platform-backup-config
+                    optional: true  # absent CM → BACKUP_ENABLED unset → exit 0
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: lurus-pg-superuser
+                      key: postgres-password
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  if [ "${BACKUP_ENABLED:-false}" != "true" ]; then
+                    echo "backup disabled (BACKUP_ENABLED!=true) — exiting 0"
+                    exit 0
+                  fi
+                  TS=$(date -u +%Y%m%d-%H%M%S)
+                  FILE="lurus-identity-${TS}.dump"
+                  echo "starting pg_dump -> /backups/${FILE}"
+                  pg_dump -Fc \
+                    -U postgres \
+                    -h lurus-pg-1.database.svc.cluster.local \
+                    -d identity \
+                    -f "/backups/${FILE}"
+                  echo "pg_dump complete: $(ls -lh /backups/${FILE} | awk '{print $5}')"
+                  echo "pruning dumps older than 30 days"
+                  find /backups -type f -name 'lurus-identity-*.dump' -mtime +30 -delete
+                  echo "remaining dumps:"
+                  ls -lh /backups/lurus-identity-*.dump 2>/dev/null || echo "  (none)"
+              volumeMounts:
+                - name: backup-vol
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "1000m"
+                  memory: "1Gi"
+          volumes:
+            - name: backup-vol
+              persistentVolumeClaim:
+                claimName: lurus-pg-backup
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: weekly-s3-upload
+  namespace: database
+  labels:
+    app.kubernetes.io/name: lurus-platform
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "0 3 * * 0"  # Sunday 03:00 UTC (after daily-pg-dump)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 4
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: s3-upload
+              image: amazon/aws-cli:2
+              imagePullPolicy: IfNotPresent
+              envFrom:
+                - configMapRef:
+                    name: lurus-platform-backup-config
+                    optional: true
+                - secretRef:
+                    name: lurus-platform-backup-s3
+                    optional: true  # absent → BACKUP_S3_ENABLED unset → exit 0
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  if [ "${BACKUP_S3_ENABLED:-false}" != "true" ]; then
+                    echo "S3 upload disabled (BACKUP_S3_ENABLED!=true) — exiting 0"
+                    exit 0
+                  fi
+                  if [ -z "${BACKUP_S3_BUCKET:-}" ]; then
+                    echo "ERROR: BACKUP_S3_BUCKET not set" >&2
+                    exit 1
+                  fi
+                  LATEST=$(ls -1t /backups/lurus-identity-*.dump 2>/dev/null | head -1 || true)
+                  if [ -z "${LATEST}" ]; then
+                    echo "ERROR: no dump file found in /backups" >&2
+                    exit 1
+                  fi
+                  YM=$(date -u +%Y/%m)
+                  BASENAME=$(basename "${LATEST}")
+                  echo "uploading ${LATEST} -> s3://${BACKUP_S3_BUCKET}/lurus-platform/${YM}/${BASENAME}"
+                  aws s3 cp "${LATEST}" \
+                    "s3://${BACKUP_S3_BUCKET}/lurus-platform/${YM}/${BASENAME}"
+                  echo "upload complete"
+              volumeMounts:
+                - name: backup-vol
+                  mountPath: /backups
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+          volumes:
+            - name: backup-vol
+              persistentVolumeClaim:
+                claimName: lurus-pg-backup
