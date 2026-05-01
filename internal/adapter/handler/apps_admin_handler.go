@@ -101,6 +101,12 @@ type environmentView struct {
 	RedirectURI     string `json:"redirect_uri"`
 	SecretNamespace string `json:"secret_namespace"`
 	SecretName      string `json:"secret_name"`
+	// Tombstoned is true when a recent QR-confirmed delete left a 24h
+	// recreation-suppression marker in Redis. While true, the
+	// reconciler will refuse to recreate this (app, env)'s Zitadel
+	// app — even if it's still in apps.yaml. Operators clear it via
+	// POST /admin/v1/apps/:name/:env/clear-tombstone.
+	Tombstoned bool `json:"tombstoned,omitempty"`
 	// ZitadelAppID is non-empty when the Zitadel-side lookup succeeded
 	// (i.e. the reconciler has created the app). Empty when Zitadel is
 	// unreachable or the app hasn't been provisioned yet.
@@ -159,6 +165,14 @@ func (h *AppsAdminHandler) List(c *gin.Context) {
 				if clientID, appID := h.lookupZitadelApp(c, projectID, zitAppName); clientID != "" {
 					ev.ZitadelAppID = appID
 					ev.ClientIDPreview = previewClientID(clientID)
+				}
+			}
+			// Surface tombstone status so operators can correlate
+			// "Zitadel app missing" with "tombstone is suppressing
+			// recreation" in a single view.
+			if h.tombstones != nil {
+				if active, terr := h.tombstones.IsActive(c.Request.Context(), app.Name, env.Env); terr == nil && active {
+					ev.Tombstoned = true
 				}
 			}
 			entry.Environments = append(entry.Environments, ev)
@@ -330,6 +344,105 @@ func (h *AppsAdminHandler) DeleteRequest(c *gin.Context) {
 		ExpiresIn: session.ExpiresIn,
 		App:       name,
 		Env:       env,
+	})
+}
+
+// ClearTombstone — POST /admin/v1/apps/:name/:env/clear-tombstone
+//
+// Lifts the 24h recreation-suppression marker that the QR-confirmed
+// delete flow planted in Redis. Use when an operator deleted an OIDC
+// app via the APP scan flow but then needs to roll back BEFORE the
+// 24h TTL expires (e.g. login is broken because the K8s Secret still
+// holds the deleted client_id and Tally pods can't authenticate to
+// Zitadel).
+//
+// On success the next reconciler tick (≤ 5min) recreates the Zitadel
+// app, writes the fresh client_id into the K8s Secret, and triggers a
+// rolling restart of the consuming deployment. Combine with
+// POST /admin/v1/apps/reconcile-now to skip the 5min wait entirely.
+//
+// Idempotent: clearing an already-cleared tombstone returns 200 with
+// "cleared":false so callers know nothing happened. 404 only when the
+// (app, env) pair isn't declared in apps.yaml at all.
+func (h *AppsAdminHandler) ClearTombstone(c *gin.Context) {
+	if h.tombstones == nil {
+		respondError(c, http.StatusServiceUnavailable, "tombstones_unavailable",
+			"Tombstone store is not wired — Redis client missing or app_registry disabled")
+		return
+	}
+	name := c.Param("name")
+	env := c.Param("env")
+	if name == "" || env == "" {
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest,
+			"app name and env path params are required")
+		return
+	}
+
+	// Validate the (app, env) is declared so a typo can't silently
+	// "clear" a non-existent tombstone and leave the operator
+	// believing they fixed something.
+	spec, err := app_registry.LoadSpec(h.configPath)
+	if err != nil {
+		respondError(c, http.StatusServiceUnavailable, "config_unavailable",
+			"apps.yaml could not be loaded — app_registry may be unconfigured")
+		return
+	}
+	if !appEnvDeclared(spec, name, env) {
+		respondError(c, http.StatusNotFound, ErrCodeNotFound,
+			"(app, env) is not declared in apps.yaml — nothing to clear")
+		return
+	}
+
+	ctx := c.Request.Context()
+	wasActive, _ := h.tombstones.IsActive(ctx, name, env)
+	if !wasActive {
+		c.JSON(http.StatusOK, gin.H{
+			"cleared": false,
+			"app":     name,
+			"env":     env,
+			"note":    "no tombstone was active",
+		})
+		return
+	}
+	if err := h.tombstones.Clear(ctx, name, env); err != nil {
+		respondInternalError(c, "AppsAdmin.ClearTombstone", err)
+		return
+	}
+	slog.InfoContext(ctx, "apps_admin.tombstone_cleared",
+		"app", name, "env", env, "request_id", c.GetString("request_id"))
+	c.JSON(http.StatusOK, gin.H{
+		"cleared": true,
+		"app":     name,
+		"env":     env,
+		"note":    "next reconcile tick (≤5min) will recreate the Zitadel app; trigger reconcile-now to skip the wait",
+	})
+}
+
+// ReconcileNow — POST /admin/v1/apps/reconcile-now
+//
+// Triggers an immediate ReconcileOnce instead of waiting for the
+// periodic 5min tick. Idempotent — calling repeatedly is safe (the
+// reconciler is already idempotent on every step). Useful right after
+// a YAML edit, a tombstone clear, or a Zitadel-side manual change.
+//
+// Returns 200 once the pass completes. Errors during reconciliation
+// are not reflected in the response (each per-app error is logged +
+// metric-recorded inside the reconciler); the response only
+// indicates that the pass *ran*. Inspect /admin/v1/apps to see the
+// resulting state.
+func (h *AppsAdminHandler) ReconcileNow(c *gin.Context) {
+	if h.recon == nil {
+		respondError(c, http.StatusServiceUnavailable, "reconciler_unavailable",
+			"app_registry reconciler is not wired — verify Zitadel PAT and in-cluster ServiceAccount")
+		return
+	}
+	ctx := c.Request.Context()
+	slog.InfoContext(ctx, "apps_admin.reconcile_now",
+		"request_id", c.GetString("request_id"))
+	h.recon.ReconcileOnce(ctx)
+	c.JSON(http.StatusOK, gin.H{
+		"reconciled": true,
+		"note":       "see /admin/v1/apps for the resulting state and pod logs for per-app errors",
 	})
 }
 

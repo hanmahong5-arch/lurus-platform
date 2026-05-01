@@ -171,6 +171,51 @@ Key files:
 - `internal/adapter/handler/kova_provisioning.go` — 3 handlers
 - `internal/adapter/repo/org_service.go` — Upsert-on-conflict persistence
 
+## Recovery — `Errors.App.NotFound` from Zitadel (tally / admin / any OIDC app)
+
+**Symptom**: User clicks "Login" on a *.lurus.cn product, gets redirected to `auth.lurus.cn/oauth/v2/authorize?...` and Zitadel returns `{"error":"invalid_request","error_description":"Errors.App.NotFound"}`.
+
+**Root cause**: The `client_id` the product is sending doesn't exist as a registered Zitadel app. Two scenarios produce this:
+
+1. **Tombstone blocking recreation** (most common). Someone executed the QR-delegate `delete_oidc_app` flow, which deletes the Zitadel app AND plants a 24h Redis tombstone (`qr_app_tombstone:<app>:<env>`). The tombstone makes the reconciler refuse to recreate the app even though it's still in `config/apps.yaml`. The K8s Secret retains the *old* client_id from before deletion, so the consuming pod authenticates with a stale ID Zitadel no longer knows.
+
+2. **Reconciler hasn't run / is failing**. Pod boot, `ZITADEL_SERVICE_ACCOUNT_PAT` revoked, project missing — fewer ways to hit this in steady state.
+
+**Diagnostic (in order)**:
+
+```bash
+# 1) Check live state — does Zitadel have the app? Is a tombstone active?
+curl -H "Authorization: Bearer $ADMIN_JWT" \
+  https://identity.lurus.cn/admin/v1/apps | jq '.apps[] | select(.name=="tally")'
+# Look for environments[].zitadel_app_id (empty = not in Zitadel) and
+# environments[].tombstoned (true = recreation blocked).
+
+# 2) Pod logs — was a reconcile attempted? Did it skip due to tombstone?
+ssh root@100.122.83.20 "kubectl logs -n lurus-platform deploy/platform-core --tail=200 | grep -E 'app_registry|tombstone'"
+```
+
+**Fix**:
+
+```bash
+# Tombstone scenario — clear it and trigger immediate reconcile.
+curl -X POST -H "Authorization: Bearer $ADMIN_JWT" \
+  https://identity.lurus.cn/admin/v1/apps/tally/prod/clear-tombstone
+# 200 {"cleared":true,"app":"tally","env":"prod","note":"…"}
+
+curl -X POST -H "Authorization: Bearer $ADMIN_JWT" \
+  https://identity.lurus.cn/admin/v1/apps/reconcile-now
+# 200 {"reconciled":true,"note":"…"}
+
+# Reconciler now creates the Zitadel app, writes the new client_id into
+# tally-secrets-prod, and triggers a rolling restart of tally-web.
+# Verify:
+curl -H "Authorization: Bearer $ADMIN_JWT" \
+  https://identity.lurus.cn/admin/v1/apps | jq '.apps[] | select(.name=="tally")'
+# environments[].zitadel_app_id should now be populated.
+```
+
+If the platform-core admin endpoints aren't reachable yet (cold start), the manual fallback is `redis-cli DEL qr_app_tombstone:tally:prod` then wait ≤5min for the next reconcile tick (or restart platform-core to trigger an immediate pass on boot).
+
 ## Hook DLQ (P1-9, 2026-05-01)
 
 Async lifecycle hooks (`OnAccountCreated` / `OnAccountDeleted` / `OnPlanChanged` / `OnCheckin` / `OnReferralSignup` / `OnReconciliationIssue`) are now wrapped by `module.Registry.runHook` with **3-attempt exponential backoff** (200ms→400ms→800ms ±20% jitter). After exhaustion the failure lands in `module.hook_failures`.

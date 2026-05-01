@@ -516,6 +516,14 @@ func Build(deps Deps) *gin.Engine {
 			// only; the Zitadel + K8s mutation happens later when the
 			// boss biometric-confirms on his APP via /api/v2/qr/:id/confirm.
 			admin.POST("/apps/:name/:env/delete-request", deps.AppsAdmin.DeleteRequest)
+			// Recovery endpoints (2026-05-01). The QR-delete flow
+			// plants a 24h Redis tombstone that suppresses the
+			// reconciler's recreate path. If a delete is regretted —
+			// or the consuming pod still holds the deleted client_id
+			// and breaks login — operators clear the tombstone here
+			// and trigger an immediate reconcile pass.
+			admin.POST("/apps/:name/:env/clear-tombstone", deps.AppsAdmin.ClearTombstone)
+			admin.POST("/apps/reconcile-now", deps.AppsAdmin.ReconcileNow)
 		}
 
 		// Privileged-op catalogue (Phase 4 / Sprint 2). Read-only
