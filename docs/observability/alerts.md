@@ -79,6 +79,56 @@ replay won't help until upstream is fixed.
 
 ---
 
+## Credential age — rotation overdue (P2-5 framework, 2026-05-01)
+
+**Symptom**: A platform-privileged credential (currently
+`zitadel_pat` or `newapi_admin_token`) has gone past its rotation
+limit. Soft = plan it; hard = do it today. Detection only — actual
+rotation is still manual until the rotation worker ships, see
+`docs/runbooks/credential-rotation.md`.
+
+The metric is published by the daily `credential_age_worker`
+(`internal/app/credential_age_worker.go`), which is **opt-in** via
+`CRON_CRED_AGE_ENABLED=true`. With the worker disabled the gauge is
+absent and these rules silently no-op (which is correct — alerts on
+a missing metric would just be noise during the rollout).
+
+```yaml
+groups:
+- name: lurus-platform.credential-age
+  rules:
+  - alert: CredentialAgeTooHighSoft
+    expr: lurus_platform_credential_age_days > 90
+    for: 1h
+    labels:
+      severity: warning
+      team: platform
+    annotations:
+      summary: "Credential {{ $labels.name }} is {{ $value }} days old"
+      description: |
+        Soft rotation limit (90d) crossed. Plan rotation in next sprint.
+        See docs/runbooks/credential-rotation.md.
+
+  - alert: CredentialAgeTooHighHard
+    expr: lurus_platform_credential_age_days > 180
+    for: 1h
+    labels:
+      severity: critical
+      team: platform
+    annotations:
+      summary: "Credential {{ $labels.name }} is {{ $value }} days old (PAST HARD LIMIT)"
+      description: |
+        Hard rotation limit (180d) crossed. Rotate today.
+        See docs/runbooks/credential-rotation.md.
+```
+
+**Why two thresholds**: 90d gives one full sprint of advance notice
+so rotation can be scheduled like normal work; 180d is the
+"this is now an active risk" page that warrants pulling someone off
+their current task.
+
+---
+
 ## QR confirm latency (existing, unwired)
 
 ```yaml

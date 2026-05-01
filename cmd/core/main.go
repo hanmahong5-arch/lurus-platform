@@ -915,6 +915,15 @@ func run(ctx context.Context, cfg *config.Config) error {
 	)
 	g.Go(func() error { return dlqDepthWorker.Run(gctx) })
 
+	// Credential age tracker (P2-5 framework). Reports the age of
+	// platform-privileged credentials (Zitadel PAT / NewAPI admin
+	// token) so the operator alert can fire when rotation is overdue.
+	// Disabled by default — flip CRON_CRED_AGE_ENABLED=true once the
+	// rotation runbook is in place. Worker is nil-safe; when disabled
+	// it logs once and blocks on ctx so the errgroup wait still works.
+	credAgeWorker := app.NewCredentialAgeWorker(rdb, cfg.CronCredAgeEnabled)
+	g.Go(func() error { return credAgeWorker.Run(gctx) })
+
 	// Graceful shutdown trigger. The grace window must exceed the 30s QR
 	// long-poll cap (see qrMaxPollWait) so in-flight long polls can return
 	// naturally instead of being severed mid-flight. gRPC shutdown piggybacks

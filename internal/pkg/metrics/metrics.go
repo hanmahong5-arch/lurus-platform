@@ -301,6 +301,24 @@ var (
 			Help:      "Current count of pending hook failures in module.hook_failures.",
 		},
 	)
+
+	// credentialAgeDays tracks how stale each platform-privileged
+	// credential is. Cardinality is bounded by the explicit list in
+	// app.DefaultTrackedCredentials (currently 2 series) so this is
+	// safe to alert on directly. See docs/runbooks/credential-rotation.md
+	// — these are the platform privileged tokens (Zitadel PAT / NewAPI
+	// admin) that need rotation discipline before going prod, and the
+	// gauge plus the soft (>90d) / hard (>180d) Prometheus rules in
+	// docs/observability/alerts.md are the only operator visibility
+	// into rotation drift until the rotation worker ships.
+	credentialAgeDays = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "credential_age_days",
+			Help:      "Age of tracked credentials in days. Alert when >90 (soft) or >180 (hard) — these are platform privileged tokens (Zitadel PAT / NewAPI admin) that need rotation discipline before going prod.",
+		},
+		[]string{"name"}, // zitadel_pat | newapi_admin_token
+	)
 )
 
 // Handler returns the standard Prometheus /metrics HTTP handler.
@@ -474,6 +492,15 @@ func RecordHookOutcome(event, hook, result string) {
 // periodic reconciler tick.
 func SetHookDLQDepth(depth int64) {
 	hookDLQDepth.Set(float64(depth))
+}
+
+// RecordCredentialAgeDays publishes the age (in days) of a tracked
+// credential. The gauge is overwritten on each tick — the latest
+// value is always the current age. `name` must be a stable
+// low-cardinality identifier matching app.TrackedCredential.Name
+// (currently "zitadel_pat" or "newapi_admin_token").
+func RecordCredentialAgeDays(name string, days float64) {
+	credentialAgeDays.WithLabelValues(name).Set(days)
 }
 
 // RecordNewAPISyncOp increments the newapi_sync operation counter.

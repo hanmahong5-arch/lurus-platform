@@ -169,6 +169,14 @@ type Config struct {
 	CronPurgeEnabled  bool          // CRON_PURGE_ENABLED (default: false)
 	CronPurgeInterval time.Duration // CRON_PURGE_INTERVAL (default: 1h)
 	CronPurgeBatch    int           // CRON_PURGE_BATCH (default: 20)
+
+	// Credential age tracker (P2-5 framework). Daily worker that
+	// reports the age of platform-privileged credentials (Zitadel PAT /
+	// NewAPI admin token) as a Prometheus gauge so soft/hard rotation
+	// alerts can fire. DEFAULT FALSE — flip CRON_CRED_AGE_ENABLED=true
+	// only after the rotation runbook (docs/runbooks/credential-rotation.md)
+	// is in place, otherwise alerts will fire with no operator playbook.
+	CronCredAgeEnabled bool // CRON_CRED_AGE_ENABLED (default: false)
 }
 
 // Load reads config from environment variables and validates required fields.
@@ -257,6 +265,7 @@ func Load() (*Config, error) {
 		CronPurgeEnabled:       getEnv("CRON_PURGE_ENABLED", "false") == "true",
 		CronPurgeInterval:      parseDuration("CRON_PURGE_INTERVAL", 1*time.Hour),
 		CronPurgeBatch:         parseInt("CRON_PURGE_BATCH", 20),
+		CronCredAgeEnabled:     getEnv("CRON_CRED_AGE_ENABLED", "false") == "true",
 	}
 
 	if err := cfg.Validate(); err != nil {
