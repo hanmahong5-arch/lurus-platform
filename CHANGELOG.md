@@ -88,6 +88,26 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
     generic free-form text, so clients can branch on the specific dependency.
   - `strconv` import dropped from `internal_api.go` (no longer needed after
     parsePathInt64 migration).
+- **OAuth cluster envelope** (`P1-10` round 5). 34 raw `gin.H{"error":...}`
+  sites across 3 files migrated:
+  - `zlogin_handler.go` (16 sites): `respondDisabled` helper, GetAuthInfo,
+    SubmitPassword, LinkWechatAndComplete (5 sites incl. the
+    422 `no_zitadel_binding` semantic code), DirectLogin (7 sites: validation,
+    503 unconfigured, 2× 401 `Invalid credentials`, 3× internal-error 500s).
+  - `wechat_auth.go` (6 sites): Initiate state-gen 500, Callback CSRF/code
+    validation, fetch-user 502 (now `upstream_failed`), upsert + token-issue
+    500s.
+  - `webhook.go` (12 sites): Stripe + Creem provider gates use semantic
+    `stripe_unconfigured` / `creem_unconfigured` codes; signature failures
+    use `invalid_signature` code; order-processing failures route through
+    `respondInternalError`. Payment providers ack on HTTP status, not body
+    shape, so the wire change is safe.
+  - **`wechat_oauth.go` deliberately NOT migrated** — its 13 sites use the
+    RFC 6749 §5.2 envelope (`{"error": "invalid_request",
+    "error_description": "..."}`). Migrating those to our internal
+    `{"error", "message"}` shape would break Zitadel's Generic OAuth IDP
+    integration. The OAuth-protocol envelope is the canonical envelope at
+    that layer; this is correct and final.
 - **Org / product / drop-in / admin-ops envelope** (`P1-10` round 4). 37
   raw `gin.H{"error":...}` callsites across 7 files migrated:
   - `organization.go` (17 sites: ListMine 500, Get path+404, AddMember

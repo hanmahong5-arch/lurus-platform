@@ -20,10 +20,10 @@ const wechatSessionTTL = 7 * 24 * time.Hour
 
 // WechatAuthHandler handles the WeChat OAuth login flow via a WeChat proxy service.
 type WechatAuthHandler struct {
-	accountSvc       *app.AccountService
-	wechatServerAddr string // base URL of the WeChat proxy, e.g. http://wechat-proxy.svc:8080
+	accountSvc        *app.AccountService
+	wechatServerAddr  string // base URL of the WeChat proxy, e.g. http://wechat-proxy.svc:8080
 	wechatServerToken string // bearer token for the WeChat proxy
-	sessionSecret    string // HS256 key for lurus session tokens
+	sessionSecret     string // HS256 key for lurus session tokens
 }
 
 // NewWechatAuthHandler creates the handler.
@@ -48,7 +48,7 @@ func NewWechatAuthHandler(
 func (h *WechatAuthHandler) Initiate(c *gin.Context) {
 	state, err := generateWxState()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "state generation failed"})
+		respondInternalError(c, "wechat.initiate.state", err)
 		return
 	}
 
@@ -78,14 +78,16 @@ func (h *WechatAuthHandler) Callback(c *gin.Context) {
 	// CSRF: validate state matches the cookie set in Initiate.
 	cookieState, err := c.Cookie("wx_state")
 	if err != nil || cookieState == "" || cookieState != state {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid state (CSRF check failed)"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest,
+			"Invalid state (CSRF check failed)")
 		return
 	}
 	// Clear the one-time CSRF cookie.
 	c.SetCookie("wx_state", "", -1, "/", "", false, true)
 
 	if code == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing code parameter"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"missing code parameter")
 		return
 	}
 
@@ -93,23 +95,22 @@ func (h *WechatAuthHandler) Callback(c *gin.Context) {
 	wechatID, err := h.fetchWechatUser(c.Request.Context(), code)
 	if err != nil {
 		slog.Error("wechat user fetch failed", "err", err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": "wechat authentication failed"})
+		respondError(c, http.StatusBadGateway, ErrCodeUpstreamFailed,
+			"WeChat authentication failed")
 		return
 	}
 
 	// Find or create the lurus account for this WeChat user.
 	account, err := h.accountSvc.UpsertByWechat(c.Request.Context(), wechatID)
 	if err != nil {
-		slog.Error("upsert by wechat failed", "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "account creation failed"})
+		respondInternalError(c, "wechat.callback.upsert", err)
 		return
 	}
 
 	// Issue a lurus session token (HS256 JWT) for subsequent API calls.
 	token, err := auth.IssueSessionToken(account.ID, wechatSessionTTL, h.sessionSecret)
 	if err != nil {
-		slog.Error("issue session token failed", "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "token issue failed"})
+		respondInternalError(c, "wechat.callback.token_issue", err)
 		return
 	}
 

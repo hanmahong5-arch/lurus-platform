@@ -104,18 +104,21 @@ func (h *WebhookHandler) EpayNotify(c *gin.Context) {
 func (h *WebhookHandler) StripeWebhook(c *gin.Context) {
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "read body failed"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest,
+			"Failed to read request body")
 		return
 	}
 
 	p, pok := h.payments.Get("stripe")
 	if !pok {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "stripe not configured"})
+		respondError(c, http.StatusServiceUnavailable, "stripe_unconfigured",
+			"Stripe is not configured on this deployment")
 		return
 	}
 	stripe, _ := p.(*payment.StripeProvider)
 	if stripe == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "stripe not configured"})
+		respondError(c, http.StatusServiceUnavailable, "stripe_unconfigured",
+			"Stripe is not configured on this deployment")
 		return
 	}
 
@@ -124,7 +127,8 @@ func (h *WebhookHandler) StripeWebhook(c *gin.Context) {
 	if !ok {
 		slog.Warn("webhook/stripe: signature verification failed")
 		metrics.RecordWebhookEvent("stripe", "invalid_signature")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid stripe signature"})
+		respondError(c, http.StatusBadRequest, "invalid_signature",
+			"Invalid Stripe webhook signature")
 		return
 	}
 
@@ -138,7 +142,8 @@ func (h *WebhookHandler) StripeWebhook(c *gin.Context) {
 		if errors.Is(err, idempotency.ErrEmptyEventID) {
 			slog.Warn("webhook/stripe: empty event ID, rejecting")
 			metrics.RecordWebhookEvent("stripe", "empty_event_id")
-			c.JSON(http.StatusBadRequest, gin.H{"error": "missing event ID"})
+			respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest,
+				"missing event ID")
 			return
 		}
 	}
@@ -147,7 +152,7 @@ func (h *WebhookHandler) StripeWebhook(c *gin.Context) {
 		if err := h.processOrderPaid(c, orderNo, "stripe"); err != nil {
 			slog.Error("webhook/stripe: process order failed", "order_no", orderNo, "err", err)
 			metrics.RecordWebhookEvent("stripe", "error")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "order processing failed"})
+			respondInternalError(c, "webhook.stripe.process_order", err)
 			return
 		}
 	}
@@ -160,18 +165,21 @@ func (h *WebhookHandler) StripeWebhook(c *gin.Context) {
 func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "read body failed"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest,
+			"Failed to read request body")
 		return
 	}
 
 	p, pok := h.payments.Get("creem")
 	if !pok {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "creem not configured"})
+		respondError(c, http.StatusServiceUnavailable, "creem_unconfigured",
+			"Creem is not configured on this deployment")
 		return
 	}
 	creem, _ := p.(*payment.CreemProvider)
 	if creem == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "creem not configured"})
+		respondError(c, http.StatusServiceUnavailable, "creem_unconfigured",
+			"Creem is not configured on this deployment")
 		return
 	}
 
@@ -180,7 +188,8 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 	if !ok {
 		slog.Warn("webhook/creem: signature verification failed")
 		metrics.RecordWebhookEvent("creem", "invalid_signature")
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid creem signature"})
+		respondError(c, http.StatusUnauthorized, "invalid_signature",
+			"Invalid Creem webhook signature")
 		return
 	}
 
@@ -198,7 +207,8 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 		if errors.Is(err, idempotency.ErrEmptyEventID) {
 			slog.Warn("webhook/creem: empty event ID, rejecting")
 			metrics.RecordWebhookEvent("creem", "empty_event_id")
-			c.JSON(http.StatusBadRequest, gin.H{"error": "missing event ID"})
+			respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest,
+				"missing event ID")
 			return
 		}
 	}
@@ -207,7 +217,7 @@ func (h *WebhookHandler) CreemWebhook(c *gin.Context) {
 		if err := h.processOrderPaid(c, orderNo, "creem"); err != nil {
 			slog.Error("webhook/creem: process order failed", "order_no", orderNo, "err", err)
 			metrics.RecordWebhookEvent("creem", "error")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "order processing failed"})
+			respondInternalError(c, "webhook.creem.process_order", err)
 			return
 		}
 	}

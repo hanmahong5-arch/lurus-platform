@@ -76,12 +76,10 @@ func (h *ZLoginHandler) respondDisabled(c *gin.Context) bool {
 	if !h.disabled {
 		return false
 	}
-	c.JSON(http.StatusServiceUnavailable, gin.H{
-		"error": "login_unavailable",
-		"message": "Custom login is not configured on this deployment " +
-			"(ZITADEL_SERVICE_ACCOUNT_PAT missing). Please use OIDC redirect " +
-			"or contact the administrator.",
-	})
+	respondError(c, http.StatusServiceUnavailable, "login_unavailable",
+		"Custom login is not configured on this deployment "+
+			"(ZITADEL_SERVICE_ACCOUNT_PAT missing). Please use OIDC redirect "+
+			"or contact the administrator.")
 	return true
 }
 
@@ -93,7 +91,8 @@ func (h *ZLoginHandler) GetAuthInfo(c *gin.Context) {
 	}
 	authRequestID := c.Query("authRequestId")
 	if authRequestID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "authRequestId is required"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"authRequestId is required")
 		return
 	}
 
@@ -103,7 +102,7 @@ func (h *ZLoginHandler) GetAuthInfo(c *gin.Context) {
 	url := fmt.Sprintf("%s/v2/oidc/auth_requests/%s", h.zitadelIssuer, authRequestID)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build request"})
+		respondInternalError(c, "zlogin.auth_info.build_request", err)
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+h.serviceAccountPAT)
@@ -146,14 +145,15 @@ func (h *ZLoginHandler) SubmitPassword(c *gin.Context) {
 	sessionID, sessionToken, err := h.createSessionByCredentials(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
 		slog.Warn("zlogin: password session creation failed", "err", err)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized,
+			"Invalid credentials")
 		return
 	}
 
 	callbackURL, err := h.createCallback(c.Request.Context(), req.AuthRequestID, sessionID, sessionToken)
 	if err != nil {
 		slog.Error("zlogin: OIDC callback creation failed", "auth_request_id", req.AuthRequestID, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to complete OIDC flow"})
+		respondInternalError(c, "zlogin.password.callback", err)
 		return
 	}
 
@@ -177,26 +177,26 @@ func (h *ZLoginHandler) LinkWechatAndComplete(c *gin.Context) {
 
 	// Validate lurus session token and extract account ID.
 	if h.sessionSecret == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session tokens not configured"})
+		respondError(c, http.StatusServiceUnavailable, "session_unconfigured",
+			"Session tokens are not configured on this deployment")
 		return
 	}
 	accountID, err := auth.ValidateSessionToken(req.LurusToken, h.sessionSecret)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid lurus token"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid lurus token")
 		return
 	}
 
 	// Fetch account to obtain its Zitadel user ID (sub).
 	account, err := h.accounts.GetByID(c.Request.Context(), accountID)
 	if err != nil || account == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "Account")
 		return
 	}
 	if account.ZitadelSub == "" {
 		// WeChat-only account with no Zitadel binding cannot complete OIDC.
-		c.JSON(http.StatusUnprocessableEntity, gin.H{
-			"error": "this account has no Zitadel binding — please login with email first",
-		})
+		respondError(c, http.StatusUnprocessableEntity, "no_zitadel_binding",
+			"This account has no Zitadel binding — please login with email first")
 		return
 	}
 
@@ -204,14 +204,14 @@ func (h *ZLoginHandler) LinkWechatAndComplete(c *gin.Context) {
 	sessionID, sessionToken, err := h.createSessionByUserID(c.Request.Context(), account.ZitadelSub)
 	if err != nil {
 		slog.Error("zlogin: wechat session creation failed", "account_id", accountID, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create Zitadel session"})
+		respondInternalError(c, "zlogin.wechat.session_create", err)
 		return
 	}
 
 	callbackURL, err := h.createCallback(c.Request.Context(), req.AuthRequestID, sessionID, sessionToken)
 	if err != nil {
 		slog.Error("zlogin: OIDC callback creation failed", "auth_request_id", req.AuthRequestID, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to complete OIDC flow"})
+		respondInternalError(c, "zlogin.wechat.callback", err)
 		return
 	}
 
@@ -240,12 +240,14 @@ func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
 		identifier = req.Username
 	}
 	if identifier == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "identifier is required"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"identifier is required")
 		return
 	}
 
 	if h.sessionSecret == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session tokens not configured"})
+		respondError(c, http.StatusServiceUnavailable, "session_unconfigured",
+			"Session tokens are not configured on this deployment")
 		return
 	}
 
@@ -253,7 +255,8 @@ func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
 	loginName, err := h.resolveLoginName(c.Request.Context(), identifier)
 	if err != nil {
 		slog.Warn("direct-login: resolve login name failed", "identifier", identifier, "err", err)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized,
+			"Invalid credentials")
 		return
 	}
 
@@ -261,7 +264,8 @@ func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
 	sessionID, _, err := h.createSessionByCredentials(c.Request.Context(), loginName, req.Password)
 	if err != nil {
 		slog.Warn("direct-login: credential check failed", "err", err)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized,
+			"Invalid credentials")
 		return
 	}
 
@@ -269,7 +273,7 @@ func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
 	userID, loginName, displayName, err := h.getSessionUser(c.Request.Context(), sessionID)
 	if err != nil {
 		slog.Error("direct-login: fetch session user failed", "session_id", sessionID, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve user info"})
+		respondInternalError(c, "direct_login.session_user", err)
 		return
 	}
 
@@ -277,7 +281,7 @@ func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
 	account, err := h.accounts.UpsertByZitadelSub(c.Request.Context(), userID, loginName, displayName, "")
 	if err != nil {
 		slog.Error("direct-login: upsert account failed", "user_id", userID, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to provision account"})
+		respondInternalError(c, "direct_login.upsert", err)
 		return
 	}
 
@@ -286,7 +290,7 @@ func (h *ZLoginHandler) DirectLogin(c *gin.Context) {
 	token, err := auth.IssueSessionToken(account.ID, tokenTTL, h.sessionSecret)
 	if err != nil {
 		slog.Error("direct-login: token issuance failed", "account_id", account.ID, "err", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to issue session token"})
+		respondInternalError(c, "direct_login.token_issue", err)
 		return
 	}
 
