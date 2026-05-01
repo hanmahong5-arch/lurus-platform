@@ -22,9 +22,9 @@ import (
 // TestRegistry_FireReconciliationIssue_CallsHook verifies that the registered
 // ReconciliationIssue hook is invoked with the correct issue.
 func TestRegistry_FireReconciliationIssue_CallsHook(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry().WithRetryPolicy(fastRetry())
 	var gotIssue *entity.ReconciliationIssue
-	r.OnReconciliationIssue(func(ctx context.Context, issue *entity.ReconciliationIssue) error {
+	r.OnReconciliationIssue("test", func(ctx context.Context, issue *entity.ReconciliationIssue) error {
 		gotIssue = issue
 		return nil
 	})
@@ -57,12 +57,12 @@ func TestRegistry_FireReconciliationIssue_NoHooks(t *testing.T) {
 // TestRegistry_FireReconciliationIssue_ErrorDoesNotBlock verifies that a hook
 // failure does not prevent subsequent hooks from executing.
 func TestRegistry_FireReconciliationIssue_ErrorDoesNotBlock(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry().WithRetryPolicy(fastRetry())
 	var secondCalled bool
-	r.OnReconciliationIssue(func(ctx context.Context, issue *entity.ReconciliationIssue) error {
+	r.OnReconciliationIssue("failing", func(ctx context.Context, issue *entity.ReconciliationIssue) error {
 		return errors.New("hook failed")
 	})
-	r.OnReconciliationIssue(func(ctx context.Context, issue *entity.ReconciliationIssue) error {
+	r.OnReconciliationIssue("ok", func(ctx context.Context, issue *entity.ReconciliationIssue) error {
 		secondCalled = true
 		return nil
 	})
@@ -78,10 +78,11 @@ func TestRegistry_FireReconciliationIssue_ErrorDoesNotBlock(t *testing.T) {
 
 // TestRegistry_FireReconciliationIssue_MultipleHooks verifies all hooks are called.
 func TestRegistry_FireReconciliationIssue_MultipleHooks(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry().WithRetryPolicy(fastRetry())
 	var count int
 	for i := 0; i < 3; i++ {
-		r.OnReconciliationIssue(func(ctx context.Context, issue *entity.ReconciliationIssue) error {
+		name := "h" + string(rune('0'+i))
+		r.OnReconciliationIssue(name, func(ctx context.Context, issue *entity.ReconciliationIssue) error {
 			count++
 			return nil
 		})
@@ -98,8 +99,8 @@ func TestRegistry_FireReconciliationIssue_MultipleHooks(t *testing.T) {
 // TestRegistry_HookCount_WithReconciliation verifies HookCount includes reconciliation hooks.
 func TestRegistry_HookCount_WithReconciliation(t *testing.T) {
 	r := NewRegistry()
-	r.OnReconciliationIssue(func(ctx context.Context, issue *entity.ReconciliationIssue) error { return nil })
-	r.OnReconciliationIssue(func(ctx context.Context, issue *entity.ReconciliationIssue) error { return nil })
+	r.OnReconciliationIssue("a", func(ctx context.Context, issue *entity.ReconciliationIssue) error { return nil })
+	r.OnReconciliationIssue("b", func(ctx context.Context, issue *entity.ReconciliationIssue) error { return nil })
 	if r.HookCount() != 2 {
 		t.Errorf("HookCount = %d, want 2", r.HookCount())
 	}
@@ -301,7 +302,7 @@ func TestNotificationModule_Register_IncludesReconciliationHook(t *testing.T) {
 
 	// Fire the reconciliation hook via the registry to confirm it routes correctly.
 	var fired bool
-	r.OnReconciliationIssue(func(ctx context.Context, issue *entity.ReconciliationIssue) error {
+	r.OnReconciliationIssue("custom", func(ctx context.Context, issue *entity.ReconciliationIssue) error {
 		fired = true
 		return nil
 	})

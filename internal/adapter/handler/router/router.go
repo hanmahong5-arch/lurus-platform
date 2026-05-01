@@ -18,43 +18,44 @@ import (
 
 // Deps holds all handler dependencies injected at startup.
 type Deps struct {
-	Accounts        *handler.AccountHandler
-	Subscriptions   *handler.SubscriptionHandler
-	Wallets         *handler.WalletHandler
-	Products        *handler.ProductHandler
-	Internal        *handler.InternalHandler
-	Webhooks        *handler.WebhookHandler
-	Invoices        *handler.InvoiceHandler
-	Refunds         *handler.RefundHandler
-	AdminOps        *handler.AdminOpsHandler
-	Reports         *handler.ReportHandler
-	AdminConfig     *handler.AdminConfigHandler
-	WechatAuth      *handler.WechatAuthHandler      // nil when WeChat login is not configured
-	WechatOAuth     *handler.WechatOAuthHandler     // nil when WeChat OAuth2 adapter is not configured
-	ZLogin          *handler.ZLoginHandler          // nil when custom OIDC login is not configured
-	Registration    *handler.RegistrationHandler    // nil when registration is not configured
-	Checkin         *handler.CheckinHandler         // daily check-in
-	Organizations   *handler.OrganizationHandler    // organization management
-	KovaProvisioning *handler.KovaProvisioningHandler // platform→kova provisioning bridge (F2 revenue path); nil → endpoints not registered
-	QRLogin         *handler.QRLoginHandler         // v1 QR login (login-only, legacy)
-	QR              *handler.QRHandler              // v2 multi-action QR primitive (login → join_org/delegate pending)
-	AppsAdmin       *handler.AppsAdminHandler       // read-only viewer over apps.yaml + Zitadel state
-	AccountAdmin    *handler.AccountAdminHandler    // GDPR-grade account purge via QR-delegate (Phase 4)
+	Accounts          *handler.AccountHandler
+	Subscriptions     *handler.SubscriptionHandler
+	Wallets           *handler.WalletHandler
+	Products          *handler.ProductHandler
+	Internal          *handler.InternalHandler
+	Webhooks          *handler.WebhookHandler
+	Invoices          *handler.InvoiceHandler
+	Refunds           *handler.RefundHandler
+	AdminOps          *handler.AdminOpsHandler
+	Reports           *handler.ReportHandler
+	AdminConfig       *handler.AdminConfigHandler
+	WechatAuth        *handler.WechatAuthHandler        // nil when WeChat login is not configured
+	WechatOAuth       *handler.WechatOAuthHandler       // nil when WeChat OAuth2 adapter is not configured
+	ZLogin            *handler.ZLoginHandler            // nil when custom OIDC login is not configured
+	Registration      *handler.RegistrationHandler      // nil when registration is not configured
+	Checkin           *handler.CheckinHandler           // daily check-in
+	Organizations     *handler.OrganizationHandler      // organization management
+	KovaProvisioning  *handler.KovaProvisioningHandler  // platform→kova provisioning bridge (F2 revenue path); nil → endpoints not registered
+	QRLogin           *handler.QRLoginHandler           // v1 QR login (login-only, legacy)
+	QR                *handler.QRHandler                // v2 multi-action QR primitive (login → join_org/delegate pending)
+	AppsAdmin         *handler.AppsAdminHandler         // read-only viewer over apps.yaml + Zitadel state
+	AccountAdmin      *handler.AccountAdminHandler      // GDPR-grade account purge via QR-delegate (Phase 4)
 	AccountSelfDelete *handler.AccountSelfDeleteHandler // user-self delete-request (PIPL §47 / GDPR Art.17)
-	OpsCatalog      *handler.OpsCatalogHandler      // privileged-op catalogue (Phase 4 / Sprint 2)
-	APIKeysAdmin    *handler.APIKeysAdminHandler    // /admin/v1/api-keys/* — Lurus API key abstraction over Zitadel
-	Whoami          *handler.WhoamiHandler          // /api/v1/whoami — drop-in identity contract for *.lurus.cn products
-	LLMToken        *handler.LLMTokenHandler        // /api/v1/account/me/llm-token — drop-in NewAPI bearer for LLM products
-	NewAPIProxy     *handler.NewAPIProxyHandler     // nil when newapi proxy is not configured
-	MemorusProxy    *handler.MemorusProxyHandler    // nil when memorus URL/key not configured
-	ServiceKeyAdmin *handler.AdminServiceKeyHandler // nil when service key management not wired
-	SMSRelay        *handler.SMSRelayHandler        // nil when SMS relay is not configured
-	InternalKey     string                          // legacy INTERNAL_API_KEY (fallback during migration)
-	CookieDomain    string                          // parent domain for lurus_session cookie (e.g. ".lurus.cn"); empty = host-only
-	ServiceKeys     *app.ServiceKeyStore            // scoped service key resolver (nil = legacy-only mode)
-	JWT             *auth.JWTMiddleware
-	RateLimit       *ratelimit.Limiter
-	ExtraMiddleware []gin.HandlerFunc // metrics, tracing, etc. (applied before routes)
+	OpsCatalog        *handler.OpsCatalogHandler        // privileged-op catalogue (Phase 4 / Sprint 2)
+	OnboardingFailure *handler.OnboardingFailureHandler // hook DLQ inspect+replay (P1-9). nil → routes not registered.
+	APIKeysAdmin      *handler.APIKeysAdminHandler      // /admin/v1/api-keys/* — Lurus API key abstraction over Zitadel
+	Whoami            *handler.WhoamiHandler            // /api/v1/whoami — drop-in identity contract for *.lurus.cn products
+	LLMToken          *handler.LLMTokenHandler          // /api/v1/account/me/llm-token — drop-in NewAPI bearer for LLM products
+	NewAPIProxy       *handler.NewAPIProxyHandler       // nil when newapi proxy is not configured
+	MemorusProxy      *handler.MemorusProxyHandler      // nil when memorus URL/key not configured
+	ServiceKeyAdmin   *handler.AdminServiceKeyHandler   // nil when service key management not wired
+	SMSRelay          *handler.SMSRelayHandler          // nil when SMS relay is not configured
+	InternalKey       string                            // legacy INTERNAL_API_KEY (fallback during migration)
+	CookieDomain      string                            // parent domain for lurus_session cookie (e.g. ".lurus.cn"); empty = host-only
+	ServiceKeys       *app.ServiceKeyStore              // scoped service key resolver (nil = legacy-only mode)
+	JWT               *auth.JWTMiddleware
+	RateLimit         *ratelimit.Limiter
+	ExtraMiddleware   []gin.HandlerFunc // metrics, tracing, etc. (applied before routes)
 
 	// TrustedProxyCIDRs restricts which X-Forwarded-For headers Gin's
 	// c.ClientIP() will honour. Empty slice = trust nothing (safe default
@@ -104,7 +105,7 @@ func Build(deps Deps) *gin.Engine {
 
 	r.Use(slogctx.Middleware()) // Assign request_id early for log correlation.
 	r.Use(gin.Logger())
-	r.Use(gin.Recovery())                                          // Catch panics, return 500 instead of crash.
+	r.Use(gin.Recovery()) // Catch panics, return 500 instead of crash.
 	// Security headers — applied early so even error responses get them.
 	// Defaults are tuned for a public-facing identity service; see
 	// handler/security_headers.go for per-header rationale.
@@ -525,6 +526,15 @@ func Build(deps Deps) *gin.Engine {
 		// per op.
 		if deps.OpsCatalog != nil {
 			admin.GET("/ops", deps.OpsCatalog.List)
+		}
+
+		// Hook DLQ — inspect + replay async lifecycle hook failures
+		// (P1-9). Surfaces what was previously slog-and-forget and
+		// gives operators a one-click recovery path. List endpoint
+		// also refreshes the hook_dlq_pending gauge each call.
+		if deps.OnboardingFailure != nil {
+			admin.GET("/onboarding-failures", deps.OnboardingFailure.List)
+			admin.POST("/onboarding-failures/:id/replay", deps.OnboardingFailure.Replay)
 		}
 
 		// Lurus API keys — abstracts Zitadel Service User + PAT.

@@ -274,6 +274,33 @@ var (
 		},
 		[]string{"op", "result"},
 	)
+
+	// hookOutcomeTotal tracks every async lifecycle hook invocation
+	// (P1-9). Pivot on `event` (account_created / plan_changed / …) +
+	// `hook` (mail / notification / newapi_sync / …) + `result`:
+	//   succeeded_first_try | retry_succeeded | dlq |
+	//   replay_succeeded    | replay_failed
+	// `dlq` is the alerting signal — a non-zero rate means hooks are
+	// permanently failing and operator intervention is needed.
+	hookOutcomeTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "hook_outcomes_total",
+			Help:      "Module hook invocation outcomes by event, hook name, and result. result∈{succeeded_first_try,retry_succeeded,dlq,replay_succeeded,replay_failed}.",
+		},
+		[]string{"event", "hook", "result"},
+	)
+
+	// hookDLQDepth is the live count of unresolved DLQ rows. Updated
+	// by a periodic reconciler tick; safe to alert on >0 with a long
+	// for-duration so blips don't page.
+	hookDLQDepth = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: namespace,
+			Name:      "hook_dlq_pending",
+			Help:      "Current count of pending hook failures in module.hook_failures.",
+		},
+	)
 )
 
 // Handler returns the standard Prometheus /metrics HTTP handler.
@@ -437,6 +464,18 @@ func RecordOIDCSecretRotation(app, env, trigger string) {
 	oidcSecretRotatedTotal.WithLabelValues(app, env, trigger).Inc()
 }
 
+// RecordHookOutcome increments the hook outcomes counter (P1-9).
+// Safe to call from any goroutine; counter ops are atomic.
+func RecordHookOutcome(event, hook, result string) {
+	hookOutcomeTotal.WithLabelValues(event, hook, result).Inc()
+}
+
+// SetHookDLQDepth updates the live DLQ depth gauge. Set from the
+// periodic reconciler tick.
+func SetHookDLQDepth(depth int64) {
+	hookDLQDepth.Set(float64(depth))
+}
+
 // RecordNewAPISyncOp increments the newapi_sync operation counter.
 //
 // `op` ∈ {"account_provisioned","topup_synced","llm_token_issued"} —
@@ -445,9 +484,9 @@ func RecordOIDCSecretRotation(app, env, trigger string) {
 //   - success    happy path; the operation reached NewAPI and recorded its work
 //   - skipped    correctly bypassed (e.g. account not yet mapped, amount ≤ 0)
 //   - duplicate  dedup caught a JetStream redelivery (only relevant to topup);
-//                count = how often we saved the user from double-credit
+//     count = how often we saved the user from double-credit
 //   - error      anything else; should also create a log entry. Sustained
-//                non-zero error rate is the alerting signal.
+//     non-zero error rate is the alerting signal.
 //
 // Cardinality is bounded (3×4 = 12 series total) so safe for high-rate
 // dashboards and Prometheus federation.

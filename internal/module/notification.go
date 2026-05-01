@@ -129,11 +129,12 @@ func (m *NotificationModule) OnReconciliationIssue(ctx context.Context, issue *e
 }
 
 // Register registers all notification module hooks into the module registry.
+// Hook name "notification" is the DLQ key — stable across deploys.
 func (m *NotificationModule) Register(r *Registry) {
-	r.OnAccountCreated(m.OnAccountCreated)
-	r.OnCheckin(m.OnCheckin)
-	r.OnReferralSignup(m.OnReferralSignup)
-	r.OnReconciliationIssue(m.OnReconciliationIssue)
+	r.OnAccountCreated("notification", m.OnAccountCreated)
+	r.OnCheckin("notification", m.OnCheckin)
+	r.OnReferralSignup("notification", m.OnReferralSignup)
+	r.OnReconciliationIssue("notification", m.OnReconciliationIssue)
 	slog.Info("module registered", "module", "notification",
 		"service_url", m.cfg.ServiceURL,
 		"hooks", "account_created,checkin,referral_signup,reconciliation_issue")

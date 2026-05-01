@@ -88,6 +88,38 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
     generic free-form text, so clients can branch on the specific dependency.
   - `strconv` import dropped from `internal_api.go` (no longer needed after
     parsePathInt64 migration).
+- **Async hook DLQ + retry** (`P1-9` complete). All
+  `module.Registry.Fire*` callsites now wrap their hook invocations with
+  3-attempt exponential backoff (200ms→400ms→800ms ±20% jitter); after
+  exhaustion the failure lands in `module.hook_failures` (new schema +
+  table from `migrations/030_module_hook_failures.sql`). Operators
+  inspect via `GET /admin/v1/onboarding-failures` and replay via
+  `POST /admin/v1/onboarding-failures/:id/replay` — replay re-fetches
+  the fresh account from the store before re-invoking the named hook,
+  so a snapshot that was stale at first-failure time doesn't re-fail
+  the same way at replay.
+
+  **BREAKING**: `Registry.OnAccountCreated` / `OnAccountDeleted` /
+  `OnPlanChanged` / `OnCheckin` / `OnReferralSignup` /
+  `OnReconciliationIssue` now take a `name string` first argument
+  (was `(hook)` only). The name is the DLQ row's `hook_name` column
+  and the replay key — must be stable across deploys. Existing
+  subscribers updated:
+  - `mail.MailModule.Register` → name `"mail"`
+  - `notification.NotificationModule.Register` → name `"notification"`
+  - `newapi_sync.Module.Register` → name `"newapi_sync"`
+
+  Empty hook names panic at registration time so the breakage is
+  loud rather than silent.
+
+  Metrics: `lurus_platform_hook_outcomes_total{event,hook,result}`
+  with `result ∈ {succeeded_first_try, retry_succeeded, dlq,
+  replay_succeeded, replay_failed}`. `result=dlq` is the alerting
+  signal — sustained non-zero rate means hooks are permanently
+  failing and operator intervention is needed. Live DLQ depth is
+  exposed as `lurus_platform_hook_dlq_pending` (refreshed by every
+  List call).
+
 - **OAuth cluster envelope** (`P1-10` round 5). 34 raw `gin.H{"error":...}`
   sites across 3 files migrated:
   - `zlogin_handler.go` (16 sites): `respondDisabled` helper, GetAuthInfo,

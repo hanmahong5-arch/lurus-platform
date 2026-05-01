@@ -117,10 +117,11 @@ func (m *MailModule) OnPlanChanged(ctx context.Context, account *entity.Account,
 }
 
 // Register registers all mail module hooks into the module registry.
+// Hook name "mail" is the DLQ key — stable across deploys.
 func (m *MailModule) Register(r *Registry) {
-	r.OnAccountCreated(m.OnAccountCreated)
-	r.OnAccountDeleted(m.OnAccountDeleted)
-	r.OnPlanChanged(m.OnPlanChanged)
+	r.OnAccountCreated("mail", m.OnAccountCreated)
+	r.OnAccountDeleted("mail", m.OnAccountDeleted)
+	r.OnPlanChanged("mail", m.OnPlanChanged)
 	slog.Info("module registered", "module", "mail", "stalwart_url", m.cfg.StalwartAdminURL)
 }
 

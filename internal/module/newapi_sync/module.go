@@ -7,12 +7,12 @@
 //
 // 设计原则：
 //
-//   1. 失败不阻塞主流程 — module Registry 的 hook 失败仅记日志（FireAccountCreated
-//      包了 try/catch），所以 NewAPI 抖动不会让用户登录失败
-//   2. 幂等 — 重复触发同一 account 是 no-op；FindByUsername-then-Create
-//      避免重复建用户
-//   3. nil-safe — client 或 store 为 nil 时整个模块停用，**不**报错；让 ops
-//      可以零配置部署 platform 而不需要 NewAPI（dev、单元测试场景）
+//  1. 失败不阻塞主流程 — module Registry 的 hook 失败仅记日志（FireAccountCreated
+//     包了 try/catch），所以 NewAPI 抖动不会让用户登录失败
+//  2. 幂等 — 重复触发同一 account 是 no-op；FindByUsername-then-Create
+//     避免重复建用户
+//  3. nil-safe — client 或 store 为 nil 时整个模块停用，**不**报错；让 ops
+//     可以零配置部署 platform 而不需要 NewAPI（dev、单元测试场景）
 package newapi_sync
 
 import (
@@ -202,7 +202,9 @@ func (m *Module) Register(r *module.Registry) {
 	if r == nil {
 		return
 	}
-	r.OnAccountCreated(m.OnAccountCreated)
+	// "newapi_sync" is the DLQ hook_name — stable across deploys so DLQ
+	// rows persist through code reorganization.
+	r.OnAccountCreated("newapi_sync", m.OnAccountCreated)
 	slog.Info("module registered", "module", "newapi_sync")
 }
 

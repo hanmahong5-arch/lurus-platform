@@ -155,6 +155,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	adminSettingsRepo := repo.NewAdminSettingsRepo(db)
 	orgRepo := repo.NewOrganizationRepo(db)
 	orgServiceRepo := repo.NewOrgServiceRepo(db)
+	hookFailureRepo := repo.NewHookFailureRepo(db)
 
 	// --- Admin Config Service (DB-first payment config override) ---
 	adminConfigSvc := app.NewAdminConfigService(adminSettingsRepo)
@@ -192,7 +193,12 @@ func run(ctx context.Context, cfg *config.Config) error {
 	checkinSvc := app.NewCheckinService(checkinRepo, walletRepo)
 
 	// --- Module Registry (pluggable hooks for notification, mail, etc.) ---
-	registry := module.NewRegistry()
+	// P1-9: hook DLQ + retry. Failures land in module.hook_failures and
+	// surface in /admin/v1/onboarding-failures with one-click replay.
+	registry := module.NewRegistry().
+		WithDLQ(hookFailureRepo).
+		WithAccountFetcher(accountSvc.GetByID).
+		WithMetrics(hookMetricsSink{})
 	if cfg.InternalAPIKey != "" {
 		notifMod := module.NewNotificationModule(module.NotificationConfig{
 			Enabled:    true,
@@ -693,6 +699,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	opsCatalogH := handler.NewOpsCatalogHandler(opsRegistry)
+	onboardingFailH := handler.NewOnboardingFailureHandler(hookFailureRepo, registry)
 
 	// --- SMS Relay Handler (Zitadel webhook → Aliyun SMS) ---
 	// Active only when SMS_PROVIDER is configured. When noop, the endpoint is
@@ -731,6 +738,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		AccountAdmin:      accountAdminH,
 		AccountSelfDelete: accountSelfDeleteH,
 		OpsCatalog:        opsCatalogH,
+		OnboardingFailure: onboardingFailH,
 		APIKeysAdmin:      apiKeysAdminH,
 		Whoami:            whoamiH,
 		LLMToken:          llmTokenH,
@@ -1009,6 +1017,21 @@ func buildAppRegistryReconciler(rdb *redis.Client, zitadelClient *zitadel.Client
 		return nil
 	}
 	return recon
+}
+
+// hookMetricsSink adapts metrics package functions to the
+// module.HookMetricsSink interface (P1-9). Stateless — methods just
+// forward to package-level metric vars.
+type hookMetricsSink struct{}
+
+// RecordHookOutcome forwards to the hook_outcomes_total counter.
+func (hookMetricsSink) RecordHookOutcome(event, hook, result string) {
+	metrics.RecordHookOutcome(event, hook, result)
+}
+
+// SetDLQDepth forwards to the hook_dlq_pending gauge.
+func (hookMetricsSink) SetDLQDepth(depth int64) {
+	metrics.SetHookDLQDepth(depth)
 }
 
 // cronPurgeCascadeAdapter bridges app.AccountPurgeWorker (which knows

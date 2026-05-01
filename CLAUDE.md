@@ -171,6 +171,42 @@ Key files:
 - `internal/adapter/handler/kova_provisioning.go` — 3 handlers
 - `internal/adapter/repo/org_service.go` — Upsert-on-conflict persistence
 
+## Hook DLQ (P1-9, 2026-05-01)
+
+Async lifecycle hooks (`OnAccountCreated` / `OnAccountDeleted` / `OnPlanChanged` / `OnCheckin` / `OnReferralSignup` / `OnReconciliationIssue`) are now wrapped by `module.Registry.runHook` with **3-attempt exponential backoff** (200ms→400ms→800ms ±20% jitter). After exhaustion the failure lands in `module.hook_failures`.
+
+**Breaking API change**: every `On*` registration now requires a `name` parameter:
+
+```go
+r.OnAccountCreated("mail", mailMod.OnAccountCreated)        // was r.OnAccountCreated(...)
+r.OnAccountCreated("notification", notifMod.OnAccountCreated)
+r.OnAccountCreated("newapi_sync", newapiMod.OnAccountCreated)
+```
+
+The name is the DLQ row's `hook_name` column and the replay key — must be **stable across deploys**, renaming strands the DLQ rows.
+
+**Admin UI**:
+
+```bash
+# List pending failures (default: pending=true, page_size=20)
+curl -H "Authorization: Bearer $ADMIN_JWT" \
+  https://identity.lurus.cn/admin/v1/onboarding-failures
+# {"data":[…], "total":12, "pending_depth":12}
+
+# Replay a specific failure (re-fetches fresh account, re-invokes hook)
+curl -X POST -H "Authorization: Bearer $ADMIN_JWT" \
+  https://identity.lurus.cn/admin/v1/onboarding-failures/42/replay
+# 200 {"replayed":true}                                — hook succeeded
+# 200 {"replayed":true,"skipped":true,"reason":"…"}   — account purged since failure
+# 409 already_replayed                                — was replayed before
+# 502 hook_replay_failed                              — hook still fails; row's attempts++
+# 501 replay_unsupported                              — event type not replay-able (reconciliation_issue)
+```
+
+**Metrics**: `lurus_platform_hook_outcomes_total{event,hook,result}` — pivot on `result=dlq` for the alerting signal. `lurus_platform_hook_dlq_pending` gauge tracks live DLQ depth (refreshed each List call).
+
+Schema: `migrations/030_module_hook_failures.sql` creates `module.hook_failures` with partial unique indexes on `(event, hook_name, account_id)` so recurring failures upsert into one row (`attempts++`, `last_failed_at` refreshed) instead of duplicating.
+
 ## Ops Catalog
 
 Privileged ops enumerated via `internal/module/ops/`. `GET /admin/v1/ops` (admin JWT) returns catalogue: `{type, description, risk_level, destructive, delegate}`. 当前 ops: `approve_refund` / `delete_account` / `delete_oidc_app` (delegate=true via QR-confirmed APP) · `rotate_secret` (delegate=false direct admin).
