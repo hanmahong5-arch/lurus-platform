@@ -68,6 +68,18 @@ type Deps struct {
 	// + wildcard origin is rejected by every browser.
 	CORSOrigins []string
 
+	// SessionSecret is the HS256 key shared with auth.IssueSessionToken.
+	// Used by handler.RequireSession to gate /whoami + /llm-token (which
+	// sit outside the standard `/api/v1/*` JWT group). Empty = the
+	// middleware refuses traffic with 503 — same as Whoami's existing
+	// fallback.
+	SessionSecret string
+
+	// SessionRevoker, when non-nil, is consulted by handler.RequireSession
+	// to reject tokens that were logged out server-side (P1-5). nil =
+	// revocation check is a no-op; the rest of session auth still works.
+	SessionRevoker *auth.SessionRevoker
+
 	// Readiness is the pluggable readiness probe set. nil = /readyz is
 	// wired with an empty set (always 200), which matches the pre-PT7.4
 	// behaviour of a naked /health probe.
@@ -188,22 +200,62 @@ func Build(deps Deps) *gin.Engine {
 		r.GET("/api/v1/public/qrcode/:type", deps.AdminConfig.GetPublicQRCode)
 	}
 
-	// /api/v1/whoami — drop-in identity contract.
-	// Outside the JWT middleware group because the handler accepts BOTH
-	// the Authorization Bearer token AND the parent-domain `lurus_session`
+	// /api/v1/whoami + /api/v1/auth/logout + /api/v1/account/me/llm-token
+	// are drop-in identity contracts that sit OUTSIDE the standard
+	// `/api/v1/*` JWT middleware group because they accept BOTH the
+	// Authorization Bearer token AND the parent-domain `lurus_session`
 	// cookie; the standard middleware only knows about Bearer.
+	//
+	// Middleware order (P1-5 + P1-6):
+	//   PerIP        → blunt anti-flood for unauthenticated callers
+	//   RequireSession → validates token + checks revoke list, seeds
+	//                    `account_id` for PerUser
+	//   PerUser      → per-account quota; was a no-op before P1-6
+	//                  because account_id was never seeded on these routes
+	//
+	// Logout intentionally skips RequireSession + PerUser: it's idempotent
+	// (clearing a missing cookie = 200) and the handler revokes whatever
+	// token it can read on its own. Forcing auth there would lock a user
+	// out of logging out if their token had already been revoked from
+	// another device.
+	sessionAuth := handler.RequireSession(handler.SessionAuthDeps{
+		Secret:  deps.SessionSecret,
+		Revoker: deps.SessionRevoker,
+	})
+
 	if deps.Whoami != nil {
-		r.GET("/api/v1/whoami", deps.Whoami.Whoami)
-		r.POST("/api/v1/auth/logout", func(c *gin.Context) {
+		whoamiChain := []gin.HandlerFunc{}
+		if deps.RateLimit != nil {
+			whoamiChain = append(whoamiChain, deps.RateLimit.PerIP())
+		}
+		whoamiChain = append(whoamiChain, sessionAuth)
+		if deps.RateLimit != nil {
+			whoamiChain = append(whoamiChain, deps.RateLimit.PerUser())
+		}
+		whoamiChain = append(whoamiChain, deps.Whoami.Whoami)
+		r.GET("/api/v1/whoami", whoamiChain...)
+
+		logoutChain := []gin.HandlerFunc{}
+		if deps.RateLimit != nil {
+			logoutChain = append(logoutChain, deps.RateLimit.PerIP())
+		}
+		logoutChain = append(logoutChain, func(c *gin.Context) {
 			deps.Whoami.Logout(c, deps.CookieDomain)
 		})
+		r.POST("/api/v1/auth/logout", logoutChain...)
 	}
 
-	// /api/v1/account/me/llm-token — drop-in NewAPI bearer for LLM
-	// products. Same auth shape as /whoami (cookie OR Bearer); see
-	// handler/llm_token_handler.go.
 	if deps.LLMToken != nil {
-		r.GET("/api/v1/account/me/llm-token", deps.LLMToken.Get)
+		llmChain := []gin.HandlerFunc{}
+		if deps.RateLimit != nil {
+			llmChain = append(llmChain, deps.RateLimit.PerIP())
+		}
+		llmChain = append(llmChain, sessionAuth)
+		if deps.RateLimit != nil {
+			llmChain = append(llmChain, deps.RateLimit.PerUser())
+		}
+		llmChain = append(llmChain, deps.LLMToken.Get)
+		r.GET("/api/v1/account/me/llm-token", llmChain...)
 	}
 
 	// Public user API — requires Zitadel JWT or lurus session token

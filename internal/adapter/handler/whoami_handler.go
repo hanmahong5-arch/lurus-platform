@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -26,6 +28,10 @@ import (
 type WhoamiHandler struct {
 	accounts      *app.AccountService
 	sessionSecret string
+	// revoker, when non-nil, is the server-side token-revocation list
+	// consulted on Logout (P1-5). nil = revocation disabled, Logout
+	// only clears the cookie (legacy behaviour).
+	revoker *auth.SessionRevoker
 	// cookieDomain = "" means the cookie was issued host-only; we still
 	// read it via c.Cookie() since the browser sends what it has.
 }
@@ -35,6 +41,14 @@ type WhoamiHandler struct {
 // validate even when freshly issued.
 func NewWhoamiHandler(accounts *app.AccountService, sessionSecret string) *WhoamiHandler {
 	return &WhoamiHandler{accounts: accounts, sessionSecret: sessionSecret}
+}
+
+// WithRevoker wires a Redis-backed revoke list so Logout invalidates the
+// token server-side (P1-5). nil-safe: passing nil is a no-op so callers
+// can wire unconditionally.
+func (h *WhoamiHandler) WithRevoker(r *auth.SessionRevoker) *WhoamiHandler {
+	h.revoker = r
+	return h
 }
 
 // whoamiResponse is the wire shape. Keep the field names short and
@@ -95,12 +109,36 @@ func (h *WhoamiHandler) Whoami(c *gin.Context) {
 	})
 }
 
-// Logout clears the cookie so the user returns to a logged-out state on
-// every *.lurus.cn subdomain. Idempotent — calling without a cookie is
-// a no-op 200.
+// Logout clears the cookie AND, when a revoker is wired, records the
+// token's hash on the server-side revoke list so a stolen Bearer can't
+// be replayed for the rest of its TTL (P1-5). Idempotent — calling
+// without a cookie / Bearer is a no-op 200.
 //
 // POST so it's not GET-cacheable and not triggerable from a casual link.
+//
+// Revocation is best-effort: if the token is malformed or the revoker
+// errors out, we still clear the cookie and return 200. The user has
+// done their part; making logout fail because of a Redis blip would be
+// hostile UX.
 func (h *WhoamiHandler) Logout(c *gin.Context, cookieDomain string) {
+	if h.revoker != nil && h.sessionSecret != "" {
+		if token := ReadSessionToken(c); token != "" {
+			if claims, err := auth.ValidateSession(token, h.sessionSecret); err == nil {
+				ttl := time.Until(claims.ExpiresAt)
+				if ttl > 0 {
+					if err := h.revoker.Revoke(c.Request.Context(), token, ttl); err != nil {
+						// Log only — proceeding to clear the cookie is the
+						// right thing to do even when revocation fails.
+						slog.WarnContext(c.Request.Context(), "logout: revoke failed",
+							"err", err,
+							"account_id", claims.AccountID,
+							"request_id", c.GetString("request_id"),
+						)
+					}
+				}
+			}
+		}
+	}
 	ClearSessionCookie(c, cookieDomain)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

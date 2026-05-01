@@ -480,7 +480,13 @@ func run(ctx context.Context, cfg *config.Config) error {
 	zloginH := handler.NewZLoginHandler(accountSvc, accountRepo, cfg.ZitadelIssuer, cfg.ZitadelServiceAccountPAT, cfg.SessionSecret).
 		WithCookieDomain(cookieDomain)
 	registrationH := handler.NewRegistrationHandler(registrationSvc).WithCookieDomain(cookieDomain)
-	whoamiH := handler.NewWhoamiHandler(accountSvc, cfg.SessionSecret)
+	// Server-side session-token revoke list (P1-5): logout puts the
+	// token's hash on the list with TTL = remaining JWT validity, so a
+	// stolen Bearer can't be replayed for the rest of its 30-day TTL.
+	// Reuses the existing Redis client; no new infra to provision.
+	sessionRevoker := auth.NewSessionRevoker(rdb)
+	whoamiH := handler.NewWhoamiHandler(accountSvc, cfg.SessionSecret).
+		WithRevoker(sessionRevoker)
 	// LLM-token handler is wired with the same newapi_sync.Module that
 	// powers 4c+4d. nil-safe: when env vars are unset the module is nil
 	// and the endpoint returns a clear 503 (not a silent SPA fallback).
@@ -709,6 +715,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 		RateLimit:         rateLimiter,
 		TrustedProxyCIDRs: parseCSVList(cfg.TrustedProxiesCIDRs),
 		CORSOrigins:       parseCSVList(cfg.CORSAllowedOrigins),
+		SessionSecret:     cfg.SessionSecret,
+		SessionRevoker:    sessionRevoker,
 		Readiness:         readinessSet,
 		ExtraMiddleware: []gin.HandlerFunc{
 			metrics.HTTPMiddleware(),

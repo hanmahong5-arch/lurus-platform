@@ -36,15 +36,26 @@ func IssueSessionToken(accountID int64, ttl time.Duration, secret string) (strin
 	return body + "." + sessionB64(sig), nil
 }
 
-// ValidateSessionToken parses and verifies a lurus-issued HS256 session token.
-// Returns the lurus account ID embedded in the sub claim.
-func ValidateSessionToken(tokenStr, secret string) (int64, error) {
+// SessionClaims is the validated session token payload exposed to callers
+// who need more than just the account ID — currently only the server-side
+// revocation flow (P1-5), which uses ExpiresAt to set the revoke-list TTL
+// so revoked entries auto-expire alongside the token they shadow.
+type SessionClaims struct {
+	AccountID int64
+	ExpiresAt time.Time
+}
+
+// ValidateSession parses and verifies a lurus-issued HS256 session token,
+// returning all validated claims. Prefer this over ValidateSessionToken
+// when you also need the expiry (revocation TTL, audit logs, ...).
+func ValidateSession(tokenStr, secret string) (SessionClaims, error) {
+	var zero SessionClaims
 	if secret == "" {
-		return 0, fmt.Errorf("session: secret not configured")
+		return zero, fmt.Errorf("session: secret not configured")
 	}
 	parts := strings.Split(tokenStr, ".")
 	if len(parts) != 3 {
-		return 0, fmt.Errorf("session: malformed token: expected 3 parts")
+		return zero, fmt.Errorf("session: malformed token: expected 3 parts")
 	}
 
 	// Verify HMAC-SHA256 signature before trusting any claims.
@@ -52,16 +63,16 @@ func ValidateSessionToken(tokenStr, secret string) (int64, error) {
 	expectedSig := sessionHMAC([]byte(body), []byte(secret))
 	gotSig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return 0, fmt.Errorf("session: decode signature: %w", err)
+		return zero, fmt.Errorf("session: decode signature: %w", err)
 	}
 	if !hmac.Equal(expectedSig, gotSig) {
-		return 0, fmt.Errorf("session: invalid signature")
+		return zero, fmt.Errorf("session: invalid signature")
 	}
 
 	// Decode and validate payload.
 	payloadJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return 0, fmt.Errorf("session: decode payload: %w", err)
+		return zero, fmt.Errorf("session: decode payload: %w", err)
 	}
 	var claims struct {
 		Iss string `json:"iss"`
@@ -69,25 +80,39 @@ func ValidateSessionToken(tokenStr, secret string) (int64, error) {
 		Exp int64  `json:"exp"`
 	}
 	if err := json.Unmarshal(payloadJSON, &claims); err != nil {
-		return 0, fmt.Errorf("session: parse payload: %w", err)
+		return zero, fmt.Errorf("session: parse payload: %w", err)
 	}
 	if claims.Iss != SessionIssuer {
-		return 0, fmt.Errorf("session: unexpected issuer %q", claims.Iss)
+		return zero, fmt.Errorf("session: unexpected issuer %q", claims.Iss)
 	}
 	if time.Now().Unix() > claims.Exp {
-		return 0, fmt.Errorf("session: token expired")
+		return zero, fmt.Errorf("session: token expired")
 	}
 
 	// Parse sub: "lurus:<accountID>".
 	const subPrefix = "lurus:"
 	if !strings.HasPrefix(claims.Sub, subPrefix) {
-		return 0, fmt.Errorf("session: invalid sub format: %q", claims.Sub)
+		return zero, fmt.Errorf("session: invalid sub format: %q", claims.Sub)
 	}
 	id, err := strconv.ParseInt(claims.Sub[len(subPrefix):], 10, 64)
 	if err != nil || id <= 0 {
-		return 0, fmt.Errorf("session: invalid account id in sub")
+		return zero, fmt.Errorf("session: invalid account id in sub")
 	}
-	return id, nil
+	return SessionClaims{
+		AccountID: id,
+		ExpiresAt: time.Unix(claims.Exp, 0),
+	}, nil
+}
+
+// ValidateSessionToken parses and verifies a lurus-issued HS256 session token.
+// Returns the lurus account ID embedded in the sub claim. Thin wrapper over
+// ValidateSession kept for callers that don't need the expiry.
+func ValidateSessionToken(tokenStr, secret string) (int64, error) {
+	c, err := ValidateSession(tokenStr, secret)
+	if err != nil {
+		return 0, err
+	}
+	return c.AccountID, nil
 }
 
 func sessionHMAC(data, key []byte) []byte {
