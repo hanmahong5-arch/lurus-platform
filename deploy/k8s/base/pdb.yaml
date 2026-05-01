@@ -7,8 +7,23 @@ metadata:
     app: platform-core
     app.kubernetes.io/name: platform-core
     app.kubernetes.io/part-of: lurus-platform
+# maxUnavailable: 1 lets K8s evict the pod for node maintenance
+# (kubectl drain / autoscaler scale-down / cluster upgrade) even when
+# the Deployment runs at replicas: 1.
+#
+# Why not minAvailable: 1?
+#   minAvailable: 1 + replicas: 1 is a deadlock — the budget requires 1
+#   pod up at all times, but evicting the only pod would drop the count
+#   to 0, so the eviction API rejects every voluntary disruption. drain
+#   hangs forever, autoscaler can't reclaim the node, and rolling node
+#   maintenance turns into a manual force-delete dance.
+#
+# maxUnavailable: 1 expresses the same intent ("at most one platform-core
+# pod down at a time") with the correct semantics for both replicas: 1
+# (today) and replicas: 2+ (future HA). When we scale up, this stays
+# valid without edits.
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app: platform-core

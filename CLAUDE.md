@@ -3,6 +3,10 @@
 Enterprise Identity, Billing & Communication Platform.
 企业身份认证、计费与通信平台。可插拔模块化架构，支持私有化部署。
 
+## Mode: DEV (not yet production-ready)
+
+This codebase is in **dev mode**. Default-off backup, single-replica platform-core, mutable image tags, and stage/prod sharing R6 are accepted dev tradeoffs. **Do not advertise SLA or onboard real customers from this state.** Promotion to prod requires (at minimum): backup verified by restore drill, image tag pinned to immutable SHA, replicas ≥ 2 + Zitadel HA, alerts wired to Alertmanager, legal review of ToS/Privacy. See `docs/平台硬化清单.md` P2 for the full prod-readiness gate.
+
 ## Architecture
 
 ```
