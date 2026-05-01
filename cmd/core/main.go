@@ -891,6 +891,16 @@ func run(ctx context.Context, cfg *config.Config) error {
 	)
 	g.Go(func() error { return purgeWorker.Run(gctx) })
 
+	// Hook DLQ depth sampler — refreshes the hook_dlq_pending gauge
+	// every 30s so alerts fire on fresh data even when no admin is
+	// browsing /admin/v1/onboarding-failures (P1-9 polish).
+	dlqDepthWorker := app.NewHookDLQDepthWorker(
+		hookFailureRepo,
+		hookMetricsSink{},
+		30*time.Second,
+	)
+	g.Go(func() error { return dlqDepthWorker.Run(gctx) })
+
 	// Graceful shutdown trigger. The grace window must exceed the 30s QR
 	// long-poll cap (see qrMaxPollWait) so in-flight long polls can return
 	// naturally instead of being severed mid-flight. gRPC shutdown piggybacks
