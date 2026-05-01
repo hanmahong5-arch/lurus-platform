@@ -145,9 +145,14 @@ func TestCheckinService_GetStatus_WithHistory(t *testing.T) {
 	svc, checkins, _ := makeCheckinService()
 	const accountID int64 = 6
 
+	// Seed dates in the *current* month rather than now-1/-2/-3 so the test
+	// is stable across month boundaries. The previous shape failed on the
+	// 1st/2nd/3rd of every month because all seeded dates fell into the
+	// previous month and GetStatus only returns the current-month window.
 	now := time.Now()
+	year, month, _ := now.Date()
 	for i := 1; i <= 3; i++ {
-		date := now.AddDate(0, 0, -i).Format("2006-01-02")
+		date := time.Date(year, month, i, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
 		seedCheckin(checkins, accountID, date)
 	}
 
