@@ -12,13 +12,14 @@ import (
 const (
 	StreamIdentityEvents = "IDENTITY_EVENTS"
 
-	SubjectAccountCreated        = "identity.account.created"
-	SubjectSubscriptionActivated = "identity.subscription.activated"
-	SubjectSubscriptionExpired   = "identity.subscription.expired"
-	SubjectTopupCompleted        = "identity.topup.completed"
-	SubjectEntitlementUpdated    = "identity.entitlement.updated"
-	SubjectVIPLevelChanged       = "identity.vip.level_changed"
-	SubjectOrgMemberJoined       = "identity.org.member_joined"
+	SubjectAccountCreated         = "identity.account.created"
+	SubjectAccountDeleteRequested = "identity.account.delete_requested"
+	SubjectSubscriptionActivated  = "identity.subscription.activated"
+	SubjectSubscriptionExpired    = "identity.subscription.expired"
+	SubjectTopupCompleted         = "identity.topup.completed"
+	SubjectEntitlementUpdated     = "identity.entitlement.updated"
+	SubjectVIPLevelChanged        = "identity.vip.level_changed"
+	SubjectOrgMemberJoined        = "identity.org.member_joined"
 
 	// Consumed from LLM_EVENTS (published by lurus-api)
 	SubjectLLMUsageReported = "llm.usage.reported"
@@ -50,6 +51,27 @@ func NewEvent(eventType string, accountID int64, lurusID, productID string, payl
 		Payload:    raw,
 		OccurredAt: time.Now().UTC(),
 	}, nil
+}
+
+// AccountDeleteRequestedPayload is the payload for
+// identity.account.delete_requested. Emitted by both the user-self
+// flow (POST /api/v1/account/me/delete-request) and the admin
+// QR-delegate flow at the moment the destructive intent is
+// registered. Consumed by notification to surface the cooling-off
+// reminder + a "cancel before {date}" deep-link in the APP.
+type AccountDeleteRequestedPayload struct {
+	// RequestID is the int64 PK of the row in
+	// identity.account_delete_requests. Stringified at the wire is
+	// fine — int64 round-trips cleanly through JSON for ids well below
+	// 2^53. Kept as int64 so receivers do not need to re-parse.
+	RequestID int64 `json:"request_id"`
+	// Reason is the closed-enum reason code (no_longer_using, ...).
+	// Empty string when the user submitted no reason.
+	Reason string `json:"reason,omitempty"`
+	// CoolingOffUntil is the RFC3339 timestamp when the cron worker
+	// becomes eligible to dispatch the cascade. Used by the APP to
+	// render the "您的账号将于 {date} 注销" body.
+	CoolingOffUntil string `json:"cooling_off_until"`
 }
 
 // SubscriptionActivatedPayload is the payload for identity.subscription.activated.

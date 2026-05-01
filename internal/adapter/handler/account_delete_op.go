@@ -15,6 +15,12 @@ var _ ops.DelegateOp = (*AccountDeleteExecutor)(nil)
 // table. Must match the SupportedOps() entry exactly.
 func (e *AccountDeleteExecutor) Type() string { return qrDelegateOpDeleteAccount }
 
+// QRDelegateOpDeleteAccount returns the canonical op string for the
+// delete_account flow. Exported so callers outside this package
+// (e.g. cmd/core's cron purge adapter) can construct QRDelegateParams
+// without duplicating the spelling.
+func QRDelegateOpDeleteAccount() string { return qrDelegateOpDeleteAccount }
+
 // Description is the one-line English summary surfaced in admin
 // UIs and audit logs. The cascade detail (subs/wallet/zitadel) is
 // captured here so audit grep can correlate "completed" lines with

@@ -17,11 +17,12 @@ const (
 // Subject constants consumed from upstream services.
 const (
 	// IDENTITY_EVENTS subjects
-	SubjectAccountCreated        = "identity.account.created"
-	SubjectSubscriptionActivated = "identity.subscription.activated"
-	SubjectSubscriptionExpired   = "identity.subscription.expired"
-	SubjectTopupCompleted        = "identity.topup.completed"
-	SubjectVIPLevelChanged       = "identity.vip.level_changed"
+	SubjectAccountCreated         = "identity.account.created"
+	SubjectAccountDeleteRequested = "identity.account.delete_requested"
+	SubjectSubscriptionActivated  = "identity.subscription.activated"
+	SubjectSubscriptionExpired    = "identity.subscription.expired"
+	SubjectTopupCompleted         = "identity.topup.completed"
+	SubjectVIPLevelChanged        = "identity.vip.level_changed"
 
 	// LUCRUM_EVENTS subjects
 	SubjectStrategyTriggered   = "lucrum.strategy.triggered"
@@ -59,6 +60,16 @@ type LucrumEvent struct {
 	AccountID  int64           `json:"account_id,omitempty"`
 	Payload    json.RawMessage `json:"payload"`
 	OccurredAt time.Time       `json:"occurred_at"`
+}
+
+// AccountDeleteRequestedPayload from identity.account.delete_requested.
+// Mirrors the producer-side type in lurus-platform/internal/pkg/event.
+// Field-for-field copy because the notification module is its own go.mod
+// and we don't reach across the module boundary at compile time.
+type AccountDeleteRequestedPayload struct {
+	RequestID       int64  `json:"request_id"`
+	Reason          string `json:"reason,omitempty"`
+	CoolingOffUntil string `json:"cooling_off_until"`
 }
 
 // SubscriptionActivatedPayload from identity.subscription.activated.

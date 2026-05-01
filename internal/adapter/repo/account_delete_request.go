@@ -87,3 +87,89 @@ func (r *AccountDeleteRequestRepo) MarkCancelled(ctx context.Context, id int64, 
 			"cancelled_at": cancelledAt,
 		}).Error
 }
+
+// ClaimExpiredPending atomically transitions up to `limit` rows from
+// 'pending' → 'processing' for any row whose cooling_off_until has
+// elapsed. The single round-trip claim is what makes the cron worker
+// safe to run with N replicas: every claim is its own UPDATE with
+// `FOR UPDATE SKIP LOCKED`, so two replicas attempting to claim the
+// same row at the same instant cannot both succeed — the loser's
+// subquery sees zero rows and the UPDATE turns into a no-op.
+//
+// Returns the claimed rows. An empty slice means "nothing to do" —
+// not an error.
+//
+// IMPORTANT: claiming flips status to 'processing', which releases the
+// partial UNIQUE on (account_id) WHERE status='pending'. This means
+// migration 028's idempotency lock (one pending request per account)
+// stays intact: no two pending rows ever, AND a re-submission while a
+// claim is in flight on the same account is allowed (rare, but the
+// new pending row blocks a second cron pickup until the original
+// cascade lands). Documented here because the asymmetry only makes
+// sense in the context of multi-replica safety.
+func (r *AccountDeleteRequestRepo) ClaimExpiredPending(ctx context.Context, limit int) ([]*entity.AccountDeleteRequest, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	// Postgres-only: SKIP LOCKED + RETURNING. Avoids the read-then-write
+	// race between replicas. The CTE wraps the locking SELECT so the
+	// UPDATE only touches rows we successfully locked.
+	const query = `
+		WITH claimed AS (
+			SELECT id
+			FROM identity.account_delete_requests
+			WHERE status = ? AND cooling_off_until <= NOW()
+			ORDER BY cooling_off_until ASC
+			LIMIT ?
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE identity.account_delete_requests AS r
+		SET status = ?
+		FROM claimed
+		WHERE r.id = claimed.id AND r.status = ?
+		RETURNING r.id, r.account_id, r.requested_by, r.status, r.reason,
+		          r.reason_text, r.cooling_off_until, r.requested_at,
+		          r.cancelled_at, r.completed_at
+	`
+	var rows []*entity.AccountDeleteRequest
+	if err := r.db.WithContext(ctx).Raw(query,
+		entity.AccountDeleteRequestStatusPending,
+		limit,
+		entity.AccountDeleteRequestStatusProcessing,
+		entity.AccountDeleteRequestStatusPending,
+	).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// MarkCompleted flips a processing row to 'completed' and stamps
+// completed_at. Idempotent: if the row is no longer 'processing' the
+// UPDATE matches zero rows and returns nil — that's the recovery shape
+// when a previous worker process succeeded but crashed before
+// recording the outcome.
+func (r *AccountDeleteRequestRepo) MarkCompleted(ctx context.Context, id int64, completedAt time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&entity.AccountDeleteRequest{}).
+		Where("id = ? AND status = ?", id, entity.AccountDeleteRequestStatusProcessing).
+		Updates(map[string]any{
+			"status":       entity.AccountDeleteRequestStatusCompleted,
+			"completed_at": completedAt,
+		}).Error
+}
+
+// MarkExpired flips a processing row to 'expired' — the terminal state
+// when the cascade failed. We deliberately don't retry: an automated
+// retry against a partially-cascaded account risks double-charging the
+// wallet zero-out / re-deactivating Zitadel, and the cascade is itself
+// best-effort with per-step warn logs that operators can use to
+// diagnose. 'expired' surfaces the row for human review.
+func (r *AccountDeleteRequestRepo) MarkExpired(ctx context.Context, id int64, completedAt time.Time) error {
+	return r.db.WithContext(ctx).
+		Model(&entity.AccountDeleteRequest{}).
+		Where("id = ? AND status = ?", id, entity.AccountDeleteRequestStatusProcessing).
+		Updates(map[string]any{
+			"status":       entity.AccountDeleteRequestStatusExpired,
+			"completed_at": completedAt,
+		}).Error
+}

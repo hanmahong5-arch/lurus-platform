@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
 )
 
 // AccountAdminHandler exposes admin-only operations on accounts that
@@ -23,8 +25,9 @@ import (
 // when missing, DeleteRequest returns 501 with a clear "delete flow
 // not wired" message rather than silently 503-ing.
 type AccountAdminHandler struct {
-	accounts *app.AccountService
-	qr       *QRHandler
+	accounts  *app.AccountService
+	qr        *QRHandler
+	publisher QREventPublisher
 }
 
 // NewAccountAdminHandler wires the handler. accounts is required for
@@ -38,6 +41,17 @@ func NewAccountAdminHandler(accounts *app.AccountService) *AccountAdminHandler {
 // DeleteRequest to leave its 501 gate.
 func (h *AccountAdminHandler) WithDeleteFlow(qr *QRHandler) *AccountAdminHandler {
 	h.qr = qr
+	return h
+}
+
+// WithPublisher wires best-effort NATS publishing for
+// identity.account.delete_requested. Chainable; safe to call with nil.
+// Mirrors AccountSelfDeleteHandler.WithPublisher — admin-initiated
+// destructive intents emit the same subject as user-self ones, with
+// cooling_off_until set to NOW() to signal "no grace period, cascade
+// fires on QR confirm".
+func (h *AccountAdminHandler) WithPublisher(p QREventPublisher) *AccountAdminHandler {
+	h.publisher = p
 	return h
 }
 
@@ -121,6 +135,17 @@ func (h *AccountAdminHandler) DeleteRequest(c *gin.Context) {
 	slog.InfoContext(c.Request.Context(), "account_admin.delete_requested",
 		"account_id", accountID, "initiator", callerID, "session_id", session.ID)
 
+	// Best-effort NATS publish: tell downstream consumers (notification)
+	// that a destructive intent was registered. For admin-initiated
+	// flows there is no 30-day cooling off — the cascade fires on QR
+	// confirm — so cooling_off_until is set to "now" as a signal that
+	// the consumer should NOT render a "cancel before {date}" deep-link.
+	// request_id=0 because the admin path does not write to
+	// identity.account_delete_requests; the audit trail lives on
+	// identity.account_purges (migration 024) which is created at
+	// QR-confirm time, not here.
+	h.publishDeleteRequested(accountID)
+
 	c.JSON(http.StatusOK, accountDeleteRequestResponse{
 		ID:        session.ID,
 		QRPayload: session.QRPayload,
@@ -128,4 +153,38 @@ func (h *AccountAdminHandler) DeleteRequest(c *gin.Context) {
 		ExpiresIn: session.ExpiresIn,
 		AccountID: accountID,
 	})
+}
+
+// adminDeletePublishTimeout bounds the side-channel NATS publish so a
+// hung broker cannot block the admin-visible 200. Mirrors
+// selfDeletePublishTimeout — same semantics, separate constant so the
+// values can drift independently if operational reality calls for it.
+const adminDeletePublishTimeout = 2 * time.Second
+
+// publishDeleteRequested fires the NATS event best-effort. Failures
+// log but never affect the handler return.
+func (h *AccountAdminHandler) publishDeleteRequested(accountID int64) {
+	if h.publisher == nil {
+		return
+	}
+	now := time.Now().UTC()
+	payload := event.AccountDeleteRequestedPayload{
+		// request_id=0: admin path mints a QR session, not a row in
+		// identity.account_delete_requests. Consumers that want a
+		// stable id can fall back to event.EventID.
+		RequestID:       0,
+		CoolingOffUntil: now.Format(time.RFC3339),
+	}
+	ev, err := event.NewEvent(event.SubjectAccountDeleteRequested, accountID, "", "", payload)
+	if err != nil {
+		slog.Warn("account_admin.delete_requested.event_build_failed",
+			"account_id", accountID, "err", err)
+		return
+	}
+	pubCtx, cancel := context.WithTimeout(context.Background(), adminDeletePublishTimeout)
+	defer cancel()
+	if err := h.publisher.Publish(pubCtx, ev); err != nil {
+		slog.Warn("account_admin.delete_requested.event_publish_failed",
+			"account_id", accountID, "err", err)
+	}
 }

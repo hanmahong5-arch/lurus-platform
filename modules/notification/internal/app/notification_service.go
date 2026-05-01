@@ -74,6 +74,18 @@ type SendRequest struct {
 	Vars      map[string]string // template variable substitutions
 	Payload   map[string]any    // client-facing event payload (deep-link data); marshaled to JSONB
 	EmailAddr string            // recipient email (for email channel)
+
+	// Optional copy overrides — when non-zero, bypass the template-DB
+	// lookup and use the supplied values directly. Intended for events
+	// whose copy is fully determined by the producer (e.g. account
+	// delete-requested, where the body text encodes a per-row date)
+	// and for which a static template row would just duplicate
+	// already-known strings. Empty values fall back to the template
+	// lookup, so this is purely additive on existing call sites.
+	Title    string
+	Body     string
+	Priority entity.Priority
+	Category string
 }
 
 // Send creates and dispatches a notification across requested channels.
@@ -122,15 +134,31 @@ func (s *NotificationService) Send(ctx context.Context, req SendRequest) error {
 			continue
 		}
 
-		// Resolve template
+		// Resolve template — overrides on SendRequest win when set so a
+		// caller with already-formatted copy (e.g. the
+		// account.delete_requested handler) does not need a template
+		// row in the DB just to render two known strings.
 		title, body, priority := s.resolveTemplate(ctx, req.EventType, ch, req.Vars)
+		if req.Title != "" {
+			title = req.Title
+		}
+		if req.Body != "" {
+			body = req.Body
+		}
+		if req.Priority != "" {
+			priority = req.Priority
+		}
+		category := categoryFromEvent(req.EventType)
+		if req.Category != "" {
+			category = req.Category
+		}
 
 		// Create notification record
 		notif := &entity.Notification{
 			AccountID: req.AccountID,
 			Channel:   ch,
 			Source:    source,
-			Category:  categoryFromEvent(req.EventType),
+			Category:  category,
 			Title:     title,
 			Body:      body,
 			Priority:  priority,

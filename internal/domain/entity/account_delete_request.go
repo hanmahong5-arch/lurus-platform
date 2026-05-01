@@ -32,11 +32,26 @@ func (AccountDeleteRequest) TableName() string {
 
 // AccountDeleteRequest status constants. Mirrors the values referenced
 // by migration 028.
+//
+// Lifecycle:
+//
+//	pending    → freshly submitted, sitting in the cooling-off window
+//	processing → claimed by the cron worker, cascade in flight
+//	cancelled  → user changed their mind
+//	completed  → cooling-off elapsed AND cascade succeeded
+//	expired    → cooling-off elapsed but cascade failed (terminal — surface
+//	             for human review rather than retrying forever)
+//
+// "processing" is a transient claim flag, not a separate column on the
+// schema; the partial UNIQUE index in migration 028 only blocks
+// status='pending', so claiming via UPDATE...RETURNING into 'processing'
+// also releases the unique slot. That's load-bearing for replica safety.
 const (
-	AccountDeleteRequestStatusPending   = "pending"
-	AccountDeleteRequestStatusCancelled = "cancelled"
-	AccountDeleteRequestStatusCompleted = "completed"
-	AccountDeleteRequestStatusExpired   = "expired"
+	AccountDeleteRequestStatusPending    = "pending"
+	AccountDeleteRequestStatusProcessing = "processing"
+	AccountDeleteRequestStatusCancelled  = "cancelled"
+	AccountDeleteRequestStatusCompleted  = "completed"
+	AccountDeleteRequestStatusExpired    = "expired"
 )
 
 // AccountDeleteReason* are the closed enum of reason codes accepted by

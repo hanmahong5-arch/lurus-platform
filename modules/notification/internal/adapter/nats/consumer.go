@@ -52,6 +52,11 @@ func (c *Consumer) Run(ctx context.Context) error {
 			handler: c.handleAccountCreated,
 		},
 		{
+			subject: event.SubjectAccountDeleteRequested,
+			queue:   "notif-account-delete-requested",
+			handler: c.handleAccountDeleteRequested,
+		},
+		{
 			subject: event.SubjectSubscriptionActivated,
 			queue:   "notif-sub-activated",
 			handler: c.handleSubscriptionActivated,
@@ -197,6 +202,83 @@ func (c *Consumer) handleAccountCreated(ctx context.Context, msg *natsgo.Msg) er
 			"lurus_id": ev.LurusID,
 		},
 	})
+}
+
+// accountDeleteBodyFormat is the body template for the
+// account.delete_requested in-app notification. The %s slot receives
+// the cooling-off deadline rendered YYYY-MM-DD in UTC. (Switching to
+// per-account TZ requires a registry lookup we don't yet have on the
+// consumer; UTC is the source-of-truth on the producer side anyway.)
+const accountDeleteBodyFormat = "您的账号注销将于 %s 生效，期间登录可取消。"
+
+// buildAccountDeleteRequestedSend translates a raw
+// identity.account.delete_requested NATS payload into the SendRequest
+// the notification service expects. Pure function — no service or
+// network calls — so the parsing + body-formatting logic can be
+// unit-tested without standing up the Consumer.
+//
+// Returns (zero SendRequest, false) when the event should be silently
+// dropped (corrupt envelope, no resolvable account, corrupt payload).
+// The Consumer's caller treats the false return as "ACK and skip".
+func buildAccountDeleteRequestedSend(raw []byte) (app.SendRequest, bool) {
+	var ev event.IdentityEvent
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		// Corrupt envelope. Log + drop so this event's slot in the
+		// queue is reclaimed; treating as a permanent failure avoids
+		// the otherwise-infinite retry that nats.MaxDeliver(5) would
+		// induce on a deserialization bug.
+		slog.Warn("notif: corrupt envelope account.delete_requested", "err", err)
+		return app.SendRequest{}, false
+	}
+	if ev.AccountID <= 0 {
+		_ = skipNoAccount(event.SubjectAccountDeleteRequested, ev.EventID)
+		return app.SendRequest{}, false
+	}
+	var payload event.AccountDeleteRequestedPayload
+	if len(ev.Payload) > 0 {
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			slog.Warn("notif: corrupt payload account.delete_requested",
+				"account_id", ev.AccountID, "event_id", ev.EventID, "err", err)
+			return app.SendRequest{}, false
+		}
+	}
+
+	// Render YYYY-MM-DD from the cooling_off_until ISO8601 string.
+	// On parse failure, fall back to the raw string so the user still
+	// sees something — better than a "您的账号注销将于  生效" body.
+	dateStr := payload.CoolingOffUntil
+	if t, err := time.Parse(time.RFC3339, payload.CoolingOffUntil); err == nil {
+		dateStr = t.UTC().Format("2006-01-02")
+	}
+
+	return app.SendRequest{
+		AccountID: ev.AccountID,
+		EventType: event.SubjectAccountDeleteRequested,
+		EventID:   ev.EventID,
+		Channels:  []entity.Channel{entity.ChannelInApp},
+		// Title / body / category / priority are fully producer-known
+		// strings — no template-DB row needed. See SendRequest doc for
+		// the override semantics.
+		Title:    "您已提交注销请求",
+		Body:     fmt.Sprintf(accountDeleteBodyFormat, dateStr),
+		Priority: entity.PriorityNormal,
+		Category: "account.delete_requested",
+		Payload: map[string]any{
+			"request_id":        payload.RequestID,
+			"cooling_off_until": payload.CoolingOffUntil,
+		},
+	}, true
+}
+
+// handleAccountDeleteRequested wires buildAccountDeleteRequestedSend
+// into the NATS consumer dispatch. Stays trivial so the testable
+// logic lives in the pure builder above.
+func (c *Consumer) handleAccountDeleteRequested(ctx context.Context, msg *natsgo.Msg) error {
+	req, ok := buildAccountDeleteRequestedSend(msg.Data)
+	if !ok {
+		return nil
+	}
+	return c.notifSvc.Send(ctx, req)
 }
 
 func (c *Consumer) handleSubscriptionActivated(ctx context.Context, msg *natsgo.Msg) error {

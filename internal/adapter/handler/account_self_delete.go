@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/hanmahong5-arch/lurus-platform/internal/app"
 	"github.com/hanmahong5-arch/lurus-platform/internal/domain/entity"
+	"github.com/hanmahong5-arch/lurus-platform/internal/pkg/event"
 )
 
 // reasonTextMaxRunes is the max user-supplied reason length, in runes
@@ -20,6 +22,13 @@ import (
 // rejected, because the user is mid-destructive-flow and we don't
 // fail-blame them on a length nit.
 const reasonTextMaxRunes = 500
+
+// selfDeletePublishTimeout bounds the side-channel NATS publish so a
+// hung broker cannot block the user-visible 200. Mirrors the
+// qr_handler's qrEventPublishTimeout — the publish happens AFTER the
+// HTTP response has been written, but the goroutine still needs a
+// hard ceiling so a stuck publish does not leak.
+const selfDeletePublishTimeout = 2 * time.Second
 
 // AccountSelfDeleteHandler exposes the user-facing destructive flow at
 // POST /api/v1/account/me/delete-request. Sibling to AccountAdminHandler
@@ -31,7 +40,8 @@ const reasonTextMaxRunes = 500
 // (account_id is resolved by the auth layer; we never trust a body-
 // supplied id).
 type AccountSelfDeleteHandler struct {
-	requests *app.AccountDeleteRequestService
+	requests  *app.AccountDeleteRequestService
+	publisher QREventPublisher
 }
 
 // NewAccountSelfDeleteHandler wires the handler. requests is required;
@@ -46,6 +56,16 @@ func NewAccountSelfDeleteHandler(requests *app.AccountDeleteRequestService) *Acc
 		panic("handler: AccountSelfDeleteHandler requires non-nil AccountDeleteRequestService")
 	}
 	return &AccountSelfDeleteHandler{requests: requests}
+}
+
+// WithPublisher wires best-effort NATS publishing for
+// identity.account.delete_requested. Chainable; safe to call with nil
+// (events are silently dropped when no publisher is wired). Mirrors
+// QRHandler.WithPublisher — the publish path is non-fatal so the
+// destructive flow keeps working when NATS is down.
+func (h *AccountSelfDeleteHandler) WithPublisher(p QREventPublisher) *AccountSelfDeleteHandler {
+	h.publisher = p
+	return h
 }
 
 // selfDeleteRequestBody is the JSON request shape. All fields optional;
@@ -158,6 +178,12 @@ func (h *AccountSelfDeleteHandler) Submit(c *gin.Context) {
 			"reason", body.Reason,
 			"cooling_off_until", result.CoolingOffUntil.Format(time.RFC3339),
 			"trace_id", c.GetString("request_id"))
+		// Best-effort emit identity.account.delete_requested. Only on
+		// fresh inserts — idempotent re-submits do not re-fire because
+		// the consumer already received the original event. The
+		// publish runs after the response is enqueued so a slow NATS
+		// cannot delay the user-visible 200.
+		h.publishDeleteRequested(accountID, result.RequestID, body.Reason, result.CoolingOffUntil)
 	}
 
 	c.JSON(http.StatusOK, selfDeleteResponse{
@@ -165,6 +191,36 @@ func (h *AccountSelfDeleteHandler) Submit(c *gin.Context) {
 		Status:          result.Status,
 		CoolingOffUntil: result.CoolingOffUntil.Format(time.RFC3339),
 	})
+}
+
+// publishDeleteRequested fires the NATS event best-effort. Failures
+// log but never affect the handler return — the DB insert is the
+// source of truth, the event is a downstream notification trigger.
+//
+// The publish runs in a detached background context so a closing
+// HTTP request does not cancel the publish mid-flight. selfDeletePublishTimeout
+// caps the goroutine so it cannot leak indefinitely.
+func (h *AccountSelfDeleteHandler) publishDeleteRequested(accountID, requestID int64, reason string, coolingOffUntil time.Time) {
+	if h.publisher == nil {
+		return
+	}
+	payload := event.AccountDeleteRequestedPayload{
+		RequestID:       requestID,
+		Reason:          reason,
+		CoolingOffUntil: coolingOffUntil.Format(time.RFC3339),
+	}
+	ev, err := event.NewEvent(event.SubjectAccountDeleteRequested, accountID, "", "", payload)
+	if err != nil {
+		slog.Warn("account_self_delete.event_build_failed",
+			"account_id", accountID, "request_id", requestID, "err", err)
+		return
+	}
+	pubCtx, cancel := context.WithTimeout(context.Background(), selfDeletePublishTimeout)
+	defer cancel()
+	if err := h.publisher.Publish(pubCtx, ev); err != nil {
+		slog.Warn("account_self_delete.event_publish_failed",
+			"account_id", accountID, "request_id", requestID, "err", err)
+	}
 }
 
 // truncateRunes returns the first n runes of s. Used in place of a

@@ -160,6 +160,15 @@ type Config struct {
 	// Temporal workflow engine
 	TemporalHostPort  string // TEMPORAL_HOST_PORT (empty = disabled)
 	TemporalNamespace string // TEMPORAL_NAMESPACE (default: default)
+
+	// Cron purge worker (Sprint 1B follow-up). Drains expired pending
+	// rows from identity.account_delete_requests by reusing the
+	// existing AccountDeleteExecutor cascade. Disabled by default —
+	// flip CRON_PURGE_ENABLED=true after the rollout window so the
+	// new code path can land safely without changing behavior.
+	CronPurgeEnabled  bool          // CRON_PURGE_ENABLED (default: false)
+	CronPurgeInterval time.Duration // CRON_PURGE_INTERVAL (default: 1h)
+	CronPurgeBatch    int           // CRON_PURGE_BATCH (default: 20)
 }
 
 // Load reads config from environment variables and validates required fields.
@@ -245,6 +254,9 @@ func Load() (*Config, error) {
 		OtelServiceName:        getEnv("OTEL_SERVICE_NAME", "lurus-platform"),
 		TemporalHostPort:       getEnv("TEMPORAL_HOST_PORT", ""),
 		TemporalNamespace:      getEnv("TEMPORAL_NAMESPACE", "default"),
+		CronPurgeEnabled:       getEnv("CRON_PURGE_ENABLED", "false") == "true",
+		CronPurgeInterval:      parseDuration("CRON_PURGE_INTERVAL", 1*time.Hour),
+		CronPurgeBatch:         parseInt("CRON_PURGE_BATCH", 20),
 	}
 
 	if err := cfg.Validate(); err != nil {

@@ -608,16 +608,26 @@ func run(ctx context.Context, cfg *config.Config) error {
 	accountDeleteExec := handler.NewAccountDeleteExecutor(accountSvc, subSvc, walletSvc, zitadelClient)
 	qrH = qrH.WithDelegateExecutor(accountDeleteExec)
 	accountAdminH := handler.NewAccountAdminHandler(accountSvc).WithDeleteFlow(qrH)
+	if publisher != nil {
+		// Best-effort identity.account.delete_requested emission on
+		// every admin-initiated destructive intent. Same nil-safety
+		// shape as QRHandler.WithPublisher above.
+		accountAdminH = accountAdminH.WithPublisher(publisher)
+	}
 
 	// User-self delete-request flow (PIPL §47 / GDPR Art.17). Sibling
 	// to the admin QR-delegate flow above; the user submits intent +
-	// reason, the row sits in a 30-day cooling-off window, and a
-	// future cron worker (Sprint 1B) dispatches the same cascade
-	// reusing accountDeleteExec. Subscription guard returns 409 if the
-	// user still has an active or grace-period subscription.
+	// reason, the row sits in a 30-day cooling-off window, and the
+	// AccountPurgeWorker (Sprint 1B follow-up, opt-in via
+	// CRON_PURGE_ENABLED) dispatches the same cascade reusing
+	// accountDeleteExec. Subscription guard returns 409 if the user
+	// still has an active or grace-period subscription.
 	accountDeleteReqSvc := app.NewAccountDeleteRequestService(accountDeleteRequestRepo, accountSvc).
 		WithSubscriptionGuard(subSvc)
 	accountSelfDeleteH := handler.NewAccountSelfDeleteHandler(accountDeleteReqSvc)
+	if publisher != nil {
+		accountSelfDeleteH = accountSelfDeleteH.WithPublisher(publisher)
+	}
 
 	// Refund QR-approve flow (Phase 4 / Sprint 3A) — large refunds
 	// route through a boss biometric scan instead of direct admin
@@ -854,6 +864,25 @@ func run(ctx context.Context, cfg *config.Config) error {
 		})
 	}
 
+	// Account purge cron worker (Sprint 1B follow-up). Drains
+	// expired pending rows from identity.account_delete_requests by
+	// invoking the existing AccountDeleteExecutor cascade under a
+	// "approved by self / cron" attribution. Opt-in via
+	// CRON_PURGE_ENABLED — when false the worker logs once and
+	// returns immediately so this code path lands without changing
+	// behavior. callerID=0 is the synthetic "automation" caller; the
+	// audit row records the requesting user via RequestedBy.
+	purgeWorker := app.NewAccountPurgeWorker(
+		accountDeleteRequestRepo,
+		cronPurgeCascadeAdapter{exec: accountDeleteExec},
+		app.AccountPurgeWorkerConfig{
+			Interval: cfg.CronPurgeInterval,
+			Batch:    cfg.CronPurgeBatch,
+			Enabled:  cfg.CronPurgeEnabled,
+		},
+	)
+	g.Go(func() error { return purgeWorker.Run(gctx) })
+
 	// Graceful shutdown trigger. The grace window must exceed the 30s QR
 	// long-poll cap (see qrMaxPollWait) so in-flight long polls can return
 	// naturally instead of being severed mid-flight. gRPC shutdown piggybacks
@@ -980,4 +1009,27 @@ func buildAppRegistryReconciler(rdb *redis.Client, zitadelClient *zitadel.Client
 		return nil
 	}
 	return recon
+}
+
+// cronPurgeCascadeAdapter bridges app.AccountPurgeWorker (which knows
+// nothing about handler types) to handler.AccountDeleteExecutor. The
+// worker calls PurgeAccount(ctx, accountID); the adapter wraps that
+// into the QRDelegateParams shape the executor expects, with
+// callerID=0 marking the call as automation-driven (the executor's
+// audit row attributes the action to the row's RequestedBy, not this
+// synthetic caller). Kept as a type rather than a closure so the nil-
+// guard inside the worker can detect a missing dependency at boot.
+type cronPurgeCascadeAdapter struct {
+	exec *handler.AccountDeleteExecutor
+}
+
+// PurgeAccount invokes the cascade for the supplied account.
+// callerID=0 is intentional — the row's own RequestedBy is the
+// audit-attribution field for the user-self flow; the cron is a
+// transport, not an approver.
+func (a cronPurgeCascadeAdapter) PurgeAccount(ctx context.Context, accountID int64) error {
+	return a.exec.ExecuteDelegate(ctx, handler.QRDelegateParams{
+		Op:        handler.QRDelegateOpDeleteAccount(),
+		AccountID: accountID,
+	}, 0)
 }
