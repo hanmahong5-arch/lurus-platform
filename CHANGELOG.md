@@ -18,6 +18,16 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
 
 ### Added
 
+- **Go SDK `pkg/lurusplatformclient`** — typed client for `/internal/v1/*`
+  and selected `/api/v1/*` endpoints. Stdlib-only deps. Methods: `Whoami`,
+  `GetLLMToken`, `GetAccountByID/ByEmail`, `GetWalletBalance`, `DebitWallet`,
+  `GetEntitlements`. Error envelope decoded into `*PlatformError` with
+  `IsNotFound()` / `IsUnauthorized()` / `IsInsufficient()` /
+  `IsRateLimited()` / `IsUpstreamFailed()` sentinel checks. Public
+  surface — covered by `pkg/lurusplatformclient/client_test.go` (~87%
+  coverage). Downstream services (lucrum / tally / switch / kova /
+  forge) should migrate from hand-written HTTP clients in subsequent
+  PRs in their own repos.
 - **`identity.account.deleted` NATS event** — emitted by
   `account_purge_worker` after the platform-side PIPL §47 cascade
   completes (i.e. AFTER `MarkCompleted` lands). Subject + payload in
