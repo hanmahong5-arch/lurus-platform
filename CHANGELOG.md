@@ -18,13 +18,23 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
 
 ### Security
 
-- Error responses sanitized across the highest-traffic paths (`P2-6` partial).
+- **`P2-6` closed for explicit leak sites** (round 2). Five remaining
+  `err.Error()` exposures neutralized:
+  - `apps_admin_handler.go` RotateSecret default branch — unknown reconciler
+    errors now go through `respondInternalError` (slog captures detail; client
+    sees opaque `internal_error`).
+  - `apps_admin_handler.go` DeleteRequest, `account_admin_handler.go`
+    DeleteRequest, `refund.go` AdminQRApprove — three `ErrUnsupportedDelegateOp`
+    branches stopped echoing the sentinel `err.Error()` text; replaced with
+    op-specific hardcoded messages.
+  - `internal_api.go` ExchangeLucToLut rollback path — wallet TX description
+    no longer embeds upstream `err.Error()`. Original error remains in slog;
+    user-visible ledger sees `"upstream API error"`.
+- Error responses sanitized across the highest-traffic paths (`P2-6` round 1).
   `internal/pkg/auth/middleware.go` no longer leaks raw `err.Error()` from the
-  Zitadel validator; `api_keys_admin_handler.go` generic 500s now route through
+  Zitadel validator; `api_keys_admin_handler.go` generic 500s route through
   `respondInternalError` (internal err logged, client sees `internal_error` +
-  generic message). Remaining leak sites (`apps_admin_handler.go:231,331`,
-  `account_admin_handler.go:128`, `refund.go:202`,
-  `internal_api.go:712`) queued for next sweep.
+  generic message).
 
 ### Changed
 
@@ -48,6 +58,20 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
 - **`/api/v1/account/me*` and `/admin/v1/accounts/*` envelope** — all error
   paths in `account.go` migrated. `:id` parsing now goes through the shared
   `parsePathInt64` helper for a unified `invalid_parameter` envelope.
+- **Apps admin / refund admin / admin_config envelope** (`P1-10` round 2).
+  21 raw `gin.H{"error":...}` callsites migrated to `respondError`,
+  `respondNotFound`, or `respondInternalError`:
+  - `apps_admin_handler.go` (9 sites: List, RotateSecret 4-branch switch,
+    DeleteRequest)
+  - `account_admin_handler.go` (4 sites: DeleteRequest gate, path parse,
+    not-found, ErrUnsupportedDelegateOp)
+  - `refund.go` (3 sites: AdminQRApprove gate, path validation,
+    ErrUnsupportedDelegateOp)
+  - `admin_config_handler.go` (5 sites: ListSettings, UpdateSettings,
+    UploadQRCode, GetPublicQRCode)
+  Remaining ~100 raw sites are concentrated in `internal_api.go` and the
+  OAuth handlers (`zlogin_handler.go`, `wechat_oauth.go`, `webhook.go`,
+  `organization.go`); queued for the next per-file batch sweep.
 
 ---
 

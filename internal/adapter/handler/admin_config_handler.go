@@ -24,7 +24,7 @@ func NewAdminConfigHandler(cfg *app.AdminConfigService) *AdminConfigHandler {
 func (h *AdminConfigHandler) ListSettings(c *gin.Context) {
 	settings, err := h.cfg.LoadAll(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load settings"})
+		respondInternalError(c, "admin_config.list_settings", err)
 		return
 	}
 	out := make([]map[string]any, 0, len(settings))
@@ -67,7 +67,7 @@ func (h *AdminConfigHandler) UpdateSettings(c *gin.Context) {
 
 	for _, item := range req.Settings {
 		if err := h.cfg.Set(c.Request.Context(), item.Key, item.Value, updatedBy); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "save failed for key: " + item.Key})
+			respondInternalError(c, "admin_config.update_settings", err)
 			return
 		}
 	}
@@ -96,14 +96,16 @@ func (h *AdminConfigHandler) UploadQRCode(c *gin.Context) {
 	case "channel":
 		key = "qr_channel_promo"
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "type must be alipay, wechat, or channel"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"type must be alipay, wechat, or channel")
 		return
 	}
 
 	// Validate that the payload is valid base64.
 	if _, err := base64.StdEncoding.DecodeString(req.ImageBase64); err != nil {
 		if _, err2 := base64.RawStdEncoding.DecodeString(req.ImageBase64); err2 != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid base64 image data"})
+			respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+				"invalid base64 image data")
 			return
 		}
 	}
@@ -115,7 +117,7 @@ func (h *AdminConfigHandler) UploadQRCode(c *gin.Context) {
 	}
 
 	if err := h.cfg.Set(c.Request.Context(), key, req.ImageBase64, updatedBy); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save QR code"})
+		respondInternalError(c, "admin_config.upload_qr_code", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -137,7 +139,7 @@ func (h *AdminConfigHandler) GetPublicQRCode(c *gin.Context) {
 	case "channel":
 		key = "qr_channel_promo"
 	default:
-		c.JSON(http.StatusNotFound, gin.H{"error": "unknown QR type"})
+		respondError(c, http.StatusNotFound, ErrCodeNotFound, "unknown QR type")
 		return
 	}
 

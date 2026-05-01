@@ -116,10 +116,8 @@ type environmentView struct {
 func (h *AppsAdminHandler) List(c *gin.Context) {
 	spec, err := app_registry.LoadSpec(h.configPath)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":   "config_unavailable",
-			"message": "apps.yaml could not be loaded — app_registry may be unconfigured",
-		})
+		respondError(c, http.StatusServiceUnavailable, "config_unavailable",
+			"apps.yaml could not be loaded — app_registry may be unconfigured")
 		return
 	}
 
@@ -210,19 +208,15 @@ type rotateSecretResponse struct {
 //	POST /admin/v1/apps/:name/:env/rotate-secret  (admin JWT required)
 func (h *AppsAdminHandler) RotateSecret(c *gin.Context) {
 	if h.recon == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":   "rotation_unavailable",
-			"message": "app_registry reconciler is not wired — verify Zitadel PAT, in-cluster ServiceAccount, and apps.yaml",
-		})
+		respondError(c, http.StatusServiceUnavailable, "rotation_unavailable",
+			"app_registry reconciler is not wired — verify Zitadel PAT, in-cluster ServiceAccount, and apps.yaml")
 		return
 	}
 	appName := c.Param("name")
 	envName := c.Param("env")
 	if appName == "" || envName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "invalid_request",
-			"message": "app name and env path params are required",
-		})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest,
+			"app name and env path params are required")
 		return
 	}
 
@@ -231,13 +225,14 @@ func (h *AppsAdminHandler) RotateSecret(c *gin.Context) {
 		msg := err.Error()
 		switch {
 		case rotateErrContains(msg, "not declared in apps.yaml"):
-			c.JSON(http.StatusNotFound, gin.H{"error": "not_found", "message": msg})
+			respondError(c, http.StatusNotFound, ErrCodeNotFound, msg)
 		case rotateErrContains(msg, "only 'basic' has a client_secret", "no secret.client_secret_key"):
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_target", "message": msg})
+			respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter, msg)
 		case rotateErrContains(msg, "not provisioned in zitadel"):
-			c.JSON(http.StatusNotFound, gin.H{"error": "not_provisioned", "message": msg})
+			respondError(c, http.StatusNotFound, ErrCodeNotFound, msg)
 		default:
-			c.JSON(http.StatusBadGateway, gin.H{"error": "rotation_failed", "message": msg})
+			// P2-6: unknown reconciler errors → opaque 500 (slog captures detail).
+			respondInternalError(c, "apps.rotate_secret", err)
 		}
 		return
 	}
@@ -287,10 +282,8 @@ type deleteRequestResponse struct {
 // confirmDelegate → ExecuteDelegate).
 func (h *AppsAdminHandler) DeleteRequest(c *gin.Context) {
 	if h.qr == nil || h.k8s == nil || h.tombstones == nil || h.zitadel == nil {
-		c.JSON(http.StatusNotImplemented, gin.H{
-			"error":   "delete_flow_not_wired",
-			"message": "QR-delegate delete flow is not configured on this deployment",
-		})
+		respondError(c, http.StatusNotImplemented, "delete_flow_not_wired",
+			"QR-delegate delete flow is not configured on this deployment")
 		return
 	}
 	callerID, ok := requireAccountID(c)
@@ -300,36 +293,28 @@ func (h *AppsAdminHandler) DeleteRequest(c *gin.Context) {
 	name := c.Param("name")
 	env := c.Param("env")
 	if name == "" || env == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "invalid_request",
-			"message": "Both :name and :env path params are required",
-		})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest,
+			"Both :name and :env path params are required")
 		return
 	}
 
 	spec, err := app_registry.LoadSpec(h.configPath)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error":   "config_unavailable",
-			"message": "apps.yaml could not be loaded",
-		})
+		respondError(c, http.StatusServiceUnavailable, "config_unavailable",
+			"apps.yaml could not be loaded")
 		return
 	}
 	if !appEnvDeclared(spec, name, env) {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "app_env_not_found",
-			"message": fmt.Sprintf("(%s, %s) is not declared in apps.yaml", name, env),
-		})
+		respondError(c, http.StatusNotFound, "app_env_not_found",
+			fmt.Sprintf("(%s, %s) is not declared in apps.yaml", name, env))
 		return
 	}
 
 	session, err := h.qr.CreateDelegateSession(c.Request.Context(), callerID, qrDelegateOpDeleteOIDCApp, name, env)
 	if err != nil {
 		if errors.Is(err, ErrUnsupportedDelegateOp) {
-			c.JSON(http.StatusNotImplemented, gin.H{
-				"error":   "delete_flow_not_wired",
-				"message": err.Error(),
-			})
+			respondError(c, http.StatusNotImplemented, "delete_flow_not_wired",
+				"delete_oidc_app delegate executor is not registered on this deployment")
 			return
 		}
 		respondInternalError(c, "AppsAdmin.DeleteRequest", err)

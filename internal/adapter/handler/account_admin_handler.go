@@ -2,10 +2,8 @@ package handler
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -66,30 +64,23 @@ type accountDeleteRequestResponse struct {
 // Pre-flight checks:
 //   - target account exists                  → 404 if not
 //   - target account is not already deleted  → 200 idempotent if so
-//                                              (matches the executor's
-//                                              ErrAccountAlreadyPurged
-//                                              handling — both ends
-//                                              agree on the no-op
-//                                              shape)
+//     (matches the executor's
+//     ErrAccountAlreadyPurged
+//     handling — both ends
+//     agree on the no-op
+//     shape)
 func (h *AccountAdminHandler) DeleteRequest(c *gin.Context) {
 	if h.qr == nil {
-		c.JSON(http.StatusNotImplemented, gin.H{
-			"error":   "delete_flow_not_wired",
-			"message": "QR-delegate delete flow is not configured on this deployment",
-		})
+		respondError(c, http.StatusNotImplemented, "delete_flow_not_wired",
+			"QR-delegate delete flow is not configured on this deployment")
 		return
 	}
 	callerID, ok := requireAccountID(c)
 	if !ok {
 		return
 	}
-	idStr := c.Param("id")
-	accountID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || accountID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "invalid_request",
-			"message": "Path :id must be a positive integer",
-		})
+	accountID, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 
@@ -99,10 +90,7 @@ func (h *AccountAdminHandler) DeleteRequest(c *gin.Context) {
 		return
 	}
 	if a == nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "account_not_found",
-			"message": fmt.Sprintf("Account %d not found", accountID),
-		})
+		respondNotFound(c, "Account")
 		return
 	}
 	// Idempotent short-circuit — the desired end-state already holds
@@ -123,10 +111,8 @@ func (h *AccountAdminHandler) DeleteRequest(c *gin.Context) {
 	})
 	if err != nil {
 		if errors.Is(err, ErrUnsupportedDelegateOp) {
-			c.JSON(http.StatusNotImplemented, gin.H{
-				"error":   "delete_flow_not_wired",
-				"message": err.Error(),
-			})
+			respondError(c, http.StatusNotImplemented, "delete_flow_not_wired",
+				"delete_account delegate executor is not registered on this deployment")
 			return
 		}
 		respondInternalError(c, "AccountAdmin.DeleteRequest.create", err)
@@ -143,4 +129,3 @@ func (h *AccountAdminHandler) DeleteRequest(c *gin.Context) {
 		AccountID: accountID,
 	})
 }
-

@@ -51,10 +51,10 @@ func (h *RefundHandler) RequestRefund(c *gin.Context) {
 	r, err := h.refunds.RequestRefund(c.Request.Context(), accountID, req.OrderNo, req.Reason)
 	if err != nil {
 		classifyBusinessError(c, "refund.request", err, map[string]errorMapping{
-			"not found":            {http.StatusNotFound, "Order not found or does not belong to your account"},
-			"requires a paid":      {http.StatusBadRequest, "Refunds can only be requested for paid orders"},
-			"window":               {http.StatusBadRequest, "The refund window for this order has expired"},
-			"already in progress":  {http.StatusConflict, "A refund is already in progress for this order"},
+			"not found":           {http.StatusNotFound, "Order not found or does not belong to your account"},
+			"requires a paid":     {http.StatusBadRequest, "Refunds can only be requested for paid orders"},
+			"window":              {http.StatusBadRequest, "The refund window for this order has expired"},
+			"already in progress": {http.StatusConflict, "A refund is already in progress for this order"},
 		})
 		return
 	}
@@ -172,10 +172,8 @@ type qrApproveResponse struct {
 // choose explicitly and keeps the audit trail unambiguous.
 func (h *RefundHandler) AdminQRApprove(c *gin.Context) {
 	if h.qr == nil {
-		c.JSON(http.StatusNotImplemented, gin.H{
-			"error":   "qr_approve_not_wired",
-			"message": "QR-delegate refund approval is not configured on this deployment",
-		})
+		respondError(c, http.StatusNotImplemented, "qr_approve_not_wired",
+			"QR-delegate refund approval is not configured on this deployment")
 		return
 	}
 	callerID, ok := requireAccountID(c)
@@ -184,10 +182,8 @@ func (h *RefundHandler) AdminQRApprove(c *gin.Context) {
 	}
 	refundNo := c.Param("refund_no")
 	if refundNo == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "invalid_request",
-			"message": "refund_no path param is required",
-		})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest,
+			"refund_no path param is required")
 		return
 	}
 
@@ -197,10 +193,8 @@ func (h *RefundHandler) AdminQRApprove(c *gin.Context) {
 	})
 	if err != nil {
 		if errors.Is(err, ErrUnsupportedDelegateOp) {
-			c.JSON(http.StatusNotImplemented, gin.H{
-				"error":   "qr_approve_not_wired",
-				"message": err.Error(),
-			})
+			respondError(c, http.StatusNotImplemented, "qr_approve_not_wired",
+				"approve_refund delegate executor is not registered on this deployment")
 			return
 		}
 		respondInternalError(c, "Refund.AdminQRApprove", err)

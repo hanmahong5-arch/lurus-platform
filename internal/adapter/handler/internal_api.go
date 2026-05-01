@@ -493,9 +493,9 @@ func (h *InternalHandler) CreateCheckout(c *gin.Context) {
 	_ = h.wallet.UpdatePaymentOrder(c.Request.Context(), order)
 
 	c.JSON(http.StatusCreated, gin.H{
-		"order_no": order.OrderNo,
-		"pay_url":  payURL,
-		"status":   order.Status,
+		"order_no":   order.OrderNo,
+		"pay_url":    payURL,
+		"status":     order.Status,
 		"expires_at": order.ExpiresAt,
 	})
 }
@@ -707,9 +707,12 @@ func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
 		// Rollback: credit back the debited amount
 		slog.ErrorContext(ctx, "currency exchange: lurus-api call failed, rolling back wallet debit",
 			"account_id", accountID, "debit_tx_id", debitTx.ID, "error", err)
+		// P2-6: original err is already in slog above; keep TX description
+		// generic so the user-visible wallet ledger doesn't leak upstream
+		// error text.
 		_, rollbackErr := h.wallet.Credit(ctx, accountID, req.Amount,
 			entity.TxTypeRefund,
-			fmt.Sprintf("Rollback currency exchange (debit_tx=%d): %s", debitTx.ID, err.Error()),
+			fmt.Sprintf("Rollback currency exchange (debit_tx=%d): upstream API error", debitTx.ID),
 			"currency_exchange_rollback", refID, "lurus_api")
 		if rollbackErr != nil {
 			slog.ErrorContext(ctx, "currency exchange: CRITICAL rollback failed",
@@ -729,15 +732,15 @@ func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"exchange_id":     exchangeResp.ExchangeID,
-			"luc_amount":      req.Amount,
-			"lut_amount":      exchangeResp.LutAmount,
-			"exchange_rate":   exchangeResp.ExchangeRate,
-			"vip_level":       vipLevel,
-			"vip_bonus":       exchangeResp.VIPBonus,
-			"wallet_balance":  debitTx.BalanceAfter,
-			"lut_balance":     exchangeResp.UserBalance,
-			"lut_balance_cn":  exchangeResp.BalanceCN,
+			"exchange_id":    exchangeResp.ExchangeID,
+			"luc_amount":     req.Amount,
+			"lut_amount":     exchangeResp.LutAmount,
+			"exchange_rate":  exchangeResp.ExchangeRate,
+			"vip_level":      vipLevel,
+			"vip_bonus":      exchangeResp.VIPBonus,
+			"wallet_balance": debitTx.BalanceAfter,
+			"lut_balance":    exchangeResp.UserBalance,
+			"lut_balance_cn": exchangeResp.BalanceCN,
 		},
 	})
 }
@@ -921,4 +924,3 @@ func (h *InternalHandler) InternalListWalletTransactions(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"data": list, "total": total})
 }
-
