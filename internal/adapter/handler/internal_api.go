@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -86,11 +85,11 @@ func (h *InternalHandler) GetAccountByZitadelSub(c *gin.Context) {
 	sub := c.Param("sub")
 	a, err := h.accounts.GetByZitadelSub(c.Request.Context(), sub)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
+		respondInternalError(c, "internal.get_account_by_zitadel_sub", err)
 		return
 	}
 	if a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "Account")
 		return
 	}
 	c.JSON(http.StatusOK, a)
@@ -165,15 +164,14 @@ func (h *InternalHandler) GetEntitlements(c *gin.Context) {
 	if !requireScope(c, "entitlement") {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 	productID := c.Param("product_id")
 	em, err := h.entitlements.Get(c.Request.Context(), id, productID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get entitlements"})
+		respondInternalError(c, "internal.get_entitlements", err)
 		return
 	}
 	if em == nil {
@@ -188,19 +186,18 @@ func (h *InternalHandler) GetSubscription(c *gin.Context) {
 	if !requireScope(c, "entitlement") {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 	productID := c.Param("product_id")
 	sub, err := h.subs.GetActive(c.Request.Context(), id, productID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
+		respondInternalError(c, "internal.get_subscription", err)
 		return
 	}
 	if sub == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "no active subscription"})
+		respondNotFound(c, "Active subscription")
 		return
 	}
 	c.JSON(http.StatusOK, sub)
@@ -216,11 +213,11 @@ func (h *InternalHandler) GetAccountByOAuth(c *gin.Context) {
 	providerID := c.Param("provider_id")
 	a, err := h.accounts.GetByOAuthBinding(c.Request.Context(), provider, providerID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
+		respondInternalError(c, "internal.get_account_by_oauth", err)
 		return
 	}
 	if a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "Account")
 		return
 	}
 	c.JSON(http.StatusOK, a)
@@ -232,15 +229,14 @@ func (h *InternalHandler) GetAccountOverview(c *gin.Context) {
 	if !requireScope(c, "account:read") {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 	productID := c.Query("product_id")
 	ov, err := h.overview.Get(c.Request.Context(), id, productID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get overview"})
+		respondInternalError(c, "internal.get_account_overview", err)
 		return
 	}
 	c.JSON(http.StatusOK, ov)
@@ -270,9 +266,8 @@ func (h *InternalHandler) DebitWallet(c *gin.Context) {
 	if !requireScope(c, "wallet:debit") {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -288,7 +283,8 @@ func (h *InternalHandler) DebitWallet(c *gin.Context) {
 	tx, err := h.wallet.Debit(c.Request.Context(), id, req.Amount, req.Type, req.Description, "internal_debit", "", req.ProductID)
 	if err != nil {
 		// Insufficient balance returns a structured error
-		c.JSON(http.StatusBadRequest, gin.H{"error": "insufficient_balance"})
+		respondError(c, http.StatusBadRequest, ErrCodeInsufficientBalance,
+			"Wallet balance is insufficient for this debit")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "balance_after": tx.BalanceAfter})
@@ -303,11 +299,11 @@ func (h *InternalHandler) GetAccountByEmail(c *gin.Context) {
 	email := c.Param("email")
 	a, err := h.accounts.GetByEmail(c.Request.Context(), email)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
+		respondInternalError(c, "internal.get_account_by_email", err)
 		return
 	}
 	if a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "Account")
 		return
 	}
 	c.JSON(http.StatusOK, a)
@@ -322,11 +318,11 @@ func (h *InternalHandler) GetAccountByPhone(c *gin.Context) {
 	phone := c.Param("phone")
 	a, err := h.accounts.GetByPhone(c.Request.Context(), phone)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup failed"})
+		respondInternalError(c, "internal.get_account_by_phone", err)
 		return
 	}
 	if a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "Account")
 		return
 	}
 	c.JSON(http.StatusOK, a)
@@ -338,14 +334,13 @@ func (h *InternalHandler) GetWalletBalance(c *gin.Context) {
 	if !requireScope(c, "wallet:read") {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 	w, err := h.wallet.GetBalance(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "balance lookup failed"})
+		respondInternalError(c, "internal.get_wallet_balance", err)
 		return
 	}
 	if w == nil {
@@ -369,17 +364,18 @@ func (h *InternalHandler) ValidateSession(c *gin.Context) {
 		return
 	}
 	if h.sessionSecret == "" {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session validation not configured"})
+		respondError(c, http.StatusServiceUnavailable, "session_unconfigured",
+			"Session validation is not configured on this deployment")
 		return
 	}
 	accountID, err := validateSessionTokenFn(req.Token, h.sessionSecret)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid session token"})
+		respondError(c, http.StatusUnauthorized, ErrCodeUnauthorized, "Invalid session token")
 		return
 	}
 	a, err := h.accounts.GetByID(c.Request.Context(), accountID)
 	if err != nil || a == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "account not found"})
+		respondNotFound(c, "Account")
 		return
 	}
 	c.JSON(http.StatusOK, a)
@@ -391,14 +387,13 @@ func (h *InternalHandler) GetBillingSummary(c *gin.Context) {
 	if !requireScope(c, "wallet:read") {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 	summary, err := h.wallet.GetBillingSummary(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "billing summary lookup failed"})
+		respondInternalError(c, "internal.get_billing_summary", err)
 		return
 	}
 	c.JSON(http.StatusOK, summary)
@@ -407,9 +402,8 @@ func (h *InternalHandler) GetBillingSummary(c *gin.Context) {
 // CreditWallet adds LB to an account wallet (admin-only, e.g. marketplace author revenue).
 // POST /admin/v1/accounts/:id/wallet/credit
 func (h *InternalHandler) CreditWallet(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -424,7 +418,7 @@ func (h *InternalHandler) CreditWallet(c *gin.Context) {
 	}
 	tx, err := h.wallet.Credit(c.Request.Context(), id, req.Amount, req.Type, req.Description, "internal_credit", "", req.ProductID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "credit failed"})
+		respondInternalError(c, "internal.credit_wallet", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "balance_after": tx.BalanceAfter})
@@ -451,15 +445,18 @@ func (h *InternalHandler) CreateCheckout(c *gin.Context) {
 	}
 
 	if req.AmountCNY < minTopupCNY {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_cny must be at least 1.00"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"amount_cny must be at least 1.00")
 		return
 	}
 	if req.AmountCNY > maxTopupCNY {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_cny exceeds maximum allowed per transaction"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"amount_cny exceeds maximum allowed per transaction")
 		return
 	}
 	if h.payments == nil || !h.payments.HasMethod(req.PaymentMethod) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported payment method"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"Unsupported payment method")
 		return
 	}
 
@@ -471,7 +468,7 @@ func (h *InternalHandler) CreateCheckout(c *gin.Context) {
 	order, err := h.wallet.CreateCheckoutSession(c.Request.Context(),
 		req.AccountID, req.AmountCNY, req.PaymentMethod, req.SourceService, req.IdempotencyKey, ttl)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create checkout session"})
+		respondInternalError(c, "internal.create_checkout", err)
 		return
 	}
 
@@ -509,7 +506,7 @@ func (h *InternalHandler) GetCheckoutStatus(c *gin.Context) {
 	orderNo := c.Param("order_no")
 	order, err := h.wallet.GetCheckoutStatus(c.Request.Context(), orderNo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
+		respondNotFound(c, "Order")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -541,9 +538,8 @@ func (h *InternalHandler) PreAuthorize(c *gin.Context) {
 	if !requireScope(c, "wallet:debit") {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	id, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -582,9 +578,8 @@ func (h *InternalHandler) SettlePreAuth(c *gin.Context) {
 	if !requireScope(c, "wallet:debit") {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid preauth id"})
+	id, ok := parsePathInt64(c, "id", "Pre-auth ID")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -615,9 +610,8 @@ func (h *InternalHandler) ReleasePreAuth(c *gin.Context) {
 	if !requireScope(c, "wallet:debit") {
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid preauth id"})
+	id, ok := parsePathInt64(c, "id", "Pre-auth ID")
+	if !ok {
 		return
 	}
 
@@ -643,13 +637,13 @@ func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
 		return
 	}
 	if h.lurusAPI == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "currency exchange not configured"})
+		respondError(c, http.StatusServiceUnavailable, "exchange_unconfigured",
+			"Currency exchange is not configured on this deployment")
 		return
 	}
 
-	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+	accountID, ok := parsePathInt64(c, "id", "Account ID")
+	if !ok {
 		return
 	}
 
@@ -664,7 +658,8 @@ func (h *InternalHandler) ExchangeLucToLut(c *gin.Context) {
 	}
 
 	if req.Amount > 100000 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "amount exceeds maximum (100,000 LUC)"})
+		respondError(c, http.StatusBadRequest, ErrCodeInvalidParameter,
+			"amount exceeds maximum (100,000 LUC)")
 		return
 	}
 
@@ -752,7 +747,8 @@ func (h *InternalHandler) GetCurrencyInfo(c *gin.Context) {
 		return
 	}
 	if h.lurusAPI == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "currency service not configured"})
+		respondError(c, http.StatusServiceUnavailable, "currency_unconfigured",
+			"Currency service is not configured on this deployment")
 		return
 	}
 
@@ -772,7 +768,8 @@ func (h *InternalHandler) InternalSubscriptionCheckout(c *gin.Context) {
 		return
 	}
 	if h.plans == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "product service not configured"})
+		respondError(c, http.StatusServiceUnavailable, "product_service_unavailable",
+			"Product service is not configured on this deployment")
 		return
 	}
 

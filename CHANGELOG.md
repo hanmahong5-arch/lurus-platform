@@ -72,6 +72,27 @@ always tracks the rollout pin in `deploy/k8s/base/deployment.yaml`
   Remaining ~100 raw sites are concentrated in `internal_api.go` and the
   OAuth handlers (`zlogin_handler.go`, `wechat_oauth.go`, `webhook.go`,
   `organization.go`); queued for the next per-file batch sweep.
+- **`/internal/v1/*` envelope** (`P1-10` round 3). All 39 raw
+  `gin.H{"error":...}` sites in `internal_api.go` migrated. Path-int parsing
+  unified through `parsePathInt64` (Account ID / Pre-auth ID), 500 paths
+  routed through `respondInternalError` (handler context preserved in slog,
+  generic message to client), 404 paths via `respondNotFound`. Notable code
+  decisions:
+  - `DebitWallet` insufficient-balance now `{"error":"insufficient_balance",
+    "message":"Wallet balance is insufficient for this debit"}` instead of
+    bare `{"error":"insufficient_balance"}`. The `error` field stays
+    machine-readable; clients keying off `error` are unaffected.
+  - Service-unavailable gates use semantic codes
+    (`session_unconfigured` / `exchange_unconfigured` /
+    `currency_unconfigured` / `product_service_unavailable`) instead of the
+    generic free-form text, so clients can branch on the specific dependency.
+  - `strconv` import dropped from `internal_api.go` (no longer needed after
+    parsePathInt64 migration).
+  Remaining ~60 raw sites concentrated in `organization.go`,
+  `zlogin_handler.go`, `wechat_oauth.go`, `webhook.go`, `wechat_auth.go`,
+  `product.go`, `whoami_handler.go`, `llm_token_handler.go`, `admin_ops.go`,
+  `checkin_handler.go`, `admin_report.go`. Next batch: per-file sweep of
+  the OAuth cluster.
 
 ---
 
